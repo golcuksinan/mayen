@@ -35,10 +35,13 @@ files = ["src", "tests"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers --strict-config"
+# Sistemin tamamı asyncio; her async testi ayrı ayrı işaretlemek gürültüden ibaret.
+asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
     "mypy>=2.3.0",
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.16.2",
 ]

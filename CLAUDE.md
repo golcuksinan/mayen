@@ -75,14 +75,44 @@ constant clarification.
 
 ### Current state
 
-**P1 and P2 are done (2026-08-09); P3 — protocol, adapter interfaces, fakes — is next.**
-See `docs/PLAN.md` for all three.
+**P1, P2 and P3 are done (2026-08-09); P4 — the session actor and state machine — is
+next.** See `docs/PLAN.md` for all four.
 
-`src/mayen/` holds the eleven §4 layer packages. Real so far: `obs/log.py` (structlog),
-`config.py` (typed env config + `Secret`), and all of `data/` — `db.py`, `migrate.py`,
-`clock.py`, `backup.py`, `migrations/001_initial.sql`, and eight repositories under
-`data/repositories/`. Still empty: `transport/`, `session/`, `turn/`, `agent/`, `tools/`,
-`policy/`, `memory/`, `adapters/`, `scheduler/`.
+`src/mayen/` holds the eleven §4 layer packages. Real so far: `config.py` (typed env
+config + `Secret`); all of `data/` — `db.py`, `migrate.py`, `clock.py`, `backup.py`,
+`migrations/001_initial.sql`, eight repositories under `data/repositories/`; `obs/`
+(`log.py`, `trace.py`); `adapters/` (`audio.py`, `errors.py`, `service.py`, `llm.py`,
+`stt.py`, `tts.py`, `speaker.py` + `fakes/`); and `transport/` (`frames.py`, `wire.py`,
+`handshake.py`, `queue.py`). Still empty: `session/`, `turn/`, `agent/`, `tools/`,
+`policy/`, `memory/`, `scheduler/`.
+
+**P3's shape, so nobody re-opens it.** The whole system is asyncio (`pytest-asyncio`,
+`asyncio_mode = "auto"`).
+
+- **`transport/` is contract only — there is no WebSocket server yet.** Frames, wire
+  codec, handshake and a bounded send queue. The client that would talk to it is a Phase 5
+  deliverable.
+- **Control frames are JSON text; audio frames are binary:** `[4B header length][JSON
+  header][raw payload]`. Base64 would inflate every chunk by 33%; all-binary would make the
+  protocol unreadable. Unknown type, missing field, extra field and absurd header length
+  are all `ProtocolError` — never silently ignored (invariant 13).
+- **Inbound audio carries `segment_id`, outbound carries `(turn_id, seq)`.** Endpointing is
+  client-side (§7), so an arriving segment does not belong to a turn yet — the server mints
+  the `turn_id` and the `Transcript` frame ties the two together. A text segment is a
+  first-class frame beside the audio one (P1's deferred-STT decision).
+- **The send queue blocks when full; it never drops.** Out-of-order audio is unacceptable
+  (§6). The one exception is `cancel_turn`, scoped to a single turn so a barge-in cannot
+  drop a queued proactive reminder (B1/B2).
+- **Adapter streaming methods return `AsyncGenerator`, not `AsyncIterator`** — `aclose()`
+  is part of the contract. Cancellation (invariant 12) rides asyncio's own path; there is
+  no second cancellation token. `count_tokens` is on the interface so no caller has an
+  estimating path (invariant 10) — even `FakeLLM` counts rather than estimates.
+- **The speaker adapter only produces an embedding.** Scores and thresholds are §19.3, and
+  matching is `policy`'s job; scoring here would close an open item by assumption.
+- **`obs` defines `TraceSink`; `data`'s `TraceRepository` implements it.** This is the
+  dependency inversion P1 predicted — `obs` sits at the bottom and cannot import `data`.
+  `TurnTrace` times stages with `monotonic` (a wall-clock jump would write negative
+  durations) and writes a stage even when it raised.
 
 **Two SQLite traps P2 hit, both verified by experiment and locked by tests.** Do not
 undo either:
@@ -103,7 +133,7 @@ read or write, close. Backup opens its own connection — invariant 1 is about p
   ctranslate2 and onnxruntime all ship cp313 wheels — verified before pinning, per P1.
 - **uv**, not pip. `uv.lock` is committed. Never `pip install` into `.venv` by hand.
 
-Commands — all four must be green before P1 is done:
+Commands — all four are green at the end of every work package, not just at the end:
 
 ```
 uv sync                   # environment from the lock file
@@ -125,6 +155,10 @@ deliberately all-distinct — equal ranks would permit mutual imports, i.e. a si
 If this test blocks an import you want, **the import is not the fix.** Either the boundary
 is drawn wrong, or the dependency needs inverting (define a `Protocol` in the lower layer,
 implement it in the higher one). `obs` sitting at the bottom will hit exactly this in P3.
+
+The same file carries a second, independent check added in P2: **no SQL outside `data/`**.
+It flags any string literal that *starts* with a SQL keyword, anywhere under `src/mayen`
+except `data/`. §16's repository rule is only real if something enforces it.
 
 **Secrets:** only ever from the environment, via `config.load()`, wrapped in `Secret` —
 whose `repr`/`str` are masked so a key cannot leak into a log field or traceback. `.env` is
@@ -279,3 +313,14 @@ half-duplex escape hatch (muting the mic while speaking) kills barge-in entirely
 - Tools reach data only through the context object handed to them, never a global DB handle.
 - Tool results are structured: success flag, data, human-readable form and error are
   separate fields. Not "everything is a string, parse the JSON twice."
+- **Repositories return frozen dataclasses, never `sqlite3.Row`.** A `Row` leaks column
+  names upward and makes a schema rename break tool bodies.
+- **Timestamps are ISO-8601 UTC strings**, produced by `data/clock.py` — one format, one
+  place. Two modules writing two formats is a broken sort nobody notices.
+- **Stored vocabulary lives in `data/`**, not in the layer that reasons about it: `Tier`
+  (§10.2) is in `data/repositories/people.py` and `TaskStatus` in `tasks.py`, because the
+  CHECK constraint already owns those words. `policy` imports them; the reverse breaks §4.
+
+**Never `git commit`.** Write the commit message as text and let the owner commit it.
+Message style: Turkish, passive voice (`eklendi`, not `eklenir`), conventional-commit
+prefix, short.

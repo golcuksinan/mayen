@@ -128,7 +128,7 @@ tersine dönecek (P1'de öngörüldüğü gibi).
 
 ---
 
-## P3 — Sözleşmeler: protokol, adaptör arayüzleri, fake'ler
+## P3 — Sözleşmeler: protokol, adaptör arayüzleri, fake'ler ✅ TAMAMLANDI (2026-08-09)
 
 **Bağımlılık:** P1, P0/B1, P0/A3. **Engelleyen açık madde:** yok — §19.5 (PCM/Opus)
 çerçevede bir kodek alanıyla açık bırakılır, seçim sonra yapılır.
@@ -145,7 +145,31 @@ tersine dönecek (P1'de öngörüldüğü gibi).
   çakışmasın diye).
 
 **Bitti kriteri:** fake'ler Protocol'lere karşı tip denetiminden geçiyor; bir tur izi
-yazılıp geri okunabiliyor; el sıkışma sürüm uyuşmazlığı testi yeşil.
+yazılıp geri okunabiliyor; el sıkışma sürüm uyuşmazlığı testi yeşil. — **Karşılandı:
+143 test yeşil.**
+
+### Verilen kararlar
+
+| Karar | Gerekçe |
+|---|---|
+| **`transport/` yalnızca sözleşme; WebSocket sunucusu yok** | P3'ün bitti kriteri çerçeve, el sıkışma ve backpressure istiyor, sunucu değil. Konuşacak istemci Faz 5'te geliyor; sunucuyu şimdi yazmak, test edilecek karşı tarafı olmayan kod demek |
+| **Kontrol çerçeveleri JSON metin, ses çerçeveleri ikili** | Sesi base64'e sokmak her parçayı %33 şişirir ve tur boyunca sürekli kodlama yapar. Her şeyi ikili yapmak protokolü gözle okunamaz hale getirir. İkili çerçeve melez: `[4B başlık uzunluğu][JSON başlık][ham yük]` — başlık okunur, yük kopyalanmaz |
+| **Gelen ses `segment_id`, giden ses `(turn_id, seq)` taşır** | Asimetri §7'den geliyor: endpointing istemcide, sunucuya tamamlanmış segment gelir ve o segment henüz bir tura ait değildir — `turn_id`'yi sunucu üretir. `Transcript` çerçevesi ikisini birbirine bağlar. Gelen tarafa uydurma bir `turn_id` koymak, istemcinin sunucunun kimliğini tahmin etmesi demek olurdu |
+| **Metin segmenti birinci sınıf çerçeve** | P1'in ertelenmiş STT kararı. Bu yol protokolde yoksa gerçek STT geldiğinde protokol yeniden açılır |
+| **Bilinmeyen tip / eksik / fazla alan reddedilir** | Kural 13. Sessizce yok saymak, sürüm uyuşmazlığını el sıkışmadan kaçırıp turun ortasında gizli davranış farkına çevirir. Başlık uzunluğuna da üst sınır kondu: bozuk bir uzunluk sağlamından ayırt edilemez ve keyfi büyüklükte ayırma isteğine dönüşür |
+| **El sıkışma reddi istisna değil `Rejected` çerçevesi** | Ret de protokolün parçası: istemcinin sunucu sürümünü ve sebebi görebilmesi gerekiyor |
+| **Kuyruk dolduğunda yazan bekler, çerçeve düşmez** | §6'ya göre sıra bozulması kabul edilemez. Beklemek baskıyı kaynağa kadar geri yürütür (TTS yavaşlar); sınırsız kuyruk ise belleği şişirip gecikmeyi kimsenin ölçmediği yere saklar. Tek istisna iptal ve kapsamı **tur** (B1/B2) |
+| **Adaptörler async, iptal ayrı jeton değil** | `stream`/`synthesize` `AsyncGenerator` döndürüyor; `aclose()` sözleşmenin parçası. Kural 12'nin iptal yolu asyncio'da zaten var — ikinci bir yol eklemek, ikisinden birinin unutulması demek |
+| **`count_tokens` arayüzün parçası** | Kural 10: çağıran tarafa tahmin edebileceği bir yol bırakılmıyor. Sahte LLM bile **sayaç**, tahminci değil |
+| **Konuşmacı adaptörü yalnızca gömü çıkarır** | Skor ve eşik §19.3'te açık, karşılaştırma `policy`'nin işi. Skorlamayı adaptöre koymak açık bir maddeyi varsayımla kapatmak olurdu |
+| **`obs` → `TraceSink` `Protocol`, `data` uygular** | P1'de öngörülen an geldi: iz kalıcı yazılmalı ama `obs` en dipte. Bağımlılık tersine döndü, sınır testi dokunulmadan yeşil kaldı |
+| **`TurnTrace` aşama süresini `monotonic` ile ölçer** | Duvar saati tur ortasında geri alınırsa negatif süre yazılır ve ölçüm sessizce bozulur. Aşamanın *ne zaman* başladığı ayrı bir şey; onu `data/clock.py` yazıyor |
+| **Aşama, istisna çıksa da yazılır** | Ölçümün en çok işe yaradığı an, bir şeyin yavaşlayıp patladığı andır |
+| **`pytest-asyncio`, `asyncio_mode = "auto"`** | Sistemin tamamı asyncio; her testi tek tek işaretlemek gürültü |
+
+**P4'e düşen:** `StateChanged.state` şimdilik düz metin — durum sözlüğünün sahibi oturum
+aktörü ve o katman henüz yok. Enum P4'te doğunca tipi `transport`'a bağlanır
+(`transport → session` §4'e uygun, tersi değil).
 
 ---
 
