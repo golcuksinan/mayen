@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from mayen.adapters.audio import AudioFormat, Codec
+from mayen.session.state import State
 from mayen.transport.frames import (
     PROTOCOL_VERSION,
     AudioChunk,
@@ -38,7 +39,7 @@ TEXT_FRAMES: list[Frame] = [
     Welcome(protocol_version=PROTOCOL_VERSION),
     Rejected(reason="sürüm", server_version=PROTOCOL_VERSION),
     Transcript(segment_id="s1", turn_id="t1", text="yarın hava nasıl"),
-    StateChanged(state="COZUMLUYOR", turn_id="t1"),
+    StateChanged(state=State.COZUMLUYOR, turn_id="t1"),
     ToolRunning(turn_id="t1", tool_name="weather"),
     AudioEnd(turn_id="t1"),
     Cancelled(turn_id="t1"),
@@ -98,6 +99,11 @@ def test_missing_field_is_rejected() -> None:
 def test_extra_field_is_rejected() -> None:
     with pytest.raises(ProtocolError, match="fazla"):
         decode('{"type": "ping", "sürpriz": 1}')
+
+
+def test_unknown_state_name_is_rejected() -> None:
+    with pytest.raises(ProtocolError, match="Tanınmayan durum"):
+        decode('{"type": "state_changed", "state": "DİNLİYOR", "turn_id": null}')
 
 
 def test_audio_frame_sent_as_text_is_rejected() -> None:

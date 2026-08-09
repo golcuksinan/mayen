@@ -18,6 +18,7 @@ from dataclasses import fields
 from typing import Any
 
 from mayen.adapters.audio import AudioFormat, Codec
+from mayen.session.state import State
 from mayen.transport.frames import (
     AudioChunk,
     AudioEnd,
@@ -149,12 +150,22 @@ def _from_header(header: dict[str, Any], *, payload: bytes | None) -> Frame:
 
     if "format" in header:
         header["format"] = _audio_format(header["format"])
+    if frame_type is StateChanged:
+        header["state"] = _state(header["state"])
     if payload is not None:
         header["data"] = payload
     try:
         return frame_type(**header)
     except TypeError as error:  # pragma: no cover - alan kümesi yukarıda doğrulandı
         raise ProtocolError(f"{raw_type} kurulamadı: {error}") from error
+
+
+def _state(value: object) -> State:
+    """Tanınmayan durum adı sessizce geçmez (Kural 13): sürüm uyuşmazlığının belirtisidir."""
+    try:
+        return State(str(value))
+    except ValueError as error:
+        raise ProtocolError(f"Tanınmayan durum: {value!r}") from error
 
 
 def _audio_format(value: object) -> AudioFormat:

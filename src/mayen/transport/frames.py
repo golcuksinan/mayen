@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from mayen.adapters.audio import AudioFormat
+from mayen.session.state import State
 
 # Sürüm çerçeve biçimi her değiştiğinde artar. El sıkışmada karşılaştırılır ve
 # uyuşmazlık açık bir hatayla reddedilir — sessizce farklı davranılmaz (§13).
@@ -107,14 +108,13 @@ class Transcript:
 class StateChanged:
     """Durum değişikliği (§5).
 
-    `state` şimdilik düz metin: durum sözlüğünün sahibi oturum aktörü (P4) ve o katman
-    henüz yok. Enum oraya geldiğinde tipi buraya bağlanır — `transport`, `session`'ı
-    import edebilir (§4), tersi olamaz.
+    Durum sözlüğünün sahibi oturum aktörüdür; tip oradan geliyor. `transport → session`
+    yönü §4'e uygun, tersi olamaz.
     """
 
     TYPE: ClassVar[str] = "state_changed"
 
-    state: str
+    state: State
     turn_id: str | None = None
 
 

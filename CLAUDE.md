@@ -75,16 +75,30 @@ constant clarification.
 
 ### Current state
 
-**P1, P2 and P3 are done (2026-08-09); P4 — the session actor and state machine — is
-next.** See `docs/PLAN.md` for all four.
+**P1–P4 are done (2026-08-09); P5 — policy — is next.** See `docs/PLAN.md` for all five.
 
 `src/mayen/` holds the eleven §4 layer packages. Real so far: `config.py` (typed env
 config + `Secret`); all of `data/` — `db.py`, `migrate.py`, `clock.py`, `backup.py`,
 `migrations/001_initial.sql`, eight repositories under `data/repositories/`; `obs/`
 (`log.py`, `trace.py`); `adapters/` (`audio.py`, `errors.py`, `service.py`, `llm.py`,
-`stt.py`, `tts.py`, `speaker.py` + `fakes/`); and `transport/` (`frames.py`, `wire.py`,
-`handshake.py`, `queue.py`). Still empty: `session/`, `turn/`, `agent/`, `tools/`,
-`policy/`, `memory/`, `scheduler/`.
+`stt.py`, `tts.py`, `speaker.py` + `fakes/`); `transport/` (`frames.py`, `wire.py`,
+`handshake.py`, `queue.py`); and `session/` (`state.py`, `actor.py`). Still empty:
+`turn/`, `agent/`, `tools/`, `policy/`, `memory/`, `scheduler/`.
+
+**P4's shape.** `session/state.py` is the *only* place §5's transition table is written
+down; an undefined `(state, event)` pair raises `InvalidTransitionError` rather than
+staying put (invariant 13). One actor per device with its own queue, but the turn lock is
+**global** — one turn at a time system-wide (§5). The runner runs in its own `asyncio.Task`
+so cancellation has something to hold; there is still no second cancellation token.
+`session` cannot import `transport`, so it announces through a `SessionSink` `Protocol` —
+the `TraceSink` pattern again — and the turn itself runs behind a `TurnRunner` `Protocol`
+that `turn/` will implement. In a closed state (`ONAY_BEKLIYOR`, `KAYIT`) an arriving
+segment does not open a turn; it goes into the running turn's own queue, because the turn
+awaiting approval is precisely what is waiting for that segment.
+
+**Not decided in code:** §5's table has no entry for barge-in during `DÜŞÜNÜYOR`, and the
+code does not invent one. Adding it is a doc decision. Likewise the approval timeout
+*counter* belongs to `policy` (P5); the actor only applies the event.
 
 **P3's shape, so nobody re-opens it.** The whole system is asyncio (`pytest-asyncio`,
 `asyncio_mode = "auto"`).

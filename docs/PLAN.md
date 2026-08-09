@@ -188,7 +188,29 @@ olmalı.
 
 **Bitti kriteri:** §17.5'teki liste yeşil — söz kesme, zaman aşımı, onay sırasında konu
 değiştirme, eşzamanlı segment, kayıt sırasında kesinti. Artı B3'ten gelen yeni vaka:
-onay okunurken söz kesme.
+onay okunurken söz kesme. — **Karşılandı: 172 test yeşil.** Listenin son iki maddesi
+(iptalden sonra gelen eski `turn_id`'li parça, söz kesme sırasında kuyruktaki proaktif
+bildirim) P3'te `SendQueue.cancel_turn` ile zaten kapanmıştı.
+
+### Verilen kararlar
+
+| Karar | Gerekçe |
+|---|---|
+| **Geçiş tablosu eksiksiz; tanımsız çift `InvalidTransitionError`** | Sessizce yerinde kalmak Kural 13 ihlali: sıra hatası ancak çok sonra, başka bir yerde patlar. Bu yüzden `ONAY_BEKLIYOR`'un kendine dönen geçişi de tabloda açıkça yazılı — "yazılmayan kendine döner" kuralı, okuyanın hangi olayın beklendiğini göremediği bir tablo demek |
+| **Aktör cihaz başına, tur kilidi global** | §5 ikisini ayrı söylüyor. Kuyruk cihaz başına, çünkü bir cihazın segmenti diğerinin olaylarını bekletmemeli; tur global, çünkü tek GPU ve tek konuşma akışı var. `asyncio.Lock` bekleyenleri geliş sırasında uyandırıyor |
+| **Koşucu kendi `Task`'ında** | İptalin tutunacak bir yeri olması için. Ayrı iptal jetonu yok (P3 kararı): asyncio'nun yolu zaten var, ikincisi unutulacak ikinci yol demek |
+| **`TurnRunner` ve `SessionSink` `Protocol`** | `turn` katmanı henüz yok ve `transport` `session`'ın *üstünde* — aktör `StateChanged`'i kendisi üretemez. `obs`/`TraceSink` kalıbının aynısı |
+| **`Segment.payload` opak** | Aktör içeriğe hiç bakmıyor; sesi çözen de metni okuyan da koşucu. Ses/metin ayrımını `session`'a koymak `transport`'un çerçeve tiplerini aşağı sızdırırdı |
+| **Kapalı durumda segment yeni tur açmaz, turun kuyruğuna girer** | §5: `ONAY_BEKLIYOR`/`KAYIT`'ta gelen metin ajana *hiç* ulaşmaz. Sıraya alıp turun bitmesini beklemek de olmazdı — onay bekleyen tur zaten o segmenti bekliyor, sistem kendini kilitlerdi |
+| **`ONAY_BEKLIYOR`'da söz kesme turu öldürmez** | B3: ses durur (`speech_stopped`), durum değişmez, plan yaşar, iptal bildirimi gitmez |
+| **İlgisiz `turn_id`'li söz kesme yok sayılır, ama loglanır** | §13 iptal sonrası ağda kalan ölü tur trafiğini zaten öngörüyor: hata değil. Sessiz de değil — iptal sonrası trafiğin ölçülebilmesi gerekiyor |
+| **Patlayan tur durumu `IDLE`'a çeker** | Aksi halde sistem `ÇÖZÜMLÜYOR`'da kalır ve bir sonraki segment ikinci bir hata olarak geri gelir. Aktör hatayı kayda düşüp sıradaki segmente devam ediyor (Kural 13) |
+| **Onay zaman aşımı sayacı burada değil** | §10 onayın sahibi; aktör yalnızca `ONAY_ZAMAN_ASIMI` olayını tabloya uyguluyor. Sayacı buraya koymak P5'in kararını varsayımla kapatmak olurdu |
+
+**P5'e düşen:** §5'in tablosu `DÜŞÜNÜYOR` durumunda söz kesmeyi tanımlamıyor; kod da
+tanımlamıyor, `InvalidTransitionError` yükseltiyor. Kullanıcının ses başlamadan söze
+girmesi gerçekçi bir senaryo — tabloya satır eklenecekse bu **doküman kararı**, kodda
+varsayımla kapatılmadı.
 
 ---
 
