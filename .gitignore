@@ -1,0 +1,22 @@
+# Ortam
+.venv/
+__pycache__/
+*.py[cod]
+
+# Araç önbellekleri
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Sırlar — ilk günden. .env asla depoya girmez.
+.env
+.env.*
+!.env.example
+
+# Veri: SQLite tek sahipli, depoya girmez (Kural 1).
+# Kök dizine sabitlenmiş: `src/mayen/data/` bir paket, yanlışlıkla yutulmasın.
+*.db
+*.db-wal
+*.db-shm
+/data/
+/backups/

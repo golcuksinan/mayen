@@ -1,0 +1,1 @@
+"""Mayen -- yerel sesli asistan."""
