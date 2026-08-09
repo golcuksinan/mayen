@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Türkçe konuşan, İngilizce yanıtlayan yerel sesli asistan"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "httpx>=0.28.1",
+    "psutil>=7.2.2",
     "structlog>=26.1.0",
 ]
 
@@ -44,4 +46,5 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.2",
+    "types-psutil>=7.2.2.20260518",
 ]

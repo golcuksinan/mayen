@@ -6,8 +6,10 @@ yok sayılmaz — `None` olarak taşınır ve ona ihtiyaç duyan tool açık hat
 
 import logging
 import os
+import re
+import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 PREFIX = "MAYEN_"
@@ -48,6 +50,9 @@ class Config:
     backup_dir: Path = Path("backups")
     backup_keep: int = 7
     backup_interval_minutes: int = 360
+    # §19.9: ad → MAC, bir yapılandırma dosyasında. Tablo ve CRUD tool'ları yok; yeni
+    # cihaz eklemek bir satır.
+    wol_targets: Mapping[str, str] = field(default_factory=dict)
 
 
 def load(env: Mapping[str, str] | None = None) -> Config:
@@ -68,7 +73,34 @@ def load(env: Mapping[str, str] | None = None) -> Config:
             src.get(f"{PREFIX}BACKUP_INTERVAL_MINUTES"),
             default.backup_interval_minutes,
         ),
+        wol_targets=_wol_targets(src.get(f"{PREFIX}WOL_TARGETS_PATH")),
     )
+
+
+_MAC = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
+
+
+def _wol_targets(raw: str | None) -> Mapping[str, str]:
+    """§19.9'un ad → MAC dosyası (TOML, `[targets]` altında).
+
+    Dosya yoksa hedef de yoktur; ama **verilen bir yol okunamıyorsa** bu sessizce boş
+    listeye düşmez (Kural 13): yanlış yazılmış bir yol, "hiçbir cihaz tanımlı değil"
+    diyen bir asistanla sonuçlanırdı.
+    """
+    if raw is None or not raw.strip():
+        return {}
+    path = Path(raw.strip()).expanduser()
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"{PREFIX}WOL_TARGETS_PATH okunamadı: {path}") from exc
+    targets = data.get("targets", {})
+    if not isinstance(targets, dict):
+        raise ConfigError(f"{path}: 'targets' bir tablo olmalı")
+    for name, mac in targets.items():
+        if not isinstance(mac, str) or not _MAC.match(mac):
+            raise ConfigError(f"{path}: {name!r} için geçersiz MAC adresi: {mac!r}")
+    return dict(targets)
 
 
 def _level(raw: str | None) -> int:

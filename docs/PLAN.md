@@ -226,11 +226,27 @@ atandığı) — kodu engellemez, ilk gerçek kullanımı engeller.
   onaylaması asla istenmez (§8.5 adım 1).
 
 **Bitti kriteri:** §17.4 — her (etki sınıfı × kademe) hücresi için bir test. Dört kademe ×
-dört etki sınıfı = on altı hücre, hepsi ayrı ayrı.
+dört etki sınıfı = on altı hücre, hepsi ayrı ayrı. — **Karşılandı: 206 test yeşil.**
+
+### Verilen kararlar
+
+| Karar | Gerekçe |
+|---|---|
+| **`Effect` `policy`'de, `data`'da değil** | `Tier`'ın aksine saklanan bir değer değil: şemada etki sınıfı sütunu yok, tool tanımı kodda. Kararı veren katman sözlüğün de sahibi; `tools` (rütbe 5) `policy`'yi (6) import ediyor, tersi §4'ü kırardı |
+| **`Authority` `Tier`'dan ayrı** | Matris dört kademe tanımak zorunda, `Tier` üç taşıyor — `TANINMAYAN`'ın rehberde satırı yok (§10.1). Dördüncüsü kimliği yetkiye çeviren yerde; `data`'nın CHECK kısıtına dokunulmadı |
+| **Matris hücre hücre yazıldı** | `dict.fromkeys` gibi bir kısayolla üretilen matris, testte de üretenin varsayımını doğrular. Eksik hücre `KeyError` — sessiz "izin yok" değil (Kural 13) |
+| **`SAHİP × GERİ_ALINAMAZ` = onay, izin değil** | §10.2 sahibe "tümü" derken parantezi de yazıyor. Onay yetki sorusu değil niyet sorusudur; sahiplik onu kaldırmaz |
+| **`authorize()` tool adına bakmaz** | Karar yalnızca etki sınıfından çıkar (§9.1). Ada göre istisna yazmak, doğrudan yasaklanmış olan ikinci bir "hassas tool listesi" kurmaktır |
+| **Gramer dışı yanıt `BELİRSİZ` değil, hata** | Belirsiz saymak bozuk servisi kullanıcının kararsızlığı gibi gösterir; ikinci soru da aynı bozuk servise gider ve akış sessizce iptalle biter (Kural 13) |
+| **Zaman aşımı süresi varsayılansız** | Kural 5 zaman aşımının *sonucunu* söylüyor, süresini değil; doküman da bir sayı vermiyor. Sayaç `policy`'de (P4'ün bıraktığı yer) ama değeri çağıranın |
+| **Argüman doğrulaması burada değil** | Şemalar `tools`'ta ve `policy` onları import edemez. Sıra yine de korunuyor: akış bir `PendingPlan`'dan başlıyor, o da okunacak cümleyi istiyor — geçersiz argümanla o cümle kurulamaz (§8.5 adım 1) |
+
+**P5'ten devreden:** P4'ün bıraktığı `DÜŞÜNÜYOR`'da söz kesme satırı hâlâ açık. Politika
+katmanı onu kapatmadı, çünkü kapatacak olan yer §5'in tablosu — doküman kararı.
 
 ---
 
-## P6 — Tool kayıt defteri, katalog, gramer
+## P6 — Tool kayıt defteri, katalog, gramer ✅ TAMAMLANDI (2026-08-09)
 
 **Bağımlılık:** P2, P5, P0/A4, P0/C3. **Engelleyen açık madde:** yok — §19.7, §19.8 ve
 §19.9 kapatıldı, katalogdaki her tool'un gövdesi yazılabilir.
@@ -250,7 +266,31 @@ hava durumu OpenWeatherMap'e (anahtar ortamdan, depoya girmez), ders programı d
 program dosyasına, Wake-on-LAN yapılandırmadaki ad→MAC listesine.
 
 **Bitti kriteri:** katalog metni üretiliyor; GBNF her iki adayda geçerli ve dallanma
-testi yeşil; bloke olmayan tool'ların testleri yeşil.
+testi yeşil; bloke olmayan tool'ların testleri yeşil. — **Karşılandı: 265 test yeşil;
+katalog 14 tool / 70 satır; iki gramer de defterden üretiliyor.**
+
+### Verilen kararlar
+
+| Karar | Gerekçe |
+|---|---|
+| **Kullanım metni üretilir, ayrı alanda yazılmaz** | İmzadan bağımsız ikinci bir metin, imza değişince sessizce yalan söyler — §9.1'in "dağıtılmış tanım, dokümanın koddan sapmasının sebebidir" cümlesinin ta kendisi |
+| **`Tool.validate()` `tools`'ta** | §8.5 adım 1 doğrulamayı onaydan önce istiyor ve şemalar burada; `policy` `tools`'u import edemez. Hata `usage()`'ı üstünde taşıyor, çünkü modele geri beslenen şey o |
+| **Serbest metin alanı kuralı tanım anında zorlanıyor** | A4'ün "en fazla bir alan, o da sonda" kuralı `ToolSpecError`. Çalışma anında keşfedilseydi, bozuk imza ancak yanlış ayrışan bir çağrıyla belli olurdu |
+| **Bağlam nesnesi repository taşıyor, `Database` değil** | Tool'a verilen şey erişim yetkisidir; genel bir tutamaç, SQL'in `data/` dışına çıkması için açık davetiye |
+| **`contact_save` yeni kişiyi `BEKLEYEN` yazar** | §10.3. Aksi hâlde "rehbere ekle" cümlesi sessizce `KAYITLI_KISI` yetkisi veren bir cümle olurdu; kademe yükseltme §10.4'ün ayrı, geri alınamaz işi |
+| **Kişi eşleştirmesi harf katlamasız** | Türkçe `I`/`ı` katlaması yanlış; yanlış eşleşen ad var olan bir kişinin kaydını değiştirir |
+| **Ders dönemi argüman değil, bağlamdan** | Model hangi dönemde olunduğunu bilmez; sorulsaydı uydururdu. Dönemi bilen, §19.8'in program dosyasını yükleyen taraf |
+| **Katalog payı sayaçtan ölçülür, eşikle karşılaştırılmaz** | Kural 10 sayıyı sayaçtan istiyor; §8.4 ise aşılınca ne yapılacağını söylüyor ama bir sayı vermiyor. Eşiği uydurmak, ölçümü kendi varsayımını doğrulayan bir teste çevirirdi |
+| **Tool dalı ile düz metin dalı aynı öneki paylaşır (`<tool> `)** | C3 dallanmanın ilk token'da belli olmasını istiyor. Önek iki adayda da aynı: P7 çağrı *kodlamasını* karşılaştırsın, iki farklı öneki değil |
+| **CLI'de hiçbir kelime `--` ile başlayamaz** | A4'ün "bir sonraki bilinen bayrağa kadar oku" kuralının gramer karşılığı: değerin sonraki bayrağı yutması gramer düzeyinde imkânsız |
+| **JSON'da isteğe bağlı alanlar iki kural zinciri** | Tek zincirde, ilk alanı atlanan çağrı baştaki virgülle geçersiz JSON olurdu |
+| **Gramer testleri yapıyı doğrular, geçerliliği değil** | Kendi yazdığım doğrulayıcı, gramerin geçerliliğini değil GBNF'i doğru anladığımı ölçerdi. Dış doğrulama P7'de, gerçek koşucuyla |
+| **WOL yalnızca yapılandırmadaki adları kabul eder** | §19.9. Ham MAC kabul edilseydi modelin söyleyebildiği bir adres listenin dışındaki bir cihazı uyandırırdı; okunamayan hedef dosyası da `ConfigError`, boş liste değil (Kural 13) |
+
+**P6'dan devreden:** §9.2'nin "ses profili kaydet/sil" satırı yazılmadı — kayıt ayrı bir
+oturum durumu (`KAYIT`, §10.5) ve birden fazla ses örneği istiyor, konuşmacı adaptörü tur
+akışına bağlanmadan (P8) gövdesi yazılamaz. P4/P5'ten devreden `DÜŞÜNÜYOR`'da söz kesme
+satırı hâlâ açık; yeri yine §5'in tablosu.
 
 ---
 

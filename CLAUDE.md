@@ -75,15 +75,18 @@ constant clarification.
 
 ### Current state
 
-**P1–P4 are done (2026-08-09); P5 — policy — is next.** See `docs/PLAN.md` for all five.
+**P1–P6 are done (2026-08-09); P7 — the Phase 0 measurement — is next.** See
+`docs/PLAN.md` for all of them.
 
 `src/mayen/` holds the eleven §4 layer packages. Real so far: `config.py` (typed env
 config + `Secret`); all of `data/` — `db.py`, `migrate.py`, `clock.py`, `backup.py`,
 `migrations/001_initial.sql`, eight repositories under `data/repositories/`; `obs/`
 (`log.py`, `trace.py`); `adapters/` (`audio.py`, `errors.py`, `service.py`, `llm.py`,
 `stt.py`, `tts.py`, `speaker.py` + `fakes/`); `transport/` (`frames.py`, `wire.py`,
-`handshake.py`, `queue.py`); and `session/` (`state.py`, `actor.py`). Still empty:
-`turn/`, `agent/`, `tools/`, `policy/`, `memory/`, `scheduler/`.
+`handshake.py`, `queue.py`); `session/` (`state.py`, `actor.py`); and `policy/`
+(`effects.py`, `authority.py`, `approval.py`); and `tools/` (`spec.py`, `registry.py`,
+`catalog.py`, `prompt.py`, `grammar.py` + one file per tool). Still empty: `turn/`,
+`agent/`, `memory/`, `scheduler/`.
 
 **P4's shape.** `session/state.py` is the *only* place §5's transition table is written
 down; an undefined `(state, event)` pair raises `InvalidTransitionError` rather than
@@ -97,8 +100,30 @@ segment does not open a turn; it goes into the running turn's own queue, because
 awaiting approval is precisely what is waiting for that segment.
 
 **Not decided in code:** §5's table has no entry for barge-in during `DÜŞÜNÜYOR`, and the
-code does not invent one. Adding it is a doc decision. Likewise the approval timeout
-*counter* belongs to `policy` (P5); the actor only applies the event.
+code does not invent one. Adding it is a doc decision — P5 did not close it either, since
+the place that would close it is §5's table.
+
+**P5's shape.** `policy/authority.py` is the single enforcement point (invariant 4);
+nothing else anywhere checks authority. The sixteen cells of §10.2's matrix are written out
+one by one — a generated matrix makes the test verify the generator's assumption — and a
+missing cell is a `KeyError`, not a silent deny. `Effect` (§9.1) lives in `policy`, not
+`data`: unlike `Tier` it is not a stored value, there is no column for it, and `tools`
+(rank 5) imports `policy` (6) rather than the reverse. `Authority` is separate from `Tier`
+for the same boundary reason in the other direction: the matrix needs four tiers, `Tier`
+stores three (an unrecognized person has no row), so the fourth lives where identity
+becomes authority. `authorize()` never looks at a tool's *name* — an exception by name is
+the "sensitive tool list" §9.1 forbids.
+
+`policy/approval.py` resolves a segment through constrained output (a three-word GBNF,
+each starting with a different letter so the branch is decidable at the first token); the
+file contains no keyword matching at all (invariant 5). An off-grammar answer raises
+rather than counting as `BELİRSİZ` — treating a broken service as user hesitation sends
+the second question to the same broken service and ends the flow in a silent cancel. The
+timeout *counter* lives here, but `timeout_seconds` has no default: invariant 5 fixes the
+outcome of a timeout, not its duration, and the doc gives no number. Argument validation
+is deliberately *not* here (schemas live in `tools`, which `policy` cannot import); §8.5's
+ordering is preserved instead by `PendingPlan` requiring the spoken sentence, which cannot
+be built from invalid arguments.
 
 **P3's shape, so nobody re-opens it.** The whole system is asyncio (`pytest-asyncio`,
 `asyncio_mode = "auto"`).
@@ -127,6 +152,39 @@ code does not invent one. Adding it is a doc decision. Likewise the approval tim
   dependency inversion P1 predicted — `obs` sits at the bottom and cannot import `data`.
   `TurnTrace` times stages with `monotonic` (a wall-clock jump would write negative
   durations) and writes a stage even when it raised.
+
+**P6's shape.** The registry is an object built by `tools/catalog.py:builtin_registry()`,
+not a module-level global — a global registry is where test bleed and "when did this
+register" questions come from. Everything downstream is generated *from* it: the prompt
+catalog (`prompt.py`) and both GBNF candidates (`grammar.py`). Adding a tool is one file
+plus one line in `catalog.py`.
+
+- **`usage()` is generated from the signature, not declared beside it.** §9.1 asks the
+  tool to declare its `--help`; a second, independent text is the doc-drifts-from-code
+  failure §9.1 itself describes.
+- **`Tool.validate()` lives in `tools`.** §8.5 step 1 runs before approval, and the
+  schemas are here — `policy` cannot import `tools`. The error carries `usage()` on it,
+  because that is what gets fed back to the model.
+- **A4's "at most one flag-like field, and it sits last" is enforced at definition time**
+  (`ToolSpecError`), and again in the CLI grammar: no `cli-word` may start with `--`, so a
+  value swallowing the next flag is grammatically impossible.
+- **`ToolContext` carries repositories and one `httpx.AsyncClient`, never a `Database`.**
+  What a tool gets handed *is* its access; a general handle is an open invitation for SQL
+  to leave `data/`.
+- **Both grammar candidates share the `<tool> ` prefix** and prose may not start with `<`
+  (C3/§6: the branch is decidable at the first token). Same prefix on purpose — P7 should
+  compare the two *encodings*, not two different prefixes. The grammar tests check
+  structure only; "llama.cpp accepts this" is P7's job with the real runner.
+- **The catalog's share of the context budget is measured through the LLM's counter**
+  (rule 10) and compared against no threshold: §8.4 says what to do when it is exceeded
+  but names no number, and §19 has none either.
+- **`contact_save` writes a new person as `BEKLEYEN`** (§10.3) — otherwise "add them to my
+  contacts" would be a sentence that silently grants `KAYITLI_KISI`. Name matching is
+  exact, never case-folded: Turkish `I`/`ı` folding is wrong and a bad match would edit
+  someone else's row.
+- **Not written: voice-profile save/delete** (§9.2's last row). Registration is its own
+  session state (`KAYIT`, §10.5) and needs several audio samples — its body cannot be
+  written before the speaker adapter is wired into the turn flow (P8).
 
 **Two SQLite traps P2 hit, both verified by experiment and locked by tests.** Do not
 undo either:
@@ -287,7 +345,10 @@ into the doc; this list records **why those passages read the way they do**, so 
   handling is set up once in P1. Quota and key errors are surfaced, not swallowed (§14).
 - **Course schedule: a file in the repo** (§19.8), YAML/TOML, loaded into the DB at startup.
   It changes once a semester; no runtime editing surface.
-- **Wake-on-LAN targets: config file** (§19.9), name → MAC. No table, no CRUD tools.
+- **Wake-on-LAN targets: config file** (§19.9), name → MAC. No table, no CRUD tools. It is
+  a TOML file named by `MAYEN_WOL_TARGETS_PATH` (`[targets]`); MACs are validated at load
+  time and an unreadable path is a `ConfigError`, never an empty target list. The tool
+  refuses raw MAC addresses — a model-spoken address would reach a device outside the list.
 - **Owner assignment: a CLI setup script** (§19.14). Collects a few voice samples, marks the
   profile as owner, refuses to run if an owner already exists. Invariant 6 holds — the path
   to owner has no voice door, only a shell door that requires physical machine access.
