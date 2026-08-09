@@ -90,7 +90,7 @@ hâlde gerçek STT geldiğinde protokol yeniden açılır.
 
 ---
 
-## P2 — Veri katmanı (§16)
+## P2 — Veri katmanı (§16) ✅ TAMAMLANDI (2026-08-09)
 
 **Bağımlılık:** P1. **Engelleyen açık madde:** yok (§19.12 yalnızca yapılandırma değeri).
 
@@ -104,7 +104,27 @@ hâlde gerçek STT geldiğinde protokol yeniden açılır.
   profilleri, notlar, ders programı, zamanlanmış görevler, tur izleri.
 
 **Bitti kriteri:** boş dosyadan migration tam çalışıyor; yedekten geri dönülen veritabanı
-açılıyor ve okunuyor; repository testleri yeşil.
+açılıyor ve okunuyor; repository testleri yeşil. — **Karşılandı: 94 test yeşil.**
+
+### Verilen kararlar
+
+| Karar | Gerekçe |
+|---|---|
+| **Tek bağlantı, muteksle** | SQLite'ta yazmalar zaten serileşir; WAL'da bile tek yazar olur. Bağlantı çoğaltmak eşzamanlılık kazandırmaz, kilit beklemesini `SQLITE_BUSY`'ye çevirir. Karşılığı tek bir kural: **bir transaction hiçbir zaman bir LLM/HTTP çağrısını kapsamaz.** Ölçüm çekişme gösterirse iş parçacığı başına bağlantıya geçmek `data/` içinde yerel bir değişiklik |
+| **Açık `COMMIT`/`ROLLBACK` SQL'i** | `autocommit=True` altında `Connection.rollback()` **sessiz bir no-op**: işlem açık kalır, geri alındığı sanılan yazma sıradaki COMMIT'e yapışır. Deneyerek doğrulandı; `test_failed_transaction_leaves_nothing_behind` geri dönüşü engelliyor |
+| **Migration'lar ayrı `script()` yolundan** | `executescript` bekleyen işlemi kendiliğinden COMMIT ediyor, yani `transaction()` içinden çağrılamaz — atomikliği sessizce bozar. İşlem denetimi betiğin kendi içinde, sürüm damgası DDL ile aynı işlemde |
+| **Sürüm `PRAGMA user_version`'da** | SQLite'ın kendi alanı; ayrı bir sürüm tablosuna ve o tablonun kendi migration'ına gerek yok |
+| **`STRICT` tablolar** | Varsayılan SQLite'ta `token_count` sütununa `"çok"` yazılabilir ve sessizce kabul edilir |
+| **Zaman: ISO-8601 UTC metni** | Sıralaması kronolojik, gözle okunur, SQLite tarih fonksiyonları çalışır. Biçim `data/clock.py`'de tek yerde |
+| **Repository'ler dataclass döndürür** | `sqlite3.Row` döndürmek sütun adlarını üst katmanlara sızdırır ve "SQL `data/` dışına çıkmaz" kuralını kâğıt üstünde bırakır |
+| **`Tier` / `TaskStatus` `data`'da** | Saklanan değerler ve CHECK kısıtı zaten bu sözlüğün sahibi. `policy`, `data`'yı import edebilir; tersi §4'e aykırı |
+| **Yedek: `.partial` → `rename`** | Yarım kalmış bir yedek `mayen-*.db` desenine uymaz, rotasyon onu sağlam sanıp yerine sağlamı silmez |
+| **`backup_keep < 1` reddedilir** | `keep=0` "yedek alma" demek değil, ayarın yanlış yazıldığı anlamına gelir ve ancak lazım olunca fark edilir |
+| **Sınır testine ikinci denetim** | `data/` dışındaki SQL dizeleri AST'den yakalanıyor; repository kalıbı ancak mekanik olarak zorlanınca gerçek |
+
+**P3'e düşen:** `obs`'un `TraceSink` `Protocol`'ü. `TraceRepository` şu an doğrudan
+çağrılıyor; tur izini `obs` yazmak isteyince sınır testi reddedecek ve bağımlılık
+tersine dönecek (P1'de öngörüldüğü gibi).
 
 ---
 

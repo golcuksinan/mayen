@@ -9,6 +9,7 @@ düzeltmek ya da sınırı yeniden çizmektir.
 """
 
 import ast
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,6 +146,58 @@ def test_detects_planted_violation(tmp_path: Path, statement: str, expected: str
     violations = find_violations(tmp_path)
 
     assert [(v.source, v.imports) for v in violations] == [("adapters", expected)]
+
+
+# --- SQL yalnızca data/ içinde (§16) ---------------------------------------------------
+
+# Bir dizeyi SQL sayan işaret: ifadenin ilk kelimesi. Gövdesinde "select" geçen bir cümle
+# yakalanmaz, "SELECT ..." ile başlayan bir dize yakalanır.
+SQL_START = re.compile(
+    r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|PRAGMA|BEGIN|COMMIT|ROLLBACK)\s",
+    re.IGNORECASE,
+)
+SQL_HOME = "data"
+
+
+def _sql_literals(tree: ast.AST) -> Iterator[tuple[str, int]]:
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and SQL_START.match(node.value)
+        ):
+            yield node.value.split("\n")[0][:60], node.lineno
+
+
+def find_stray_sql(root: Path) -> list[str]:
+    """`data/` dışında kalan SQL. Repository kalıbı ancak buysa gerçek (§16)."""
+    stray: list[str] = []
+    for path in sorted((root / PACKAGE).rglob("*.py")):
+        if _layer_of_path(path, root) == SQL_HOME:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        stray.extend(f"{path}:{line}: {text}" for text, line in _sql_literals(tree))
+    return stray
+
+
+def test_sql_lives_only_in_the_data_layer() -> None:
+    stray = find_stray_sql(SRC)
+    assert not stray, "data/ dışında SQL:\n" + "\n".join(stray)
+
+
+def test_stray_sql_is_actually_detected(tmp_path: Path) -> None:
+    """Denetim çalışıyor mu — `data/` dışına kasten bir sorgu koy."""
+    layer = tmp_path / PACKAGE / "tools"
+    layer.mkdir(parents=True)
+    (tmp_path / PACKAGE / "__init__.py").touch()
+    (layer / "notes.py").write_text(
+        'q = "SELECT * FROM notes"\nmesaj = "Bir not seçtim"\n', encoding="utf-8"
+    )
+
+    stray = find_stray_sql(tmp_path)
+
+    assert len(stray) == 1
+    assert "SELECT * FROM notes" in stray[0]
 
 
 def test_downward_import_is_allowed(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 """Yapılandırma okuması ve sırların sızmaması."""
 
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +37,35 @@ def test_blank_secret_is_absent_not_empty() -> None:
     [{"MAYEN_LOG_LEVEL": "chatty"}, {"MAYEN_LOG_JSON": "belki"}],
 )
 def test_invalid_value_raises_instead_of_defaulting(env: dict[str, str]) -> None:
+    with pytest.raises(ConfigError):
+        load(env)
+
+
+def test_reads_database_and_backup_settings() -> None:
+    cfg = load(
+        {
+            "MAYEN_DB_PATH": "/veri/mayen.db",
+            "MAYEN_BACKUP_DIR": "/veri/yedek",
+            "MAYEN_BACKUP_KEEP": "3",
+            "MAYEN_BACKUP_INTERVAL_MINUTES": "60",
+        }
+    )
+    assert cfg.db_path == Path("/veri/mayen.db")
+    assert cfg.backup_dir == Path("/veri/yedek")
+    assert (cfg.backup_keep, cfg.backup_interval_minutes) == (3, 60)
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"MAYEN_BACKUP_KEEP": "üç"},
+        {"MAYEN_BACKUP_KEEP": "0"},
+        {"MAYEN_BACKUP_KEEP": "-1"},
+        {"MAYEN_BACKUP_INTERVAL_MINUTES": "0"},
+    ],
+)
+def test_non_positive_counts_are_rejected(env: dict[str, str]) -> None:
+    """`keep=0` sessizce kabul edilirse yedek kalmaz ve bu ancak lazım olunca fark edilir."""
     with pytest.raises(ConfigError):
         load(env)
 

@@ -75,13 +75,28 @@ constant clarification.
 
 ### Current state
 
-**P1 is done (2026-08-09); P2 — the data layer — is next.** See `docs/PLAN.md` for both.
+**P1 and P2 are done (2026-08-09); P3 — protocol, adapter interfaces, fakes — is next.**
+See `docs/PLAN.md` for all three.
 
-The skeleton and toolchain exist; no behaviour does yet. `src/mayen/` holds the eleven §4
-layer packages, each still an empty package with only its docstring, plus two modules that
-are real: `obs/log.py` (structlog setup) and `config.py` (typed env config + `Secret`).
-Nothing in `transport/`, `session/`, `turn/`, `agent/`, `tools/`, `policy/`, `memory/`,
-`adapters/`, `data/`, `scheduler/` yet.
+`src/mayen/` holds the eleven §4 layer packages. Real so far: `obs/log.py` (structlog),
+`config.py` (typed env config + `Secret`), and all of `data/` — `db.py`, `migrate.py`,
+`clock.py`, `backup.py`, `migrations/001_initial.sql`, and eight repositories under
+`data/repositories/`. Still empty: `transport/`, `session/`, `turn/`, `agent/`, `tools/`,
+`policy/`, `memory/`, `adapters/`, `scheduler/`.
+
+**Two SQLite traps P2 hit, both verified by experiment and locked by tests.** Do not
+undo either:
+
+1. Under `autocommit=True`, `Connection.rollback()` and `.commit()` are **silent no-ops**.
+   `Database.transaction()` issues literal `COMMIT`/`ROLLBACK` SQL for that reason.
+2. `executescript` implicitly COMMITs any pending transaction, so it cannot run inside
+   `transaction()` — migrations go through `Database.script()`, which puts the transaction
+   control inside the script itself.
+
+**Concurrency:** one connection, guarded by a mutex. Writes serialize in SQLite anyway
+(one writer even in WAL), so extra connections buy nothing and turn lock waits into
+`SQLITE_BUSY`. The price is one rule: **a transaction never spans an LLM/HTTP call.** Open,
+read or write, close. Backup opens its own connection — invariant 1 is about processes.
 
 - **Python 3.13**, pinned `>=3.13,<3.14` in `pyproject.toml` and `.python-version`. The
   system interpreter is 3.14; the upper bound is what stops uv drifting onto it. torch,

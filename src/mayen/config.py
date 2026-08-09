@@ -8,6 +8,7 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 PREFIX = "MAYEN_"
 
@@ -41,15 +42,32 @@ class Config:
     log_level: int = logging.INFO
     log_json: bool = False
     openweathermap_key: Secret | None = None
+    # §16: veritabanı tek dosya, tek sahip. Yedekleme ayarları §19.12'de açık ama açık
+    # olan şey bu sayıların ne olacağı, yedeğin var olup olmayacağı değil.
+    db_path: Path = Path("mayen.db")
+    backup_dir: Path = Path("backups")
+    backup_keep: int = 7
+    backup_interval_minutes: int = 360
 
 
 def load(env: Mapping[str, str] | None = None) -> Config:
     """Ortamdan yapılandırmayı okur. Süreç başına bir kez, en erken anda çağrılır."""
     src = os.environ if env is None else env
+    default = Config()
     return Config(
         log_level=_level(src.get(f"{PREFIX}LOG_LEVEL")),
         log_json=_bool(src.get(f"{PREFIX}LOG_JSON")),
         openweathermap_key=_secret(src.get(f"{PREFIX}OPENWEATHERMAP_KEY")),
+        db_path=_path(src.get(f"{PREFIX}DB_PATH"), default.db_path),
+        backup_dir=_path(src.get(f"{PREFIX}BACKUP_DIR"), default.backup_dir),
+        backup_keep=_positive_int(
+            f"{PREFIX}BACKUP_KEEP", src.get(f"{PREFIX}BACKUP_KEEP"), default.backup_keep
+        ),
+        backup_interval_minutes=_positive_int(
+            f"{PREFIX}BACKUP_INTERVAL_MINUTES",
+            src.get(f"{PREFIX}BACKUP_INTERVAL_MINUTES"),
+            default.backup_interval_minutes,
+        ),
     )
 
 
@@ -71,6 +89,26 @@ def _bool(raw: str | None) -> bool:
     if normalized in ("0", "false", "no", "off"):
         return False
     raise ConfigError(f"Mantıksal değer bekleniyordu, {raw!r} geldi")
+
+
+def _path(raw: str | None, default: Path) -> Path:
+    if raw is None or not raw.strip():
+        return default
+    return Path(raw.strip()).expanduser()
+
+
+def _positive_int(name: str, raw: str | None, default: int) -> int:
+    """Sıfır ve negatif de reddedilir: `backup_keep=0` "yedek alma" demek değil, ayarın
+    yanlış yazıldığı anlamına gelir ve sessizce kabul edilirse veri kaybettirir."""
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        raise ConfigError(f"{name} bir tamsayı olmalı, {raw!r} geldi") from None
+    if value < 1:
+        raise ConfigError(f"{name} pozitif olmalı, {value} geldi")
+    return value
 
 
 def _secret(raw: str | None) -> Secret | None:
