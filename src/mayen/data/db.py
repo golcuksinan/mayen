@@ -14,15 +14,23 @@ her işlem milisaniyeler sürer ve eşzamanlı iki iş birbirini fark etmez; tut
 
 Yedekleme kendi bağlantısını açar (`backup.py`); Kural 1 sürece dair bir kuraldır, bağlantı
 sayısına dair değil.
+
+**Kural 1 bir yorum değil, bir kilit.** Dosyanın yanındaki `.lock` üzerinde süreç ömrü
+boyunca tutulan bir `flock` var: ikinci bir süreç aynı dosyayı açmaya kalkarsa hata alır.
+Servis koşarken elle `python -m mayen` yazmak tam da bunu yapardı ve iki sürecin aynı
+dosyaya yazması sessizce bozardı. Kilit **veritabanı dosyasında değil** yanındaki ayrı bir
+dosyada: SQLite'ın kendi kilitleriyle aynı dosyada oturmak, kimin neyi tuttuğunu okunmaz
+hâle getirirdi.
 """
 
+import fcntl
 import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Self, TextIO
 
 # Yazma kilidi başkasındayken beklenecek süre. Tek bağlantıda muteks zaten sıraya sokuyor;
 # bu sınır yedekleme gibi ayrı bağlantılara karşı geçerli.
@@ -31,6 +39,21 @@ BUSY_TIMEOUT_MS = 5_000
 
 class DatabaseError(Exception):
     """Veritabanı beklenen durumda değil. Sessizce devam edilmez."""
+
+
+def _acquire(path: Path) -> "TextIO":
+    """Dosyanın tek sahibi olduğumuzu ilan eder (Kural 1). Tutulamazsa hata."""
+    lock_path = path.with_name(f"{path.name}.lock")
+    handle = lock_path.open("w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise DatabaseError(
+            f"Veritabanı başka bir süreçte açık: {path}"
+            f" (Kural 1: dosyanın tek sahibi var). Kilit: {lock_path}"
+        ) from None
+    return handle
 
 
 class Database:
@@ -44,6 +67,13 @@ class Database:
         # değil, yukarıdaki muteks.
         self._conn = sqlite3.connect(path, autocommit=True, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Kilit bağlantıdan **sonra**: önce alınsaydı yanlış yol hatası, yolun kendi
+        # hatası yerine kilit dosyasının hatası olarak çıkardı (`test_db.py` bunu tutuyor).
+        try:
+            self._flock = _acquire(path)
+        except DatabaseError:
+            self._conn.close()
+            raise
         self._apply_pragmas()
 
     def _apply_pragmas(self) -> None:
@@ -106,6 +136,9 @@ class Database:
 
     def close(self) -> None:
         self._conn.close()
+        # Kilit bağlantıdan **sonra** bırakılıyor: ters sırada, kapanmakta olan bir sürecin
+        # dosyasını ikinci bir süreç açabilirdi.
+        self._flock.close()
 
     def __enter__(self) -> Self:
         return self

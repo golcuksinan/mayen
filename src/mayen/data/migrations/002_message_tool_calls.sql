@@ -1,0 +1,12 @@
+-- Faz B/2 (2026-08-16): tool çağrısı mesajın **yanında** saklanır.
+--
+-- §8.3'ün metin biçimlerinde çağrı `content`'in içindeydi ve ayrı bir alana gerek yoktu.
+-- Yerel biçimde çağrıyı modelin kendi şablonu taşıyor: asistan mesajının metni boş, çağrı
+-- `tool_calls` alanında. Metin olarak saklanırsa model bir sonraki turda kendi geçmişinde
+-- hiç üretmediği bir biçim görür ve onu **kopyalar** — ölçüldü: dört turda sesli cevap
+-- olarak `{"name": "volume", "arguments": {...}}` (`docs/faz-b-yerel.md`).
+--
+-- JSON metin olarak duruyor, ayrı bir tablo değil: tek okuyucusu `PromptMessage`e çeviren
+-- satır ve üstünde hiçbir sorgu yok. Bir tablo, sorgulanmayan bir birleştirme olurdu.
+-- NULL = çağrı taşımayan mesaj, yani neredeyse hepsi.
+ALTER TABLE messages ADD COLUMN tool_calls TEXT;

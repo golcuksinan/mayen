@@ -15,6 +15,14 @@ from mayen.data import clock
 from mayen.data.db import Database
 
 
+class TaskKind(StrEnum):
+    """Görev türü. Saklanan sözlük `data`'da: sütunun sahibi burası ve türü yazan tool ile
+    onu koşan zamanlayıcı aynı sabite bakmak zorunda — iki yerde yazılan bir dize, hiç
+    çalışmayan bir hatırlatıcı demek."""
+
+    REMINDER = "reminder"
+
+
 class TaskStatus(StrEnum):
     BEKLIYOR = "BEKLIYOR"
     CALISTI = "CALISTI"

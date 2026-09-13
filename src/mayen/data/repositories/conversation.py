@@ -26,6 +26,11 @@ class Message:
     token_count: int | None
     summary_id: int | None
     created_at: str
+    tool_calls: str | None = None
+    """Mesajın taşıdığı tool çağrıları, JSON metin (yerel çağrı biçimi, Faz B/2).
+
+    Neredeyse her satırda NULL: §8.3'ün metin biçimlerinde çağrı `content`'in içinde
+    duruyor. Gerekçesi migration 002'de."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +53,7 @@ def _message(row: sqlite3.Row) -> Message:
         token_count=row["token_count"],
         summary_id=row["summary_id"],
         created_at=row["created_at"],
+        tool_calls=row["tool_calls"],
     )
 
 
@@ -74,14 +80,15 @@ class MessageRepository:
         *,
         person_id: int | None = None,
         token_count: int | None = None,
+        tool_calls: str | None = None,
     ) -> Message:
         """`token_count` verilmezse boş kalır: sayı LLM sunucusunun sayacından gelir,
         tahmin edilmez (Kural 10). Sıfır yazmak tahmin etmektir."""
         with self._db.transaction() as conn:
             cur = conn.execute(
                 "INSERT INTO messages (turn_id, role, person_id, content, token_count, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING *",
-                (turn_id, role, person_id, content, token_count, clock.now()),
+                "created_at, tool_calls) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *",
+                (turn_id, role, person_id, content, token_count, clock.now(), tool_calls),
             )
             return _message(cur.fetchone())
 
@@ -139,6 +146,12 @@ class SummaryRepository:
                 (summary.id, *message_ids),
             )
         return summary
+
+    def set_token_count(self, summary_id: int, token_count: int) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE summaries SET token_count = ? WHERE id = ?", (token_count, summary_id)
+            )
 
     def latest(self) -> Summary | None:
         with self._db.transaction() as conn:
