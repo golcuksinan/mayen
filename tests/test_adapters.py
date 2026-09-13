@@ -85,10 +85,20 @@ async def test_stt_falls_back_to_reading_the_payload_as_text() -> None:
     assert (await stt.transcribe(segment("yarın hava nasıl"))).text == "yarın hava nasıl"
 
 
+async def test_stt_refuses_real_pcm_with_a_legible_error() -> None:
+    """Ses kipinde yükün metin olmadığı ilk yer burası: `UnicodeDecodeError` yerine
+    servisin adını ve §19.2'yi taşıyan bir hata."""
+    stt = FakeSTT()
+    with pytest.raises(ServiceUnavailableError, match=r"§19\.2"):
+        await stt.transcribe(Audio(data=b"\xff\xfe\x00\x01", format=FORMAT))
+
+
 async def test_tts_output_is_readable_and_ordered() -> None:
     tts = FakeTTS(chunk_size=4)
     chunks = [chunk async for chunk in tts.synthesize("iki cümle")]
-    assert b"".join(chunks).decode("utf-8") == "iki cümle"
+    # Sonda bir boşluk var: cümleler arka arkaya akıtıldığında ayıraç kalsın diye
+    # (gerekçesi `adapters/fakes/tts.py`'de).
+    assert b"".join(chunks).decode("utf-8") == "iki cümle "
     assert tts.calls == ["iki cümle"]
 
 

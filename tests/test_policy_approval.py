@@ -31,22 +31,30 @@ def test_only_irreversible_asks_for_approval() -> None:
     assert not needs_approval(Identity(Authority.KAYITLI_KISI), Effect.GERI_ALINAMAZ)
 
 
+QUESTION = "Should I delete note 3?"
+
+
 async def test_resolver_uses_constrained_output() -> None:
     llm = FakeLLM(["ONAY"])
-    assert await ApprovalResolver(llm).resolve("evet, sil") is Resolution.ONAY
+    answer = await ApprovalResolver(llm).resolve("evet, sil", question=QUESTION)
+    assert answer is Resolution.ONAY
     assert llm.grammars == [GRAMMAR]
 
 
-async def test_resolver_sees_the_segment_verbatim() -> None:
+async def test_resolver_sees_the_segment_and_the_question() -> None:
+    """Soru da gidiyor: onu vermeden "kapat" cevabı üç koşuda üçünde RED okunuyordu —
+    bağlamsız bir emir kipi evet/hayır ekseninde durmuyor (2026-08-16)."""
     llm = FakeLLM(["RED"])
-    await ApprovalResolver(llm).resolve("hayır, vazgeçtim")
-    assert llm.calls[0][-1].content == "hayır, vazgeçtim"
+    await ApprovalResolver(llm).resolve("hayır, vazgeçtim", question="Close the window?")
+    asked = llm.calls[0][-1].content
+    assert "hayır, vazgeçtim" in asked
+    assert "Close the window?" in asked
 
 
 async def test_off_grammar_answer_raises() -> None:
     # Kural 13: yutulmaz. BELİRSİZ de sayılmaz — bozuk servis kararsızlık değildir.
     with pytest.raises(ResolverError):
-        await ApprovalResolver(FakeLLM(["tabii ki"])).resolve("olur")
+        await ApprovalResolver(FakeLLM(["tabii ki"])).resolve("olur", question=QUESTION)
 
 
 async def test_approval_approves() -> None:

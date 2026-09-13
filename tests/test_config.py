@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from mayen.config import Config, ConfigError, Secret, load
+from mayen.config import Config, ConfigError, Secret, ServiceKind, load
 
 
 def test_defaults_when_env_is_empty() -> None:
@@ -28,6 +28,12 @@ def test_reads_values_from_env() -> None:
     assert cfg.openweathermap_key.reveal() == "abc123"
 
 
+def test_assume_owner_is_off_unless_asked_for() -> None:
+    # §19.3'ün geçici kapısı: varsayılan kapalı, yoksa kimlik sessizce SAHİP olurdu.
+    assert Config().assume_owner is False
+    assert load({"MAYEN_ASSUME_OWNER": "true"}).assume_owner is True
+
+
 def test_blank_secret_is_absent_not_empty() -> None:
     assert load({"MAYEN_OPENWEATHERMAP_KEY": "   "}).openweathermap_key is None
 
@@ -39,6 +45,45 @@ def test_blank_secret_is_absent_not_empty() -> None:
 def test_invalid_value_raises_instead_of_defaulting(env: dict[str, str]) -> None:
     with pytest.raises(ConfigError):
         load(env)
+
+
+def test_reads_llm_url_and_drops_the_trailing_slash() -> None:
+    assert (
+        load({"MAYEN_LLM_URL": " http://127.0.0.1:9000/ "}).llm_url == "http://127.0.0.1:9000"
+    )
+
+
+def test_schemeless_llm_url_is_rejected() -> None:
+    """Şemasız adres `httpx` tarafında göreli yol sayılır; hata ilk istekte, çok uzakta
+    çıkardı (Kural 13)."""
+    with pytest.raises(ConfigError):
+        load({"MAYEN_LLM_URL": "127.0.0.1:8080"})
+
+
+def test_schemeless_tts_url_is_rejected_and_names_its_own_variable() -> None:
+    """Hata mesajı hangi değişkenin bozuk olduğunu söylemeli; iki adres var artık."""
+    with pytest.raises(ConfigError, match="MAYEN_TTS_URL"):
+        load({"MAYEN_TTS_URL": "127.0.0.1:8081"})
+
+
+def test_service_kinds_default_to_fake_stt_and_real_tts() -> None:
+    """§19.2'nin STT yarısı açık, TTS yarısı kapandı: varsayılanlar bunu söylüyor."""
+    cfg = load({})
+    assert cfg.stt is ServiceKind.FAKE
+    assert cfg.tts is ServiceKind.REAL
+
+
+def test_service_kinds_are_read_from_the_environment() -> None:
+    cfg = load({"MAYEN_STT": " REAL ", "MAYEN_TTS": "fake"})
+    assert cfg.stt is ServiceKind.REAL
+    assert cfg.tts is ServiceKind.FAKE
+
+
+def test_an_unknown_service_kind_is_rejected() -> None:
+    """`--tts gercek` yazan kişinin sessizce sahteyle koşması fark edilmeyecek bir
+    yanlışlık olurdu (Kural 13)."""
+    with pytest.raises(ConfigError, match="fake/real"):
+        load({"MAYEN_TTS": "gercek"})
 
 
 def test_reads_database_and_backup_settings() -> None:

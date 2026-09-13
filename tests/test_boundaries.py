@@ -26,6 +26,9 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 # gün bir import'un reddedilmesi ve sıralamanın konuşulmasıdır; eşit bırakmanın bedeli
 # kimsenin haberi olmayan bir döngüdür. İlki gürültülü, ikincisi sessiz.
 RANK: dict[str, int] = {
+    "main": -1,  # montaj: her şeyi import eder, kimse onu import etmez. Rütbesiz
+    #             bırakılsaydı denetim dışı kalırdı — bir katman ondan import etse
+    #             bu test görmezdi
     "transport": 0,  # dış dünyanın giriş noktası
     "scheduler": 1,  # zamanlanmış görev de bir turu tetikler, ama sesi kendisi yollamaz;
     #                  §12'ye göre oturumun kuyruğuna girer — transport'a ihtiyacı yok

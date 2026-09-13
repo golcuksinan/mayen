@@ -1,12 +1,30 @@
 """Aktör iskeleti testleri (§5): cihaz kuyruğu, global tek tur, varlık takibi."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
 
 import pytest
 
 from mayen.session.actor import ActiveTurn, Segment, Session
 from mayen.session.state import Event, InvalidTransitionError, State
+from mayen.turn.report import TurnReport
+
+# Testler §5'in olaylarıyla yazılı; koşucu artık `TurnReport`'un dar arayüzünü konuşuyor.
+# Çeviri tabloda tutuluyor ki senaryolar olay listesi olarak okunabilir kalsın.
+_METHODS = {
+    Event.COZUMLEME_BITTI: "understood",
+    Event.ILK_SES_HAZIR: "speaking",
+    Event.SES_BITTI: "spoke",
+    Event.ONAY_GEREKLI: "approval_needed",
+    Event.ONAY_VERILDI: "approved",
+    Event.ONAY_REDDEDILDI: "refused",
+    Event.ONAY_ZAMAN_ASIMI: "approval_timed_out",
+    Event.KAYIT_GEREKLI: "registration_needed",
+    Event.KAYIT_BITTI: "registration_done",
+}
+
+
+async def announce(report: TurnReport, event: Event) -> None:
+    await getattr(report, _METHODS[event])()
 
 
 class RecordingSink:
@@ -15,12 +33,16 @@ class RecordingSink:
     def __init__(self) -> None:
         self.seen: list[tuple[State, str | None]] = []
         self.cancelled: list[str] = []
+        self.failed: list[tuple[str, str]] = []
 
     async def state_changed(self, state: State, turn_id: str | None) -> None:
         self.seen.append((state, turn_id))
 
     async def turn_cancelled(self, turn_id: str) -> None:
         self.cancelled.append(turn_id)
+
+    async def turn_failed(self, turn_id: str, error: str) -> None:
+        self.failed.append((turn_id, error))
 
 
 class ScriptedRunner:
@@ -31,12 +53,12 @@ class ScriptedRunner:
         self.gate = gate
         self.turn_ids: list[str] = []
 
-    async def run(self, turn: ActiveTurn, report: Callable[[Event], Awaitable[None]]) -> None:
+    async def run(self, turn: ActiveTurn, report: TurnReport) -> None:
         self.turn_ids.append(turn.turn_id)
         if self.gate is not None:
             await self.gate.wait()
         for event in self.events:
-            await report(event)
+            await announce(report, event)
 
 
 class WaitingRunner:
@@ -47,9 +69,9 @@ class WaitingRunner:
         self.started = asyncio.Event()
         self.was_cancelled = False
 
-    async def run(self, turn: ActiveTurn, report: Callable[[Event], Awaitable[None]]) -> None:
+    async def run(self, turn: ActiveTurn, report: TurnReport) -> None:
         for event in self.events:
-            await report(event)
+            await announce(report, event)
         self.started.set()
         try:
             await asyncio.Event().wait()
@@ -87,7 +109,10 @@ async def test_server_mints_the_turn_id() -> None:
     session = Session(runner, RecordingSink())
     await session.run_turn(segment("salon", "s1"))
     await session.run_turn(segment("mutfak", "s2"))
-    assert runner.turn_ids == ["t1", "t2"]
+    # Kimlik uuid; sayaç olsaydı süreç yeniden başladığında eskisiyle çakışırdı ve
+    # `turn_traces.turn_id` UNIQUE. Ölçülen şey bu yüzden biçim değil, benzersizlik.
+    assert len(set(runner.turn_ids)) == 2
+    assert all(runner.turn_ids)
 
 
 async def test_only_one_turn_runs_at_a_time_across_devices() -> None:
@@ -101,10 +126,10 @@ async def test_only_one_turn_runs_at_a_time_across_devices() -> None:
     second = asyncio.create_task(session.run_turn(segment("mutfak", "s2")))
     await asyncio.sleep(0)
 
-    assert runner.turn_ids == ["t1"]  # ikincisi kilitte bekliyor
+    assert len(runner.turn_ids) == 1  # ikincisi kilitte bekliyor
     gate.set()
     await asyncio.gather(first, second)
-    assert runner.turn_ids == ["t1", "t2"]
+    assert len(set(runner.turn_ids)) == 2
 
 
 async def test_actor_processes_its_queue() -> None:
@@ -149,9 +174,7 @@ async def test_failing_turn_does_not_kill_the_actor() -> None:
         def __init__(self) -> None:
             self.calls = 0
 
-        async def run(
-            self, turn: ActiveTurn, report: Callable[[Event], Awaitable[None]]
-        ) -> None:
+        async def run(self, turn: ActiveTurn, report: TurnReport) -> None:
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("koşucu patladı")
@@ -171,6 +194,13 @@ async def test_failing_turn_does_not_kill_the_actor() -> None:
 # --- söz kesme (§5, §12) ----------------------------------------------------------------
 
 
+def active(session: Session) -> str:
+    """Koşan turun kimliği; uuid olduğu için testte sabit yazılamaz."""
+    turn = session.active_turn
+    assert turn is not None
+    return turn.turn_id
+
+
 async def start_turn(session: Session, runner: WaitingRunner) -> asyncio.Task[None]:
     task = asyncio.create_task(session.run_turn(segment("salon")))
     async with asyncio.timeout(1):
@@ -183,15 +213,16 @@ async def test_barge_in_while_speaking_cancels_the_turn() -> None:
     runner = WaitingRunner(UNTIL_SPEAKING)
     session = Session(runner, sink)
     task = await start_turn(session, runner)
-    assert sink.seen[-1] == (State.KONUSUYOR, "t1")
+    turn_id = active(session)
+    assert sink.seen[-1] == (State.KONUSUYOR, turn_id)
 
-    await session.interrupt("t1")
+    await session.interrupt(turn_id)
     async with asyncio.timeout(1):
         await task
 
     assert session.state is State.IDLE
     assert runner.was_cancelled  # iptal asyncio'nun kendi yolundan indi
-    assert sink.cancelled == ["t1"]
+    assert sink.cancelled == [turn_id]
 
 
 async def test_barge_in_while_reading_approval_keeps_the_plan_alive() -> None:
@@ -204,7 +235,7 @@ async def test_barge_in_while_reading_approval_keeps_the_plan_alive() -> None:
     turn = session.active_turn
     assert turn is not None
 
-    await session.interrupt("t1")
+    await session.interrupt(turn.turn_id)
 
     assert session.state is State.ONAY_BEKLIYOR
     assert turn.speech_stopped.is_set()  # ses durdu
@@ -229,20 +260,38 @@ async def test_interrupt_for_another_turn_is_ignored() -> None:
     assert sink.cancelled == []
     assert not task.done()
 
-    await session.interrupt("t1")
+    await session.interrupt(active(session))
     await task
 
 
-async def test_interrupt_in_an_undefined_state_is_not_swallowed() -> None:
-    # §5 DÜŞÜNÜYOR'da söz kesmeyi tanımlamıyor; varsayımla tanımlamak açık maddeyi
-    # kapatmak olurdu (Kural 13).
+async def test_barge_in_while_thinking_cancels_the_turn() -> None:
+    # 2026-08-10'da §5 tabloya eklendi: model üretirken iptal en çok istenen an (Kural 12).
+    sink = RecordingSink()
     runner = WaitingRunner([Event.COZUMLEME_BITTI])
+    session = Session(runner, sink)
+    task = await start_turn(session, runner)
+    turn_id = active(session)
+    assert sink.seen[-1] == (State.DUSUNUYOR, turn_id)
+
+    await session.interrupt(turn_id)
+    async with asyncio.timeout(1):
+        await task
+
+    assert session.state is State.IDLE
+    assert runner.was_cancelled
+    assert sink.cancelled == [turn_id]
+
+
+async def test_interrupt_in_an_undefined_state_is_not_swallowed() -> None:
+    # §5 ÇÖZÜMLÜYOR'da söz kesmeyi tanımlamıyor: segment henüz metne dönmemişken kesilecek
+    # bir ses de yok. Varsayımla tanımlamak açık bir maddeyi kapatmak olurdu (Kural 13).
+    runner = WaitingRunner([])
     session = Session(runner, RecordingSink())
     task = await start_turn(session, runner)
-    assert session.state is State.DUSUNUYOR
+    assert session.state is State.COZUMLUYOR
 
     with pytest.raises(InvalidTransitionError):
-        await session.interrupt("t1")
+        await session.interrupt(active(session))
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -254,13 +303,13 @@ async def test_next_turn_runs_after_a_barge_in() -> None:
     runner = WaitingRunner(UNTIL_SPEAKING)
     session = Session(runner, RecordingSink())
     task = await start_turn(session, runner)
-    await session.interrupt("t1")
+    await session.interrupt(active(session))
     await task
 
     plain = ScriptedRunner(HAPPY_PATH)
     session._runner = plain  # koşucuyu değiştirmenin başka yolu yok
     await session.run_turn(segment("mutfak", "s2"))
-    assert plain.turn_ids == ["t2"]
+    assert len(plain.turn_ids) == 1
     assert session.state is State.IDLE
 
 
@@ -311,7 +360,7 @@ async def test_a_segment_in_an_open_state_starts_a_new_turn() -> None:
     runner = ScriptedRunner(HAPPY_PATH)
     session = Session(runner, RecordingSink())
     await session.deliver(segment("salon", "s1"))
-    assert runner.turn_ids == ["t1"]
+    assert len(runner.turn_ids) == 1
 
 
 async def test_approval_timeout_returns_to_idle_without_speaking() -> None:
@@ -331,3 +380,42 @@ async def test_approval_timeout_returns_to_idle_without_speaking() -> None:
         State.IDLE,
     ]
     assert State.KONUSUYOR not in [state for state, _ in sink.seen]
+
+
+class RecordingIdle:
+    """`IdleWork`'ün sahtesi (Kural 11)."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def turn_started(self) -> None:
+        self.events.append("started")
+
+    def turn_finished(self) -> None:
+        self.events.append("finished")
+
+
+async def test_background_work_is_pulled_before_the_turn_and_resumed_after() -> None:
+    """§11.3/B4: iş turun **kuyruğa girmesiyle** çekiliyor, kilit beklenirken değil."""
+    idle = RecordingIdle()
+    session = Session(ScriptedRunner(HAPPY_PATH), RecordingSink(), idle=idle)
+    await session.actor("salon").submit(segment("salon", "s1"))
+    async with asyncio.timeout(1):
+        while idle.events[-1:] != ["finished"]:
+            await asyncio.sleep(0)
+    assert idle.events == ["started", "finished"]
+    await session.close()
+
+
+async def test_a_failed_turn_still_releases_the_background_work() -> None:
+    """Bekleyen özetleme, turun sonucundan bağımsız."""
+
+    class Exploding:
+        async def run(self, turn: ActiveTurn, report: TurnReport) -> None:
+            raise RuntimeError("koşucu patladı")
+
+    idle = RecordingIdle()
+    session = Session(Exploding(), RecordingSink(), idle=idle)
+    with pytest.raises(RuntimeError):
+        await session.run_turn(segment("salon", "s1"))
+    assert idle.events == ["finished"]

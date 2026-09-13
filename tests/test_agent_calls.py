@@ -8,12 +8,13 @@ from mayen.agent.calls import (
     ToolCall,
     UnknownArgumentError,
     UnknownToolError,
+    instructions,
     is_call,
     parse,
 )
 from mayen.policy.effects import Effect
 from mayen.tools.catalog import builtin_registry
-from mayen.tools.grammar import CALL_PREFIX
+from mayen.tools.grammar import CALL_PREFIX, cli_grammar
 from mayen.tools.registry import Registry
 from mayen.tools.spec import Arg, ArgType, Tool, ToolContext, ToolResult
 
@@ -44,6 +45,39 @@ def list_registry() -> Registry:
         )
     )
     return registry
+
+
+@pytest.mark.parametrize("call_format", FORMATS)
+def test_instructions_show_the_prefix_and_no_real_tool(call_format: CallFormat) -> None:
+    """Örnekteki ad katalogda bulunmamalı: gerçek bir imza buraya kopyalanırsa imza
+    değiştiğinde sessizce yalan söyler."""
+    text = instructions(call_format)
+    assert CALL_PREFIX in text
+    for tool in builtin_registry():
+        assert tool.name not in text
+
+
+@pytest.mark.parametrize("call_format", FORMATS)
+def test_instructions_example_parses_as_it_describes(call_format: CallFormat) -> None:
+    """Tarif ile ayrıştırıcı aynı şeyi söylüyor mu: örnek satırı kendi defteriyle ayrışıyor."""
+    registry = Registry()
+    registry.register(
+        Tool(
+            name="tool_adi",
+            description="Tariftekiyle aynı imza.",
+            effect=Effect.OKUMA,
+            timeout_seconds=1.0,
+            handler=_unused,
+            args=(
+                Arg("alan", ArgType.STRING, "bir alan"),
+                Arg("başka_alan", ArgType.STRING, "ikinci alan", required=False),
+            ),
+        )
+    )
+    example = next(
+        line for line in instructions(call_format).splitlines() if line.startswith("Örnek: ")
+    ).removeprefix("Örnek: ")
+    assert parse(registry, call_format, example).name == "tool_adi"
 
 
 def test_prose_is_not_a_call() -> None:
@@ -114,6 +148,36 @@ def test_unknown_argument_is_its_own_error(registry: Registry, call_format: Call
     }[call_format]
     with pytest.raises(UnknownArgumentError):
         parse(registry, call_format, text)
+
+
+def test_a_flag_after_a_list_value_becomes_an_unknown_argument(registry: Registry) -> None:
+    """§17.1'in ikinci sayacının sıfırdan farklı çıkabildiği **tek** yol (P26).
+
+    Hipotez şuydu: çok kelimeli bir değerin ortasındaki `--jeton` ayrıştırıcıya bayrak
+    gibi görünüyor. Doğrulandı, ama daralarak — o jetonu üretebilen tek gramer kuralı
+    `cli-item`. Ölçülen çıktı birebir buydu (`docs/faz4/lfm2.5-2.6b-q8-dusunmesiz.md`):
+    model liste değerinden sonra yönergedeki örneği (`--alan değer`) kopyalıyor, liste
+    kuralı boşluğa ve tireye izin verdiği için gramer onu geçiriyor, ayrıştırıcı da
+    bayrak sayıyor.
+
+    Yani bu sayaç da modelin "olmayan bir alan uydurması"nı ölçmüyor: gramerin liste
+    değerini nerede bitirdiğini ölçüyor.
+    """
+    text = f"{CALL_PREFIX}weather --city İzmir --fields temperature, condition --alan değer"
+    with pytest.raises(UnknownArgumentError):
+        parse(registry, CallFormat.CLI, text)
+
+
+def test_a_string_value_cannot_carry_a_flag_looking_word(registry: Registry) -> None:
+    """Hipotezin çürütülen yarısı: **dizgi** değerinde o jeton hiç üretilemiyor.
+
+    `cli-word` ne boşlukla başlayan ne de `--` ile başlayan bir kelimeye izin veriyor
+    (A4). Yani sayacın kaynağı "çok kelimeli değer" değil, özellikle liste değeri.
+    """
+    assert 'cli-word ::= [^ <\\r\\n-] [^ <\\r\\n]* | "-" [^ <\\r\\n-] [^ <\\r\\n]*' in (
+        cli_grammar(registry)
+    )
+    assert "cli-item ::= [^,<\\r\\n]+" in cli_grammar(registry)
 
 
 def test_cli_rejects_repeated_flag(registry: Registry) -> None:

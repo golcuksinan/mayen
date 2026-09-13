@@ -86,3 +86,50 @@ def test_iteration_follows_registration_order() -> None:
     assert [tool.name for tool in registry] == ["a", "b"]
     assert "a" in registry
     assert len(registry) == 2
+
+
+# --- onay cümlesi (§8.5 adım 3) ---------------------------------------------------------
+
+
+def _irreversible(confirm: str | None, args: tuple[Arg, ...] = ()) -> Tool:
+    return Tool(
+        name="wipe",
+        description="Siler",
+        effect=Effect.GERI_ALINAMAZ,
+        timeout_seconds=2.0,
+        handler=_noop,
+        args=args,
+        confirm=confirm,
+    )
+
+
+def test_an_irreversible_tool_without_a_question_is_rejected() -> None:
+    """Cümlesiz gönderilseydi çalışma anında yine katalog açıklaması okunurdu."""
+    with pytest.raises(ToolSpecError):
+        _irreversible(None)
+
+
+def test_a_tool_that_never_asks_may_not_carry_a_question() -> None:
+    """Okunmayacak bir cümle, sessizce yalan söyleyen ikinci bir metindir."""
+    with pytest.raises(ToolSpecError):
+        Tool(
+            name="note",
+            description="Not",
+            effect=Effect.YAZMA,
+            timeout_seconds=2.0,
+            handler=_noop,
+            confirm="Save the note?",
+        )
+
+
+def test_the_question_may_only_name_required_arguments() -> None:
+    """İsteğe bağlı alan yoksa cümle kurulamaz; hata tanım anında gelmeli."""
+    optional = Arg("id", ArgType.INTEGER, "numara", required=False)
+    with pytest.raises(ToolSpecError):
+        _irreversible("Should I wipe {id}?", args=(optional,))
+
+
+def test_the_question_is_built_from_validated_values() -> None:
+    """Okunan cümle ile çalışacak çağrı aynı şey olmalı."""
+    tool = _irreversible("Should I wipe note {id}?", args=(Arg("id", ArgType.INTEGER, "no"),))
+    assert tool.confirmation(tool.validate({"id": "3"})) == "Should I wipe note 3?"

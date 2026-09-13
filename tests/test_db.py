@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from mayen.data.db import Database
+from mayen.data.db import Database, DatabaseError
 
 
 @pytest.fixture
@@ -78,3 +78,30 @@ def test_missing_directory_is_an_error(tmp_path: Path) -> None:
     kaybolduğunu haftalar sonra fark etmek demek."""
     with pytest.raises(sqlite3.OperationalError):
         Database(tmp_path / "yok" / "mayen.db")
+
+
+def test_a_second_process_cannot_open_the_same_file(tmp_path: Path) -> None:
+    """Kural 1'in kendisi: dosyanın tek sahibi var.
+
+    Servis koşarken elle `python -m mayen` yazmak tam olarak bunu yapardı; iki sürecin aynı
+    dosyaya yazması sessizce bozardı. Kilit süreç ömrü boyunca tutuluyor, yani aynı süreçte
+    ikinci bir `Database` de aynı hatayı alır.
+    """
+    path = tmp_path / "mayen.db"
+    with Database(path), pytest.raises(DatabaseError, match="başka bir süreçte açık"):
+        Database(path)
+
+
+def test_closing_releases_the_lock(tmp_path: Path) -> None:
+    """Kilit bırakılmazsa yeniden başlatma çalışmaz — servis için asıl mesele bu."""
+    path = tmp_path / "mayen.db"
+    Database(path).close()
+    Database(path).close()
+
+
+def test_a_failed_open_does_not_hold_the_lock(tmp_path: Path) -> None:
+    """Yanlış yol yüzünden açılamayan bir bağlantı kilidi tutsaydı, yolu düzeltmek
+    yetmezdi — süreci yeniden başlatmak gerekirdi."""
+    with pytest.raises(sqlite3.OperationalError):
+        Database(tmp_path / "yok" / "mayen.db")
+    Database(tmp_path / "mayen.db").close()
