@@ -14,6 +14,12 @@ class FakeTTS:
 
     Yük okunabilir kalıyor: bir testin ses parçasını çözüp hangi cümlenin çalındığını
     doğrulayabilmesi, TTS kuyruğunun sıra kuralını (§6) test edilebilir yapan şey.
+
+    **Cümlenin sonuna bir boşluk ekleniyor.** Bölücü cümleleri `strip()`'liyor (TTS'e
+    boşluk vermek anlamsız) ve gerçek TTS'te iki cümlenin arasındaki ayrım seste zaten
+    var — duraklama. Metin olarak akıtınca o ayrım kayboluyordu ve istemcide cümleler
+    "çalışmıyor.Başka" diye bitişiyordu. Ayıracı ekleyecek yer burası: cümleyi akıtılacak
+    yüke çeviren tek yer bu, ve istemci parçaların cümle sınırını göremez.
     """
 
     def __init__(
@@ -39,7 +45,7 @@ class FakeTTS:
         if not self.available:
             raise ServiceUnavailableError(self._name, "servis kapalı")
         self.calls.append(text)
-        payload = text.encode("utf-8")
+        payload = (text if text.endswith(" ") else f"{text} ").encode("utf-8")
         for start in range(0, len(payload), self._chunk_size):
             await asyncio.sleep(0)
             yield payload[start : start + self._chunk_size]

@@ -1,0 +1,19 @@
+# Kokoro TTS servisinin kendi ortamı. Depo kökündeki `.venv`'den ayrı: `torch` birkaç
+# gigabayt ve `mayen`'in dört kapısının hiçbiri ona bakmıyor (gerekçe `main.py`'nin
+# başlığında). Çalıştırma:
+#
+#     uv run --project services/kokoro python services/kokoro/main.py
+#
+# `ffmpeg` bir sistem bağımlılığı, buradan kurulmaz.
+[project]
+name = "mayen-kokoro"
+version = "0.1.0"
+description = "Mayen'in TTS servisi: Kokoro, kendi sürecinde"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "kokoro>=0.9",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "numpy>=2",
+    "torch>=2.6",
+]

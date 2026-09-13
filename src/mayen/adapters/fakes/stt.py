@@ -44,5 +44,16 @@ class FakeSTT:
         if not self.available:
             raise ServiceUnavailableError(self._name, "servis kapalı")
         self.calls.append(audio)
-        text = self._transcripts.popleft() if self._transcripts else audio.data.decode("utf-8")
+        text = self._transcripts.popleft() if self._transcripts else self._as_text(audio)
         return Transcript(text=text, language=self._language, confidence=1.0)
+
+    def _as_text(self, audio: Audio) -> str:
+        """Betik boşsa yük metin sayılır (P1). Gerçek PCM burada çözülemez — sebebi
+        anlaşılır olsun diye ayrı bir hata: sahte STT gerçek sesi çözemez, gerçek STT
+        §19.2'de açık."""
+        try:
+            return audio.data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ServiceUnavailableError(
+                self._name, "sahte STT gerçek sesi çözemez (§19.2: STT modeli seçilmedi)"
+            ) from error

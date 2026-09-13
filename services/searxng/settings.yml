@@ -1,0 +1,26 @@
+# SearXNG yapılandırması. `use_default_settings` ile yalnızca ayrıldığımız yerler yazılı;
+# imajın kendi varsayılanları altta duruyor, yani sürüm yükseltmesi bu dosyayı bayatlatmaz.
+use_default_settings: true
+
+server:
+  # Ortamdan geliyor (`SEARXNG_SECRET`), burada boş duruyor — sır depoya girmez.
+  secret_key: ""
+  # **Kapalı olmak zorunda.** Limiter tarayıcı olmayan istemcileri (bot koruması) engeller
+  # ve bizim tool'umuz tam olarak öyle bir istemci: `httpx`, çerez yok, JS yok. Açık
+  # bırakılırsa her çağrı 429 döner. Servis yalnızca 127.0.0.1'e bağlı olduğu için
+  # dışarıdan gelen bir istek zaten yok.
+  limiter: false
+  image_proxy: false
+
+search:
+  # **Varsayılanda yalnızca `html` var ve `format=json` 403 döner.** Bu satır olmadan
+  # tool hiç çalışmaz; hata da "yasak" diye gelir, "biçim kapalı" diye değil.
+  formats:
+    - html
+    - json
+  # Türkçe soru geliyor, cevap İngilizce veriliyor (§2). Dil `all` bırakıldı: sorguyu
+  # kısıtlamak, Türkçe bir özel ada dair İngilizce kaynağı da keserdi.
+  language: all
+  safe_search: 0
+  # Otomatik tamamlama bir tarayıcı özelliği; tool kullanmıyor, kapalı olsun.
+  autocomplete: ""
