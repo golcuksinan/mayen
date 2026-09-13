@@ -52,8 +52,8 @@ bulut model kullanımı.
 | Veri | SQLite + otomatik yedek |
 | İşletim | Elle açılır/kapanır; açıkken sürekli ayakta, çökerse yeniden başlar |
 | Hata | Hem sesli hem arayüzde bildirim + otomatik toparlanma |
-| Tool çağırma biçimi | **Faz 0 ölçümüyle belirlenecek** (CLI-tarzı vs JSON) |
-| Çıktı kısıtı | GBNF grameriyle zorlanır |
+| Tool çağırma biçimi | **Yerel** — modelin kendi şablonu; 2026-08-16'da seçildi (§19.1) |
+| Çıktı kısıtı | Yerel biçimde `tools` şeması; metin biçimlerinde GBNF grameri |
 | İstemci ses formatı | **Ölçümle belirlenecek** (PCM vs Opus) |
 | Model seçimleri | **Ölçümle belirlenecek** |
 
@@ -150,6 +150,8 @@ Sunucunun geçiş tablosu:
 | `DÜŞÜNÜYOR` | ilk ses parçası hazır | `KONUŞUYOR` |
 | `DÜŞÜNÜYOR` | onay gerekli | `ONAY_BEKLİYOR` |
 | `DÜŞÜNÜYOR` | ses profili kaydı gerekli | `KAYIT` |
+| `DÜŞÜNÜYOR` | söz kesme sinyali | `IDLE` — tur iptal; üretim sürerken iptal en çok istenen andır (Kural 12) |
+| `DÜŞÜNÜYOR` | yanıt boş | `IDLE` — hiç ses üretilmedi; sebep §14'ün hata kanalından bildirilir |
 | `KONUŞUYOR` | ses bitti | `IDLE` |
 | `KONUŞUYOR` | söz kesme sinyali | `IDLE` — tur iptal, o `turn_id`'nin parçaları düşer |
 | `ONAY_BEKLİYOR` | onay cümlesi okunuyor | `ONAY_BEKLİYOR` — okuma bu durumun içindedir, ayrı durum değil |
@@ -161,11 +163,17 @@ Sunucunun geçiş tablosu:
 
 Kurallar:
 
-- **Söz kesme (barge-in):** `KONUŞUYOR` durumunda istemciden söz kesme sinyali gelirse
-  aktif tur iptal edilir, **o tura ait** bekleyen ses parçaları atılır, istemciye iptal
+- **Söz kesme (barge-in):** `KONUŞUYOR` veya `DÜŞÜNÜYOR` durumunda istemciden söz kesme
+  sinyali gelirse aktif tur iptal edilir, **o tura ait** bekleyen ses parçaları atılır, istemciye iptal
   bildirimi gider. Bu yüzden turdaki her aşama iptal edilebilir olmak zorundadır —
   sonradan eklenemez, baştan tasarlanır. İptalin kapsamı **turdur, TTS kuyruğunun tamamı
-  değil** (§12).
+  değil** (§12). `ÇÖZÜMLÜYOR`'da söz kesme **tanımlı değildir**: segment henüz metne
+  dönmemişken kesilecek bir ses de yoktur, sinyal hata olarak bildirilir.
+- **Boş yanıt sessizce bitmez.** Ajan hiç metin üretmezse `ilk ses parçası hazır` olayı hiç
+  olmaz, dolayısıyla kapanacak bir `KONUŞUYOR` da yoktur. Tur `yanıt boş` olayıyla `IDLE`'a
+  döner; sebep §14'ün ayrı hata kanalından gider (**önce sebep, sonra durum** — istemci
+  `IDLE`'ı hatadan önce görürse turun sessizce bittiğini sanar) ve iz `hata` ile kapanır.
+  Duyulmamış yanıt konuşma geçmişine yazılmaz.
 - **Aynı anda tek tur — kapsamı globaldir.** Sistem genelinde aynı anda yalnızca bir tur
   koşar; ikinci bir cihazdan segment gelirse sıraya girer. Gerekçe: konuşma tek sürekli
   akıştır (§11.1) ve tek GPU vardır. Paralel tur ne bağlam ne kaynak açısından kazandırır,
@@ -286,7 +294,25 @@ döngü (adım < MAX_ADIM):
 - Her tool çağrısının kendi zaman aşımı vardır. Zaman aşımı bir hata değil, modele geri
   beslenen bir sonuçtur — model bunu bilerek yanıt üretebilmelidir.
 
-### 8.3 Tool çağırma biçimi — Faz 0'da kararlaştırılacak
+### 8.3 Tool çağırma biçimi — ✅ Yerel biçim (2026-08-16, sahibin kararı)
+
+**Seçilen: Aday C, modelin kendi tool-calling şablonu** (§19.1, ölçüm
+`docs/faz-b-yerel.md`). Katalog isteğin `tools` alanında JSON şema olarak gidiyor
+(`tools/schema.py`), çağrıyı sunucu ayrıştırıyor, gramer yok.
+
+**Kararı getiren şey bir puan değil, bir arıza sınıfı.** Metin biçimlerinde dal ilk
+token'da seçiliyor (§6/C3), yani model bir üretimde ya konuşabiliyor ya çağırabiliyor.
+İkisini birden istediğinde — "anladım, kuruyorum; ama önce saati almam lazım" — çağrıyı
+düz metnin içinde **taklit ediyor**: hiçbir şey koşmuyor ve taklit sesli okunuyor.
+Gramerde `<` yasaklandığında model aynı şeyi köşeli parantezle yazdı; karakter yasaklamak
+sınıfı değil kılığını değiştiriyor. Yerel biçimde çakışma yok — `content` ile `tool_calls`
+aynı yanıtta durur ve iki adımlı zincir (`date_time` → `task_create`) üretimde ilk kez
+çalıştı.
+
+**Aday A (CLI-tarzı) 2026-08-16'ya kadar seçiliydi** (Faz 0, `docs/faz0-olcum.md`) ve iki
+metin biçimi hiçbir kümede birbirinden ayrışmadı. Üç biçim de kodda duruyor: iki gramer
+üreticisi, iki ayrıştırıcı ve şema. Karar ölçülen modele bağlıdır; model değişirse
+yeniden verilir ve değişecek tek satır `main.py:CALL_FORMAT`.
 
 İki aday vardır ve seçim ölçümle yapılacaktır (§18, Faz 0). Ajan katmanı, çağrı biçimini
 bir **adaptör** arkasına alır; her iki adaptör de aynı iç temsili üretir:
@@ -329,7 +355,23 @@ Kuralları:
 **Ortak:** Her iki adayda da çıktı **GBNF grameriyle kısıtlanır.** Model dilbilgisel
 olarak geçersiz bir çağrı üretemez; tool adları da gramerde sabit listedir. Yani
 "geçersiz çıktı" ihtimali her iki yolda da ortadan kalkar ve karşılaştırma yalnızca
-*doğru* tool ve *doğru* argüman seçimi üzerinden yapılır.
+*doğru* tool ve *doğru* argüman seçimi üzerinden yapılır. Faz 0 bunu doğruladı: iki
+biçimde de sıfır uydurulan tool, sıfır uydurulan argüman. **O sıfır gramerin ölçüsüdür,
+modelin değil** (P26): defterde olmayan bir ad gramerce üretilemediği için bu sayaç
+yapısal olarak sıfırdır ve modelin halüsinasyonu hakkında hiçbir şey söylemez. Üretimdeki
+halüsinasyon — yapılmamış bir eylemi yaptım demek — ayrı bir kümeyle, çağrının **yokluğu**
+üzerinden ölçülüyor.
+
+**Faz 0'ın kararla ilgisi olmayan iki bulgusu, ikisi de biçimden bağımsız:**
+
+- **Eksik bilgi sorulmuyor, uyduruluyor.** Kullanıcı şehri/hedefi/adı söylemediğinde model
+  düz metinle sormak yerine yer tutucu bir değerle çağrı üretiyor (`--target <cihaz_adı>`,
+  `--name "Yeni Kişi"`). Ölçülen: bu eksende doğruluk %57. Argüman doğrulaması (§8.5 adım 1)
+  ve §19.9'un "yalnızca yapılandırmadaki adlar" kuralı bu yüzden gevşetilemez; düzeltme
+  döngüsünün asıl işi de budur (Faz 3).
+- **CLI'de tırnak açığı.** Model bir alanı `--message "…"` diye tırnak içinde yazabiliyor
+  ve tırnaklar değerin parçası oluyor. Gramerde kapatılabilir bir açık; kapatan değişiklik
+  §17.1'in değerlendirme kapısından geçmelidir.
 
 ### 8.4 Tool kataloğu promptta
 
@@ -404,6 +446,31 @@ alanı ayrı ayrı taşınır. "Her şey metindir, JSON'u iki kere ayrıştır" 
 | Zamanlanmış görev — oluştur | YAZMA | |
 | Zamanlanmış görev — listele/iptal | OKUMA / YAZMA | |
 | Ses profili — kaydet/sil | GERİ_ALINAMAZ | §10 |
+
+### 9.3 İlk sürümden sonra eklenenler (Faz 8)
+
+Bellek yazma kapısı ve makine denetimi. §9.2 ilk sürümün kapsamıydı; bunlar onu genişletiyor
+ve aynı kurallara tabi.
+
+| Tool | Etki | Not |
+|---|---|---|
+| Bellek — kaydet | YAZMA | §11.3'ün eksik kapısı: görme ve silme vardı, yazma yoktu |
+| Ses seviyesi — oku/ayarla | DIŞ | Tek tool; seviye verilmezse okur |
+| Medya — oynat/duraklat/atla | DIŞ | MPRIS; eylem sayılı seçenek |
+| Uygulama aç | DIŞ | Ad → argv yapılandırmada; ham komut kabul edilmez (Kural 8) |
+| Pencere — geri alınabilir eylemler | DIŞ | Küçült/büyüt/tam ekran/genel bakış |
+| Pencere — kapat | GERİ_ALINAMAZ | Kaydedilmemiş iş geri gelmez; onay ister |
+
+**Sayılı seçenek (`ArgType.ENUM`).** Bir alanın değeri sabit bir listeden geliyorsa, liste
+gramerde harfi harfine yazılır ve geçersiz bir seçenek **üretilemez** — tool adlarındaki
+güvencenin argüman tarafındaki eşi. Katalogda tipin adı değil seçeneklerin kendisi görünür.
+
+**Etki sınıfı tool başınadır, seçenek başına değil.** Aynı tool'un bir seçeneği geri
+alınabilir, bir başkası değilse tool ikiye ayrılır (pencere eylemleri ile pencere kapatma).
+Aksi hâlde ya zararsız eylem her seferinde onay isterdi ya da yıkıcı olan onaysız geçerdi.
+
+**Makine denetimi bir adaptörün arkasındadır** (§4): tool *ne* istendiğini bilir, *nasıl*
+yapıldığını değil. Mekanizma masaüstüne özeldir ve değişebilir; tool tanımı değişmez.
 
 ---
 
@@ -546,18 +613,31 @@ WebSocket üzerinden, tipli çerçevelerle.
 bağlantı canlılığı), cihaz kimliği ve protokol sürümünü taşıyan el sıkışma.
 
 **Sunucu → İstemci:** çözümlenen metin, durum değişikliği, çalışan tool bildirimi,
-ses parçası (`turn_id` + sıra numaralı), ses sonu, iptal, hata.
+**cevabın metni**, ses parçası (`turn_id` + sıra numaralı), ses sonu, iptal, hata,
+**proaktif bildirim**.
 
 Kurallar:
 
 - El sıkışmada protokol sürümü doğrulanır; uyuşmazlıkta bağlantı açık bir hatayla
   reddedilir. Sessizce farklı davranmaz.
+- **Cevabın metni sesin yanında ayrı bir çerçeveyle gider**, cümle başına bir tane ve o
+  cümlenin sesinden önce. Sesin yerini tutmaz: ikisi de aynı `turn_id`'yi taşır. Bu
+  çerçeve olmadan istemci cevabı yalnızca sesten öğrenebilirdi ve bir metin arayüzünde
+  hiç gösteremezdi — kullanıcı kendi sorusunu görüp cevabını göremez. `Transcript`'in
+  kullanıcı için yaptığının aynısı, konuşan taraf için.
 - **Her ses parçası `(turn_id, seq)` taşır.** İstemci kendi bildiği aktif `turn_id`
   dışındaki her parçayı sessizce atar, `seq` ile de sırayı doğrular. Bunsuz söz kesme
   bozuktur: iptal bildirimi gittikten sonra ağda ve istemci tamponunda hâlâ ölü turun
   parçaları vardır, ve `seq` tek başına onları yeni turun ilk parçasından ayırt edemez —
   iptal edilmiş cevabın kırıntısı yeni cevabın üstüne çalar. `turn_id` tel formatının
   parçasıdır; sonradan eklenemez.
+- **Proaktif bildirim, sesinden önce kendi turunu duyurur.** Zamanlanmış bir görevin ürettiği
+  ses de kendi `turn_id`'sini taşır (§12) — ama o turu kullanıcı açmadığı için istemci onu
+  hiçbir yerden bilmez ve yukarıdaki filtre gereği parçalarını atardı. Bu yüzden ses
+  başlamadan önce `turn_id` ve metni taşıyan bir bildirim çerçevesi gider; istemci turu
+  ondan öğrenir. `Transcript`'in yerini tutmaz: transkript kullanıcının konuşmasını tura
+  bağlar, burada konuşan kullanıcı değildir. Durum değişikliğiyle de duyurulamaz: proaktif
+  ses bir tur değildir ve §5'in tablosunda karşılığı yoktur.
 - Ses formatı: yerelde ham PCM, uzak bağlantıda sıkıştırma. **Karar ölçüme bağlıdır** —
   PCM ile sıkıştırmalı taşımanın bant genişliği farkı ölçülür; fark küçükse uzakta da
   PCM kullanılır ve kodek katmanı hiç yazılmaz. Taşıma katmanı bu seçimi opsiyonel
@@ -644,7 +724,14 @@ yapılmıştır:
 - **Faz 5'in bitti kriteri istemciyi gerektiriyordu**, istemci ise Faz 7'deydi. Asgari
   başsız istemci Faz 5'e alındı; GUI Faz 7'de kaldı.
 
-### Faz 0 — Çağrı biçimi kararı (ajan kodundan önce)
+### Faz 0 — Çağrı biçimi kararı (ajan kodundan önce) ✅
+
+**Koşuldu; karar o gün CLI-tarzı** (§19.1). Sonuç raporu `docs/faz0-olcum.md`, araç
+`evals/`. Ölçüm bir aday model üzerinde koştu; diğerleri Faz 2'de aynı araçla ölçüldü.
+
+**Bu karar 2026-08-16'da değişti: üretim yerel biçime geçti** (§8.3, `docs/faz-b-yerel.md`).
+Aşağıdaki tasarım ve ölçüm düzeni olduğu gibi geçerli; değişen, iki metin adayının
+yanına üçüncü bir adayın eklenmesi ve seçimin ona kayması.
 
 Amaç tek bir soruyu yanıtlamak: **CLI-tarzı mı, JSON mu?**
 
@@ -661,10 +748,12 @@ Amaç tek bir soruyu yanıtlamak: **CLI-tarzı mı, JSON mu?**
 
 Bu ölçüm aracı atılmaz; Faz 1'de tool seçim değerlendirmesinin (§17.1) temeli olur.
 
-### Faz 1 — İskelet
+### Faz 1 — İskelet ✅
 
-Katmanlar, arayüzler, sahte adaptörler, veri katmanı ve migration'lar, uçtan uca test.
-GPU'suz çalışan bir sistem. Bitti kriteri: sahte adaptörlerle uçtan uca test yeşil.
+**Tamamlandı** (P1–P8, `docs/PLAN.md`). Katmanlar, arayüzler, sahte adaptörler, veri katmanı
+ve migration'lar, uçtan uca test. GPU'suz çalışan bir sistem. Bitti kriteri: sahte
+adaptörlerle uçtan uca test yeşil. — Karşılandı; tur akışı segmentten sese kadar sahtelerle
+koşuyor ve kaydedilmiş bir tur yeniden oynatılıp aynı sonucu veriyor (§15).
 
 ### Faz 2 — Model ölçümü ve seçimi
 
@@ -711,9 +800,102 @@ Numaralandırma çapraz referanslar için sabittir: kapatılan maddeler listeden
 
 **Ölçüme bağlı olanlar:**
 
-1. Tool çağırma biçimi: CLI-tarzı mı JSON mu (Faz 0).
-2. LLM, STT ve TTS model seçimleri; her birinin VRAM tüketimi ve bağlam boyutu (Faz 2).
+1. ✅ **Tool çağırma biçimi: YEREL — modelin kendi tool-calling şablonu** (2026-08-16,
+   sahibin kararı; ölçüm `docs/faz-b-yerel.md`). Katalog `tools` alanında JSON şema,
+   çağrıyı sunucu ayrıştırıyor, gramer yok.
+
+   **Kararı getiren şey doğruluk değil, metin biçimlerinin mümkün kıldığı bir arıza
+   sınıfı.** Dal ilk token'da seçildiği için (§6/C3) model bir üretimde ya konuşabiliyor
+   ya çağırabiliyor; ikisini birden istediğinde çağrıyı düz metnin içinde taklit ediyor,
+   hiçbir şey koşmuyor ve taklit sesli okunuyor. Gramerde `<` yasaklanınca model
+   `[tool] date_time` yazdı — **karakter yasaklamak sınıfı değil kılığını değiştiriyor.**
+   Sayılar (üretim öneği, dil kuralı açık): kabul kapısı 12/15 → 14/15, altın %98 → %92,
+   kontrol %89 → %94, halüsinasyon %93 → %100, bellek %88 → %82, argüman doğruluğu
+   %89 → %94. **Bütün aralıklar çakışıyor, yani sıralama değil** (Kural 14); altındaki
+   altı hatanın dördü tek sınıf — model çağırmak yerine eksik alanı sordu.
+
+   **Bunun bir bedeli var ve ölçüldü:** dil kuralının yeri. Katalogu şablon ekliyor ve
+   `tools` bloğunu sistem mesajımızın **arkasına** koyuyor, yani Faz 7'nin bulduğu yer
+   (öneğin sonu) artık orası değil; kural bırakıldığı yerde tutmadı (elle koşuda altı
+   turun altısı Türkçe). Kural bağlam bloğunun sonuna taşındı ve tuttu (altı/altı
+   İngilizce, `kontrol` kuralsız %78 → kurallı %94).
+
+   Aşağıdaki Faz 0 gerekçesi tarihsel olarak duruyor:
+
+   ✅ **CLI-tarzı** (2026-08-16'ya kadar). Faz 0'da 50 Türkçe senaryo, iki biçim de GBNF
+   ile kısıtlanmış olarak ölçüldü; sonuçlar `docs/faz0-olcum.md`'de. Tool seçimi %94'e
+   %92, argüman doğruluğu berabere (%94); belirleyici olan bedel: CLI **%22 daha az token
+   ve %13 daha hızlı** — §6'nın ilk ses gecikmesinde doğrudan karşılığı olan tek fark.
+   İki biçimde de sıfır uydurulan tool ve sıfır uydurulan argüman: gramer görevini yapıyor.
+   **Karar modele bağlıdır ve yeniden açılabilir:** ölçüm ilkin yalnızca bir aday
+   üzerinde (Qwen3.6-35B-A3B-IQ4_XS) koştu. Diğer dört aday Faz 2'de aynı kapıdan geçti
+   (`docs/faz2-olcum.md`) ve **fark gerçekten tersine döndü:** büyük modellerde CLI,
+   9B'nin iki niceliğinde JSON önde (9B-Q4'te %60'a %84), gemma-4-12B ise ikisini
+   ayırmıyor. **Karar CLI'de duruyor ama dayanağı 2026-08-15'te zayıfladı:** kapanma
+   gerekçesi "LLM adayı Qwen3.6-35B-A3B'de sabitlendi" idi ve madde 2 o gün geri alındı,
+   yani biçim kararı artık verilmemiş bir model kararına yaslanıyor. CLI çalışan seçim
+   olarak kalıyor — `docs/faz6-olcum.md` sunucuda koşan modelde de CLI'yi önde ölçtü
+   (106/110'a 104/110, aralıklar çakışıyor).
+
+   **Yeniden okundu (2026-08-15), madde 2'nin LLM yarısı kapandıktan sonra, seçilen
+   modelde: karar CLI'de kalıyor ama gerekçesi incelmiştir.** Dört küme, üretim öneği,
+   benimsenen rol metni (`docs/faz6-27b-rol3.md`): altın %100'e %96, halüsinasyon %93'e
+   %100, kontrol ve bellek berabere — **doğrulukla ayrılmıyorlar**, dört kümenin dördünde
+   aralıklar çakışıyor. Ayıran şey yine bedel: ortalama token dört kümenin üçünde CLI'de
+   daha düşük (15/11/10'a 22/19/21) ve tamamlanma süresi üçünde daha kısa. **Ama Faz 0'ın
+   belirleyici sayısı olan ilk ses artık berabere** (0.22'ye 0.22, 0.13'e 0.13): §6'nın
+   bütçesinde iki biçim aynı yerde duruyor, fark tamamlanmada ve token bedelinde kaldı.
+   Yani CLI'nin üstünlüğü sürüyor fakat marjı Faz 0'daki kadar geniş değil. Ayrıştırıcı ve gramer iki biçimi de
+   üretmeye devam ediyor: model değişirse ölçüm yeniden koşar ve §8.3'ün adaptörü tam da
+   bunun için var — sistemin başka hiçbir yeri biçime bakmıyor.
+2. **KISMEN KAPANDI — LLM: `Qwen3.8-27B-IQ4_XS`. STT ve TTS açık.** LLM `llama-server`
+   arkasında `localhost:8080`; hangi modelin koştuğu bir çalıştırma tercihidir, mimari
+   karar değil. Bağlam boyutu yapılandırmaya yazılmıyor, sunucudan soruluyor (§11.1).
+
+   **LLM kararı sahibindir ve 2026-08-15'te verildi (gerekçe: kamuya açık ölçütlerde 3.8
+   kuşağı 3.6'nın önünde ve elde 3.8 kuşağından tek aday bu; 3.8-35B henüz yayınlanmadı).**
+   **Bu bir ölçüm sonucu değildir** ve öyle yazılmıyor — 10 Ağustos'ta tam olarak o hata
+   yapılmıştı. Kararın kendi sınırı da kayıtlı: kamuya açık ölçütler bizim ölçtüğümüz şeyi
+   (Türkçe, GBNF ile kısıtlanmış tool seçimi, bu rol metni) ölçmüyor ve "büyük olan daha
+   iyidir"in yanlış çıktığı bir örnek aynı gün görüldü (`Qwen3.6-35B-A3B`, MoE, aktif 3B —
+   `docs/faz6-35b.md`). Risk kabul edildi.
+
+   **Karar bugünkü işi geçerli kılıyor:** rol metni üç turda bu modelde yazıldı ve bu
+   modelde benimsendi (`docs/faz6-27b-rol3.md`), yani yeniden koşulacak bir şey yok.
+   **Model değişirse rol metni yeniden ölçülür** — prompt ve model birlikte ayarlanıyor,
+   bu da aynı günün ölçülmüş dersi.
+
+   **STT ve TTS açık kalıyor (sahibin ertelemesi).** Sahte STT ham PCM'i çözemez ve bunu
+   sessizce yutmaz — açık maddeyi adıyla söyleyen bir hata yükseltir. Madde 4'ün gecikme
+   hedefi ve madde 10 onlarla birlikte bekliyor.
+
+   **Geri alma kaydı (2026-08-15):** bu madde 2026-08-10'dan beri "kapandı: Qwen3.6-35B-A3B"
+   diyordu, ama sahip böyle bir kararı hiç vermemişti — ölçümlerin yanına yazılan bir
+   çıkarım, kaydedilirken karara dönüşmüş. Ölçümler duruyor ve geçerli
+   (`docs/faz2-olcum.md`, `docs/faz5-model-secimi.md`, `docs/faz6-olcum.md`); **iptal edilen
+   şey ölçüm değil, ölçümden karar üretilmiş olması.** `faz5-model-secimi.md`'nin kendi
+   sonucu da zaten "doğruluk karar veremedi" idi.
+
+   **Bu madde hiçbir kodu engellemiyor** ve §19'un meta-kuralı burada bir istisna
+   gerektirmiyor: sistemin hiçbir yeri model adına bakmıyor, adaptör `localhost:8080`'e
+   konuşuyor ve model adı yalnızca rapora yazılıyor. Yani madde açık kalırken geliştirme
+   sürebilir; kapanması için gereken şey bir ölçüm değil, sahibin kararıdır.
+
+   **Karar verilmeden önce bilinmesi gerekenler:** VRAM gözlemleri (27B tek başına
+   15628 MiB, 35B-A3B ancak `--n-cpu-moe 7` ile) STT/TTS seçilmeden anlamını kazanmıyor;
+   ve `docs/faz6-olcum.md` sunucuda artık **Qwen3.8-27B-IQ4_XS** koştuğunu gösteriyor, yani
+   ölçümlerin bir kısmı artık kurulu olmayan bir modele ait. **STT bilinçli olarak sahtede
+   bırakıldı**: sistemin geri kalanı bitene kadar ses girişi ölçülmeyecek, dolayısıyla
+   madde 4'ün gecikme hedefi ve madde 10 da onunla birlikte bekliyor. Sahte STT ham PCM'i
+   çözemez ve bunu sessizce yutmaz — açık maddeyi adıyla söyleyen bir hata yükseltir.
 3. Konuşmacı tanıma modeli, güven eşikleri, kayıt için gereken örnek sayısı (Faz 4).
+   **Geçici kapı:** eşikler yokken kimlik `TANINMAYAN`'dır ve §10.2'ye göre hiçbir tool
+   çalışmaz — yani sistem eşikler ölçülene kadar denenemez hâle gelirdi. Bu yüzden
+   `MAYEN_ASSUME_OWNER` yapılandırma bayrağı var: açıkken gömüye bakılmadan her segment
+   `SAHİP` sayılır ve her açılışta uyarı yazılır. **Kural 6 bozulmuyor**, çünkü yasak
+   sahipliğin *sesle* verilmesine; buradaki kapı kabuktur ve fiziksel makine erişimi ister
+   (madde 14'ün kurulum betiğiyle aynı gerekçe). Bayrak, konuşmacı tanıma gerçek olduğunda
+   silinir — kalıcı bir yetki yolu değil, ölçüm beklerken açılmış geçici bir kapıdır.
 4. İlk ses gecikmesi hedef değeri (Faz 2 sonrası).
 5. İstemci ses formatı: PCM mi sıkıştırma mı (bant genişliği ölçümü).
 
@@ -731,7 +913,12 @@ Numaralandırma çapraz referanslar için sabittir: kapatılan maddeler listeden
 9. ✅ **Wake-on-LAN hedef listesi: yapılandırma dosyası.** Ad → MAC eşleşmesi. Yeni cihaz
    eklemek bir satırdır; ayrı bir tablo ve CRUD tool'ları yazılmaz.
 10. İngilizce TTS ses karakteri.
-11. Native GUI için kullanılacak Qt bağlayıcısı.
+11. ✅ **Qt bağlayıcısı: PySide6** (LGPL, Qt'nin resmi bağlayıcısı — kapalı dağıtım
+    zorunluluğu doğurmuyor). Opsiyonel bir kurulum ekstrası (`gui`): uçbirim istemcisi ve
+    testler onu istemez. Qt'nin olay döngüsü ana iş parçacığında kalır, asyncio ayrı bir
+    iş parçacığında koşar ve iki yön sinyal/`run_coroutine_threadsafe` ile bağlanır; ek bir
+    köprü bağımlılığı (qasync) alınmaz. İlk sürüm yalnızca metin girdisi ve metin
+    çıktısıdır — durum göstergesi ve bekleyen kişi yönetimi Faz 7'de kalır.
 12. Yedekleme sıklığı, saklanacak yedek sayısı ve hedef konum.
 13. Zamanlanmış görevlerde "kaçırılmış sayılma" toleransı.
 14. ✅ **Sahip ataması: kurulum betiği (CLI).** Betik birkaç ses örneği toplar, profili

@@ -1,0 +1,1349 @@
+Zorunlu tool modunu (P25) geri getiren yama — 2026-08-13'te ölçülüp silindi.
+
+Uygulama:
+
+    git apply docs/faz4/zorunlu-mod-geri-alma.patch
+
+Yama, silinmeden hemen önceki 15 dosyanın tam hâlini geri koyar: `ToolMode`
+(SERBEST/ZORUNLU), `NO_TOOL` işareti, `is_no_tool()`, `agent/loop.py`'nin
+`declined` dalı, `main.py`'nin `TOOL_MODE` sabiti, `evals`'in `--mod` bayrağı
+ve `no_tool` sayacı, `ScenarioResult.speech_ttft` ile `_closing_ttft()` (ilk ses
+ölçümü — zorunlu mod olmadan serbest modda daima `ttft`'ye eşit olduğu için
+onunla birlikte kalktı) ve on beş test.
+
+NEDEN SİLİNDİ
+
+Gramer önekini zorunlu kılmak, ikili kararı ("tool gerekiyor mu") üretimden
+önce alınan bir karardan, tool dalının içinde alınan çok yollu bir seçime
+("hangi tool") çeviriyor — §6'nın ilk token'da dallanma tasarımının iptali. O
+seçimde cümlenin yüzey kelimeleri baskın çıkıyor: "saatin ne kadar hızlı
+geçtiğine inanamıyorum" -> date_time, "yarın hava güzel olursa" -> weather,
+"Ali'yle dün konuştum" -> contact_get. Ölçüm `docs/faz4-cagri-modu.md`,
+`docs/faz4-ilk-ses.md` (27B) ve `docs/faz4-ilk-ses-35b.md` (35B):
+
+  35B  kontrol kümesi doğruluğu  CLI %94 -> %72, JSON %94 -> %56
+  35B  ilk ses                   CLI 0.28 -> 0.35 sn, JSON 0.22 -> 0.36 sn
+  27B  altın küme                %90 -> %98  (kazandırıyor)
+  27B  geçmiş kümesi (çok tur)   %90 -> %80  (dört karşılaştırmanın dördünde)
+  27B  ilk ses                   CLI 0.21 -> 0.41 sn, JSON 0.16 -> 0.40 sn
+
+Kazancı tek turluk kümelerde, kaybı çok turluk olanda; üretim çok turluk.
+
+YENİDEN DENENECEKSE
+
+Model değişirse karar da değişebilir — mod ekseni üç modelde üç ayrı yön verdi
+(27B kazandırıyor, 35B kaybettiriyor, LFM2.5 etkisiz). Yamayı uyguladıktan
+sonra ölçüm tek komut:
+
+    uv run --env-file .env python -m evals --model <ad> \
+      --kume altin --kume kontrol --kume gecmis \
+      --mod serbest --mod zorunlu --out docs/<rapor>.md
+
+Bakılacak yer önce `kontrol` ve `geçmiş` kümeleri, sonra "İlk ses gecikmesi"
+bölümündeki payda: zorunlu modda küçülüyorsa model sohbete tool çağırıyordur ve
+ilk ses sayısı olduğundan iyimserdir.
+
+Yama silinmeden önceki ağaca göre üretildi; başka değişikliklerin üstüne
+uygulanırsa çakışabilir. `SERBEST`'in ürettiği gramer, prompt ve yönerge
+metinleri silme sırasında baytı baytına korundu, yani yama uygulanmadan da
+eski raporlar karşılaştırılabilir durumda.
+
+---
+--- a/evals/__main__.py
++++ b/evals/__main__.py
+@@ -28,6 +28,7 @@
+ from mayen.agent.calls import CallFormat
+ from mayen.config import load
+ from mayen.tools.catalog import builtin_registry
++from mayen.tools.grammar import ToolMode
+ 
+ TIMEOUT_SECONDS = 300.0
+ """Ölçüm bütçesi tur akışının bütçesi değil: burada tek bir yavaş çağrı koşuyu bozmasın
+@@ -72,8 +73,16 @@
+         " `gecmis` her biçim için iki kez koşar — tool izi olan ve olmayan geçmişle"
+         " (2026-08-13 düzeltmesinin ölçümü)",
+     )
++    parser.add_argument(
++        "--mod",
++        action="append",
++        choices=[mode.value for mode in ToolMode],
++        help="Tool dalı modu; birden çok kez verilebilir (varsayılan: serbest)."
++        " İki mod tek raporda yan yana koşsun diye tekrarlanabilir — P25.3'ün matrisi",
++    )
+     args = parser.parse_args(argv)
+     sets: list[str] = args.kume or ["altin"]
++    modes = [ToolMode(value) for value in (args.mod or [ToolMode.SERBEST.value])]
+ 
+     config = load()
+     registry = builtin_registry()
+@@ -88,13 +97,20 @@
+ 
+         runs = []
+         for call_format in CallFormat:
+-            for scenarios, tool_rows, suffix in _runs(sets):
+-                label = f"{args.model} × {call_format.value}{suffix}"
+-                print(f"koşuluyor: {label}", file=sys.stderr)
+-                results = await run_all(
+-                    registry, llm, call_format, scenarios, tool_rows=tool_rows
+-                )
+-                runs.append((label, results))
++            for mode in modes:
++                for scenarios, tool_rows, suffix in _runs(sets):
++                    mode_suffix = "" if mode is ToolMode.SERBEST else f" × {mode.value}"
++                    label = f"{args.model} × {call_format.value}{mode_suffix}{suffix}"
++                    print(f"koşuluyor: {label}", file=sys.stderr)
++                    results = await run_all(
++                        registry,
++                        llm,
++                        call_format,
++                        scenarios,
++                        tool_rows=tool_rows,
++                        tool_mode=mode,
++                    )
++                    runs.append((label, results))
+ 
+     report = render(runs, server=props)
+     if args.out is None:
+--- a/evals/report.py
++++ b/evals/report.py
+@@ -21,9 +21,11 @@
+ fark gürültünün içindedir ve aralık yazılmadığı sürece bu cümle bir sıralama gibi okunur —
+ P7'de tam olarak öyle okundu. Aralık Wilson; gerekçesi `wilson()`'da.
+ 
+-**İkinci adım ayrı bölüm** (P25.2). Zincirin ikinci halkası ile ilk halkasını tek doğruluk
+-yüzdesinde eritmek, `gec-04` gibi "ilk adımı doğru, ikinci adımı yanlış" bir hatayı yarı
+-doğru gösterirdi.
++**İkinci adım ve `no_tool` ayrı bölümler** (P25.2, P25). Zincirin ikinci halkası ile ilk
++halkasını tek doğruluk yüzdesinde eritmek, `gec-04` gibi "ilk adımı doğru, ikinci adımı
++yanlış" bir hatayı yarı doğru gösterirdi. `no_tool` sayısı ise zorunlu modun gerçekten
++kullanılıp kullanılmadığını gösteriyor: grameri hiç kullanmayan bir modelle onu doğru
++kullanan model, yalnızca doğruluk sütununa bakıldığında aynı satıra düşer.
+ """
+ 
+ from collections.abc import Mapping, Sequence
+@@ -33,6 +35,7 @@
+ 
+ from evals.runner import MAX_CORRECTIONS, Context, ScenarioResult
+ from evals.scenarios import LONG_HISTORY, Kind
++from mayen.tools.grammar import ToolMode
+ 
+ Z = 1.96
+ """%95 güven aralığının normal yaklaşımı. Bir ölçüm parametresi, doküman kararı değil."""
+@@ -80,6 +83,8 @@
+     step2_correct: int
+     step2_run: int
+     """İkinci adımı koşulan senaryo sayısı — ikinci adım doğruluğunun paydası."""
++    no_tool: int
++    """Zorunlu modda `no_tool` işaretiyle kapanan senaryo sayısı."""
+     argument_accuracy: float | None
+     """Tool'u doğru seçilen çağrılar içinde argümanı da doğru olanların payı. Tool'u doğru
+     seçilen hiç çağrı yoksa tanımsız."""
+@@ -93,6 +98,13 @@
+     mean_seconds: float
+     mean_ttft: float
+     """İlk token'a kadar geçen sürenin ortalaması (§6, §19.4)."""
++    mean_speech_ttft: float | None
++    """Kullanıcının duyduğu ilk token'a kadar geçen sürenin ortalaması (P25.3). Zorunlu
++    modun ekstra üretim turunun bedeli **yalnızca burada** görünür: `mean_ttft` o modda
++    `no_tool` işaretinin ilk harfini ölçüyor ve kullanıcı onu duymuyor. Çağrı üretilen
++    turlar paydanın dışında, o yüzden `speech_count` ayrı yazılıyor."""
++    speech_count: int
++    """`mean_speech_ttft`in paydası — çağrı üretilmeden kapanan turların sayısı."""
+ 
+ 
+ def measured(results: Sequence[ScenarioResult]) -> list[ScenarioResult]:
+@@ -108,6 +120,7 @@
+     if not ok:
+         raise ValueError("hiçbir senaryo ölçülemedi: özetlenecek sayı yok")
+     graded = [r for r in ok if r.arguments_correct is not None]
++    spoken = [r.speech_ttft for r in ok if r.speech_ttft is not None]
+     return Summary(
+         label=label,
+         count=len(ok),
+@@ -116,6 +129,7 @@
+         tool_interval=wilson(sum(r.tool_correct for r in ok), len(ok)),
+         step2_correct=sum(bool(r.step2_tool_correct) for r in ok),
+         step2_run=sum(r.step2_run for r in ok),
++        no_tool=sum(r.no_tool for r in ok),
+         argument_accuracy=(
+             _ratio(sum(bool(r.arguments_correct) for r in graded), len(graded))
+             if graded
+@@ -129,6 +143,8 @@
+         mean_tokens=mean(r.tokens for r in ok),
+         mean_seconds=mean(r.seconds for r in ok),
+         mean_ttft=mean(r.ttft for r in ok),
++        mean_speech_ttft=mean(spoken) if spoken else None,
++        speech_count=len(spoken),
+     )
+ 
+ 
+@@ -264,6 +280,56 @@
+                 )
+             lines.append(f"| {label} | " + " | ".join(cells) + " |")
+ 
++    if any(r.tool_mode is not ToolMode.SERBEST for _, results in runs for r in results):
++        lines += ["", "## Zorunlu mod: `no_tool` kullanımı", ""]
++        lines += [
++            "Zorunlu modda çağrı gerekmeyen tur `<tool> no_tool` yazarak kapanır, yani"
++            " **iki sütun eşit olmalı**: gramer başka bir çıkış yolu bırakmıyor. Eşit"
++            " değilse aradaki fark, düzeltme tavanına kadar geçerli bir çağrı üretilemeyen"
++            " turlardır — tek bir doğruluk yüzdesinde bu iki başarısızlık aynı görünür.",
++            "",
++            "| koşu | mod | `no_tool` | çağrı üretilmeyen tur |",
++            "|---|---|---:|---:|",
++        ]
++        for label, results in runs:
++            # Ölçülemeyen satırlar burada da dışarıda: `call` onlarda zaten `None` ve
++            # sayılsalardı, servis kesintisi "işaret yazılmamış" gibi görünür ve tablonun
++            # kendi eşitlik kontrolü yanlış alarm verirdi.
++            ok = measured(results)
++            mode = ", ".join(sorted({r.tool_mode.value for r in ok}))
++            lines.append(
++                f"| {label} | {mode} | {sum(r.no_tool for r in ok)} |"
++                f" {sum(r.call is None for r in ok)} |"
++            )
++
++    if any(r.speech_ttft is not None for _, results in runs for r in results):
++        lines += ["", "## İlk ses gecikmesi: zorunlu modun bedeli", ""]
++        lines += [
++            "`ort. TTFT` **birinci** üretimin ilk token'ını ölçüyor. Zorunlu modda o token"
++            " `<tool> no_tool`'un ilk harfidir ve kullanıcı onu duymaz: metin, birinci"
++            " üretim bittikten sonra başlayan ikinci üretimden gelir. `ilk ses`, turun"
++            " başından kullanıcının duyduğu ilk token'a kadar geçen süredir — serbest modda"
++            " birinci üretimin TTFT'si (ikinci üretim yok), zorunlu modda birinci üretimin"
++            " tamamı artı kapanışın TTFT'si.",
++            "",
++            "**Payda çağrı üretilmeyen turlar** (parantezde). Çağrı üretilen turda ilk ses"
++            " zaten tool'un çalışmasını bekliyor; onları da katmak, ölçülen farkı tool"
++            " süreleriyle seyreltirdi. §6'nın bütçesi bu sütun, §19.4 hâlâ açık olduğu için"
++            " burada bir geçti/kaldı yok — iki mod arasındaki **fark** var.",
++            "",
++            "| koşu | mod | ort. TTFT | ort. ilk ses (n) |",
++            "|---|---|---:|---:|",
++        ]
++        for label, results in runs:
++            s = summarize(label, results)
++            mode = ", ".join(sorted({r.tool_mode.value for r in measured(results)}))
++            speech = (
++                "—"
++                if s.mean_speech_ttft is None
++                else f"{s.mean_speech_ttft:.2f} ({s.speech_count})"
++            )
++            lines.append(f"| {label} | {mode} | {s.mean_ttft:.2f} | {speech} |")
++
+     if any(r.step2_run for _, results in runs for r in results):
+         lines += ["", "## İkinci adım", ""]
+         lines += [
+--- a/evals/runner.py
++++ b/evals/runner.py
+@@ -32,6 +32,20 @@
+ **Tool gövdeleri koşulmuyor**, hazır sonuçlar besleniyor: ağ ve veritabanı ölçümü
+ belirlenimci olmaktan çıkarırdı ve ölçülen şey tool'un doğruluğu değil.
+ 
++**İki mod aynı düzleme iniyor** (P25). Zorunlu modda "çağrı gerekmiyor" cevabı `no_tool`
++işaretidir, serbest modda düz metindir; ikisi de `call is None` diye notlanıyor, yoksa iki
++mod karşılaştırılamazdı. İşaretin gerçekten yazılıp yazılmadığı ayrıca `no_tool` alanında
++duruyor — grameri hiç kullanmayan bir model ile onu doğru kullanan model aynı satıra
++düşmesin diye.
++
++**Zorunlu modun ikinci üretim turu ölçülüyor** (P25.3, `konusma_ttft`). `ort. TTFT`
++birinci üretimin ilk token'ını ölçüyor; zorunlu modda sohbet turu önce `<tool> no_tool`
++üretip *sonra* metni üretiyor, yani kullanıcının duyduğu ilk ses ikinci üretimin ilk
++token'ıdır ve o sütunda hiç görünmüyordu. `konusma_ttft` turun başından o token'a kadar
++geçen süre: serbest modda birinci üretimin TTFT'si (ikinci üretim yok), zorunlu modda
++birinci üretimin **tamamı** artı kapanış üretiminin TTFT'si. Modun bedeli ancak bu iki
++sayının farkında duruyor.
++
+ **İkinci adım ölçülüyor** (P25.2). `Scenario.step2` varsa sonuç geri besleniyor ve model
+ bir kez daha *tool* grameriyle üretiyor; ölçülen şey ikinci çağrının gelip gelmediği ve
+ argümanının sonuçtan okunup okunmadığı. `PROSE_GRAMMAR` kullanılmıyor: negatif kontrol
+@@ -43,6 +57,7 @@
+ import re
+ import time
+ from collections.abc import Sequence
++from contextlib import aclosing
+ from dataclasses import dataclass, field
+ from enum import StrEnum
+ 
+@@ -57,10 +72,11 @@
+     UnknownToolError,
+     instructions,
+     is_call,
++    is_no_tool,
+     parse,
+ )
+ from mayen.obs.log import get_logger
+-from mayen.tools.grammar import PROSE_GRAMMAR, cli_grammar, json_grammar
++from mayen.tools.grammar import PROSE_GRAMMAR, ToolMode, cli_grammar, json_grammar
+ from mayen.tools.prompt import catalog_text
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import ToolArgumentError
+@@ -114,12 +130,33 @@
+     ttft: float = 0.0
+     """İlk token'a kadar geçen süre (§6, §19.4). `seconds` tamamlanmayı ölçüyor; ikisi
+     ayrı, çünkü tamamlanma üretilen token sayısıyla büyür, ilk ses büyümez."""
++    speech_ttft: float | None = None
++    """Turun başından **kullanıcının duyduğu ilk token'a** kadar geçen süre (P25.3).
++
++    `ttft` birinci üretimin ilk token'ı; zorunlu modda o token `<tool> no_tool`'un ilk
++    harfidir ve kullanıcı onu duymaz. Bu alan modun gerçek bedelini taşıyor: serbest modda
++    `ttft`'nin kendisi (kapanış üretimi yok), zorunlu modda birinci üretimin tamamı artı
++    kapanış üretiminin TTFT'si.
++
++    Çağrı üretilen turlarda `None`: orada ilk ses zaten tool'un çalışmasını bekliyor ve
++    ölçülen şey mod farkı olmaz. Düzeltme tavanına takılan turlarda da `None` — o tur
++    zaten kaybedilmiş, ortalamaya girmesi modun bedelini bir hata payıyla karıştırırdı."""
+     failures: Sequence[str] = field(default_factory=tuple)
+     """Ne yanlış gitti — raporun "neden" sütunu."""
+     answer: str | None = None
+     """Tool sonucu geri beslendikten sonra üretilen yanıt. Yanıt turu koşulmadıysa `None`."""
+     unsupported_numbers: Sequence[str] = field(default_factory=tuple)
+     """Yanıtta geçip ne tool sonucunda ne kullanıcı turunda bulunan sayılar."""
++    tool_mode: ToolMode = ToolMode.SERBEST
++    """Hangi modda koşuldu (P25). Rapor iki modu yan yana yazdığı için sonucun kendisinde
++    duruyor: etiketten okunması, etiketin biçimine güvenmek olurdu."""
++    no_tool: bool = False
++    """Zorunlu modda model `no_tool` işaretini yazdı mı. Serbest modda daima `False`.
++
++    Ayrı bir alan, çünkü **notu düz metinle aynı** ama *gözlenen şey* farklı: iki modun
++    karşılaştırılabilir kalması için ikisi de "çağrı üretilmedi" diye notlanıyor
++    (`call is None`), ama zorunlu modun işareti gerçekten yazıp yazmadığı ayrıca görünmezse
++    grameri hiç kullanmayan bir modelle onu doğru kullanan model aynı satıra düşerdi."""
+     step2_call: ToolCall | None = None
+     """İkinci adımda üretilen çağrı. İkinci adım koşulmadıysa anlamsız (`step2_run`)."""
+     step2_run: bool = False
+@@ -130,9 +167,17 @@
+     satırlar hiçbir doğruluk paydasına girmiyor: modelin yanlışı değil, ölçümün eksiği."""
+ 
+ 
+-def system_prompt(registry: Registry, call_format: CallFormat) -> str:
+-    """§8.1'in sabit öneki: çağrı nasıl yazılır, sonra hangi tool'lar var."""
+-    return f"{instructions(call_format)}\n\n{catalog_text(registry)}"
++def system_prompt(
++    registry: Registry,
++    call_format: CallFormat,
++    tool_mode: ToolMode = ToolMode.SERBEST,
++) -> str:
++    """§8.1'in sabit öneki: çağrı nasıl yazılır, sonra hangi tool'lar var.
++
++    `tool_mode` yönergeyi değiştiriyor, katalogu değil: `no_tool` bir yetenek değil
++    (bkz. `tools/grammar.py`). Serbest modda üretilen metin baytı baytına eskisi.
++    """
++    return f"{instructions(call_format, tool_mode)}\n\n{catalog_text(registry)}"
+ 
+ 
+ def user_prompt(scenario: Scenario) -> str:
+@@ -159,23 +204,26 @@
+     return messages
+ 
+ 
+-def grammar_for(registry: Registry, call_format: CallFormat) -> str:
++def grammar_for(
++    registry: Registry, call_format: CallFormat, tool_mode: ToolMode = ToolMode.SERBEST
++) -> str:
+     match call_format:
+         case CallFormat.CLI:
+-            return cli_grammar(registry)
++            return cli_grammar(registry, tool_mode)
+         case CallFormat.JSON:
+-            return json_grammar(registry)
++            return json_grammar(registry, tool_mode)
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+ class _Attempt:
+     """Bir üretim + düzeltme döngüsünün tamamı. `call is None` iki şey demek olabilir:
+-    model düz metin yazdı ya da tavana kadar geçerli bir çağrı üretemedi — `failures`
+-    ikisini ayırıyor."""
++    model düz metin yazdı (serbest mod) ya da `no_tool` yazdı (zorunlu mod) ya da tavana
++    kadar geçerli bir çağrı üretemedi — `no_tool` ve `failures` ikisini ayırıyor."""
+ 
+     messages: Sequence[PromptMessage]
+     output: str
+     call: ToolCall | None
++    no_tool: bool
+     unknown_tool: int
+     unknown_argument: int
+     corrections: int
+@@ -187,17 +235,25 @@
+     belirliyor ve §19.4 hâlâ açık. `ort. sn` bunu göstermiyordu; tamamlanma süresi
+     üretilen token sayısıyla birlikte büyüyor, ilk ses ise büyümüyor.
+     """
++    first_seconds: float = 0.0
++    """**İlk** üretimin tamamlanma süresi — düzeltme turları hariç.
++
++    `ScenarioResult.speech_ttft` bunu istiyor: zorunlu modda kapanış üretimi ancak birinci
++    üretim bittikten sonra başlıyor, yani ilk sesin beklediği süre bu artı kapanışın
++    TTFT'si. `run_scenario`'nun ölçtüğü `seconds` bunu veremezdi — düzeltme turlarını da
++    içeriyor."""
+ 
+ 
+ async def _attempt(
+     registry: Registry,
+     llm: LLMClient,
+     call_format: CallFormat,
++    tool_mode: ToolMode,
+     messages: Sequence[PromptMessage],
+     *,
+     max_corrections: int,
+ ) -> _Attempt:
+-    grammar = grammar_for(registry, call_format)
++    grammar = grammar_for(registry, call_format, tool_mode)
+     unknown_tool = 0
+     unknown_argument = 0
+     corrections = 0
+@@ -205,6 +261,7 @@
+     call: ToolCall | None = None
+     failures: list[str] = []
+     ttft = 0.0
++    first_seconds = 0.0
+ 
+     while True:
+         # İlk parçaya kadar geçen süre ayrıca ölçülüyor: §6'nın bütçesi ilk ses, ve
+@@ -217,7 +274,25 @@
+             if not chunks and corrections == 0:
+                 ttft = time.monotonic() - started
+             chunks.append(chunk)
++        if corrections == 0:
++            first_seconds = time.monotonic() - started
+         output = "".join(chunks)
++        if is_no_tool(output):
++            # `parse()`'tan **önce**: işaret defterde yok, `UnknownToolError` sayılırdı ve
++            # §17.1'in birinci sayacı kendi kontrol işaretimizi uydurulmuş tool diye
++            # raporlardı. `agent/loop.py` ile aynı sıra.
++            return _Attempt(
++                messages,
++                output,
++                None,
++                True,
++                0,
++                0,
++                corrections,
++                tuple(failures),
++                ttft,
++                first_seconds,
++            )
+         if not is_call(output):
+             break
+         try:
+@@ -249,14 +324,39 @@
+         messages,
+         output,
+         call,
++        False,
+         unknown_tool,
+         unknown_argument,
+         corrections,
+         tuple(failures),
+         ttft,
++        first_seconds,
+     )
+ 
+ 
++async def _closing_ttft(llm: LLMClient, messages: Sequence[PromptMessage]) -> float | None:
++    """`no_tool`'dan sonraki kapanış üretiminin ilk token'ına kadar geçen süre (P25.3).
++
++    `agent/loop.py`'nin `no_tool` dalıyla aynı: gramer `PROSE_GRAMMAR` ve mesajlar
++    değişmiyor — işaret ne bir `[not]` satırı yazıyor ne de tura bir mesaj ekliyor.
++
++    Üretim ilk parçada kesiliyor: ölçülen şey ilk ses, tamamlanma değil. Akış `aclosing`
++    ile kapatılıyor — `aclose()` adaptör sözleşmesinin parçası ve yarım bırakılan bir
++    üretim sunucuda asılı kalırdı.
++
++    Hiç parça gelmezse `None`: bu üretimde ilk ses **yok** (üretimin karşılığı P21'in
++    `YANIT_BOŞ` yolu). Geçen süreyi TTFT diye döndürmek, sessiz kalan bir turu ortalamaya
++    "hızlı" olarak yazardı."""
++    started = time.monotonic()
++    async with aclosing(
++        llm.stream(messages, grammar=PROSE_GRAMMAR, max_tokens=MAX_TOKENS)
++    ) as stream:
++        async for _chunk in stream:
++            return time.monotonic() - started
++    log.warning("kapanış üretimi boş döndü: ilk ses ölçülemedi")
++    return None
++
++
+ async def run_scenario(
+     registry: Registry,
+     llm: LLMClient,
+@@ -265,22 +365,33 @@
+     *,
+     max_corrections: int = MAX_CORRECTIONS,
+     tool_rows: bool = True,
++    tool_mode: ToolMode = ToolMode.SERBEST,
+ ) -> ScenarioResult:
+     """Bir senaryoyu koşar; düzeltme turları dâhil tek bir sonuç üretir."""
+     messages: Sequence[PromptMessage] = [
+-        PromptMessage("system", system_prompt(registry, call_format)),
++        PromptMessage("system", system_prompt(registry, call_format, tool_mode)),
+         *history_messages(scenario, tool_rows=tool_rows),
+         PromptMessage("user", user_prompt(scenario)),
+     ]
+ 
+     started = time.monotonic()
+     first = await _attempt(
+-        registry, llm, call_format, messages, max_corrections=max_corrections
++        registry, llm, call_format, tool_mode, messages, max_corrections=max_corrections
+     )
+     seconds = time.monotonic() - started
+ 
+     tool_correct, arguments_correct, graded = _grade(scenario, first.call)
+ 
++    # P25.3: modun bedeli. Zorunlu modda kapanış üretimi gerçekten koşuluyor — süresi
++    # tahmin edilemez, `MAX_ADIM`'ın ikinci turu kadar gerçek bir istek.
++    speech_ttft: float | None = None
++    if first.no_tool:
++        closing = await _closing_ttft(llm, first.messages)
++        speech_ttft = None if closing is None else first.first_seconds + closing
++    elif first.call is None and not first.failures:
++        # Serbest modun düz metin dalı: `agent/loop.py` burada döner, ikinci üretim yok.
++        speech_ttft = first.ttft
++
+     answer: str | None = None
+     unsupported: tuple[str, ...] = ()
+     step2: _Attempt | None = None
+@@ -294,6 +405,7 @@
+                 registry,
+                 llm,
+                 call_format,
++                tool_mode,
+                 first,
+                 scenario,
+                 max_corrections=max_corrections,
+@@ -319,9 +431,12 @@
+         tokens=await llm.count_tokens(first.output),
+         seconds=seconds,
+         ttft=first.ttft,
++        speech_ttft=speech_ttft,
+         failures=tuple([*first.failures, *graded]),
+         answer=answer,
+         unsupported_numbers=unsupported,
++        tool_mode=tool_mode,
++        no_tool=first.no_tool,
+         step2_call=step2.call if step2 else None,
+         step2_run=step2 is not None,
+         step2_tool_correct=step2_tool,
+@@ -333,6 +448,7 @@
+     registry: Registry,
+     llm: LLMClient,
+     call_format: CallFormat,
++    tool_mode: ToolMode,
+     first: _Attempt,
+     scenario: Scenario,
+     *,
+@@ -354,7 +470,9 @@
+     ]
+     if scenario.step2.user is not None:
+         messages.append(PromptMessage("user", scenario.step2.user))
+-    return await _attempt(registry, llm, call_format, messages, max_corrections=max_corrections)
++    return await _attempt(
++        registry, llm, call_format, tool_mode, messages, max_corrections=max_corrections
++    )
+ 
+ 
+ _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+@@ -465,6 +583,7 @@
+     *,
+     max_corrections: int = MAX_CORRECTIONS,
+     tool_rows: bool = True,
++    tool_mode: ToolMode = ToolMode.SERBEST,
+ ) -> list[ScenarioResult]:
+     """Bütün kümeyi koşar. **Servis hatası koşuyu bitirmez, senaryoyu bitirir.**
+ 
+@@ -493,6 +612,7 @@
+                         scenario,
+                         max_corrections=max_corrections,
+                         tool_rows=tool_rows,
++                        tool_mode=tool_mode,
+                     )
+                 )
+                 break
+@@ -504,7 +624,7 @@
+                     error=str(error),
+                 )
+                 if attempt == 2:
+-                    results.append(_service_error(scenario, call_format, llm, error))
++                    results.append(_service_error(scenario, call_format, llm, tool_mode, error))
+     return results
+ 
+ 
+@@ -512,6 +632,7 @@
+     scenario: Scenario,
+     call_format: CallFormat,
+     llm: LLMClient,
++    tool_mode: ToolMode,
+     error: ServiceUnavailableError,
+ ) -> ScenarioResult:
+     """Ölçülemeyen senaryo. `tool_correct=False` ama rapor `error` dolu satırları
+@@ -532,5 +653,6 @@
+         corrections=0,
+         tokens=0,
+         seconds=0.0,
++        tool_mode=tool_mode,
+         error=str(error),
+     )
+--- a/src/mayen/agent/calls.py
++++ b/src/mayen/agent/calls.py
+@@ -24,7 +24,7 @@
+ from dataclasses import dataclass
+ from enum import StrEnum
+ 
+-from mayen.tools.grammar import CALL_PREFIX
++from mayen.tools.grammar import CALL_PREFIX, NO_TOOL, ToolMode
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import Arg, Tool
+ 
+@@ -69,12 +69,22 @@
+     ),
+ }
+ 
+-_PROSE_RULE = 'Tool gerekmiyorsa doğrudan kullanıcıya yanıt yaz; o yanıt "<" ile başlayamaz.'
+-"""Düz metin dalının modele anlatıldığı yer. **Katalogda değil**, bilerek: katalog §9.1'in
+-yetenek listesi ve "tool çağırmamak" bir yetenek değil."""
++_MODE_RULE = {
++    ToolMode.SERBEST: (
++        'Tool gerekmiyorsa doğrudan kullanıcıya yanıt yaz; o yanıt "<" ile başlayamaz.'
++    ),
++    ToolMode.ZORUNLU: (
++        f"Her adımda bir çağrı yazmak zorundasın. Tool gerekmiyorsa —"
++        f" sohbet, teşekkür, tool'larla ilgisi olmayan bir söz— tek başına"
++        f" {CALL_PREFIX}{NO_TOOL} yaz; kullanıcıya yanıtı ondan sonra yazacaksın."
++    ),
++}
++"""Modun modele anlatıldığı yer. **Katalogda değil**, bilerek: katalog §9.1'in yetenek
++listesi ve `no_tool` bir yetenek değil (bkz. `tools/grammar.py`). Oraya konsaydı defterle
++prompt arasında, defterde karşılığı olmayan bir satır dururdu."""
+ 
+ 
+-def instructions(call_format: CallFormat) -> str:
++def instructions(call_format: CallFormat, mode: ToolMode = ToolMode.SERBEST) -> str:
+     """Sistem promptunun "çağrı nasıl yazılır" bölümü (§8.1'in sabit öneki).
+ 
+     **Katalogla aynı yerde değil, bilerek:** `tools/prompt.py` hangi tool'ların *var*
+@@ -91,7 +101,7 @@
+     **Bu metnin kendisi bir ölçüm değişkenidir.** §17.1 prompt değişikliğini de değerlendirme
+     kapısına bağlıyor; burada değişen bir kelime, P7'nin kapısından geçmek zorundadır.
+     """
+-    return f"{_INSTRUCTIONS[call_format]}\n{_PROSE_RULE}"
++    return f"{_INSTRUCTIONS[call_format]}\n{_MODE_RULE[mode]}"
+ 
+ 
+ def is_call(text: str) -> bool:
+@@ -99,6 +109,16 @@
+     return text.startswith(CALL_PREFIX)
+ 
+ 
++def is_no_tool(text: str) -> bool:
++    """`ZORUNLU` modun "bu tur tool gerekmiyor" işareti mi (P25).
++
++    `parse()`'tan **önce** sorulur: işaret defterde olmadığı için `parse()` onu
++    `UnknownToolError` sayardı ve §17.1'in birinci halüsinasyon sayacı kendi kontrol
++    akışımızı halüsinasyon olarak raporlardı.
++    """
++    return text.rstrip("\r\n") == f"{CALL_PREFIX}{NO_TOOL}"
++
++
+ def parse(registry: Registry, call_format: CallFormat, text: str) -> ToolCall:
+     """Tool dalındaki çıktıyı ayrıştırır. Düz metinle çağrılması bir kod hatasıdır."""
+     if not is_call(text):
+--- a/src/mayen/agent/loop.py
++++ b/src/mayen/agent/loop.py
+@@ -38,10 +38,16 @@
+ **`max_steps` varsayılansız.** §8.2 "sonlu ve küçük" diyor, sayı vermiyor; `ApprovalFlow`
+ zaman aşımında olduğu gibi sayıyı burada uydurmak, ölçülmemiş bir değeri koda gömmek olurdu.
+ 
+-**Zorunlu tool modu ölçüldü ve silindi** (P25.3, 2026-08-13). Döngünün bir de "her adımda
+-çağrı zorunlu" hâli vardı; `no_tool` işaretini gören dal buradan kalktı. Gerekçe
+-`tools/grammar.py`'nin başlığında, geri alma yaması
+-`docs/faz4/zorunlu-mod-geri-alma.patch`.
++**`ZORUNLU` modda düz metin dalı yok** (P25): model her adımda bir çağrı yazar ve "tool
++gerekmiyor" da bir çağrıdır (`no_tool`). Döngü açısından fark tek bir yerde — çağrı
++metni işaretse döngü kapanış dalına çıkar. İşaret **adım harcamaz**: `MAX_ADIM` §8.2'nin
++*tool* sayacı, düzeltme turlarındaki gerekçenin aynısı. Kapanışta `[not]` satırı da
++yazılmaz: sınır ve düzeltme tavanı notları modele "hakkın bitti" diyor, oysa burada biten
++bir şey yok — model tool gerekmediğine kendisi karar verdi.
++
++**Modun bilinen bedeli, gizlenmiyor:** `ZORUNLU`'da sohbet turu önce `<tool> no_tool`
++üretip **ikinci bir üretim turu** açmak zorunda, yani §6'nın ilk-ses bütçesi en sık
++senaryoda bir tur fazladan harcanıyor. Ne kadar olduğu P25.3'te TTFT olarak ölçülecek.
+ """
+ 
+ import asyncio
+@@ -56,13 +62,20 @@
+     CallParseError,
+     ToolCall,
+     is_call,
++    is_no_tool,
+     parse,
+ )
+ from mayen.agent.prompt import ContextBlock, build_messages
+ from mayen.obs.log import get_logger
+ from mayen.policy.approval import PendingPlan
+ from mayen.policy.authority import Decision, Identity, authorize
+-from mayen.tools.grammar import CALL_PREFIX, PROSE_GRAMMAR, cli_grammar, json_grammar
++from mayen.tools.grammar import (
++    CALL_PREFIX,
++    PROSE_GRAMMAR,
++    ToolMode,
++    cli_grammar,
++    json_grammar,
++)
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import Tool, ToolArgumentError, ToolContext, ToolResult
+ 
+@@ -109,6 +122,7 @@
+         registry: Registry,
+         tools: ToolContext,
+         call_format: CallFormat,
++        tool_mode: ToolMode,
+         max_steps: int,
+         max_corrections: int,
+     ) -> None:
+@@ -120,10 +134,11 @@
+         self._registry = registry
+         self._tools = tools
+         self._format = call_format
++        self._mode = tool_mode
+         self._max_steps = max_steps
+         self._max_corrections = max_corrections
+         generate = cli_grammar if call_format is CallFormat.CLI else json_grammar
+-        self._grammar = generate(registry)
++        self._grammar = generate(registry, tool_mode)
+ 
+     async def run(
+         self,
+@@ -142,6 +157,9 @@
+         for step in range(self._max_steps):
+             corrections = 0
+             resolved: tuple[Tool, ToolCall, Mapping[str, object]] | None = None
++            # `resolved is None`ın iki ayrı sebebi var — düzeltme tavanı ve `no_tool` — ve
++            # ikisi ayrı kapanışa gidiyor; tek bir `None` ile ayırt edilemezlerdi.
++            declined = False
+             while True:
+                 messages = build_messages(
+                     system,
+@@ -161,6 +179,13 @@
+                 if call_text is None:
+                     return  # düz metin dalı: tur bitti (§8.2)
+ 
++                if is_no_tool(call_text):
++                    # `ZORUNLU` modun düz metin dalı (P25). `parse()`'a gitmiyor: işaret
++                    # defterde yok, `UnknownToolError` sayılırdı.
++                    log.info("no_tool işareti", step=step)
++                    declined = True
++                    break
++
+                 try:
+                     resolved = self._resolve(call_text)
+                     break
+@@ -177,6 +202,12 @@
+                         break
+                     corrections += 1
+ 
++            if declined:
++                # Biten bir hak yok: model tool gerekmediğine kendisi karar verdi, o yüzden
++                # kapanışa `[not]` satırı yazılmıyor.
++                note = None
++                break
++
+             if resolved is None:
+                 log.warning("düzeltme tavanına ulaşıldı", max_corrections=self._max_corrections)
+                 note = _CORRECTION_NOTE
+--- a/src/mayen/agent/prompt.py
++++ b/src/mayen/agent/prompt.py
+@@ -35,6 +35,7 @@
+ from mayen.adapters.llm import PromptMessage
+ from mayen.agent.calls import CallFormat, instructions
+ from mayen.config import ConfigError
++from mayen.tools.grammar import ToolMode
+ from mayen.tools.prompt import catalog_text
+ from mayen.tools.registry import Registry
+ 
+@@ -66,6 +67,7 @@
+ def system_prompt(
+     registry: Registry,
+     call_format: CallFormat,
++    tool_mode: ToolMode = ToolMode.SERBEST,
+     *,
+     role: str,
+ ) -> str:
+@@ -83,8 +85,12 @@
+     üretiliyor: onları elle yazılan bir dosyaya taşımak, tool eklendiğinde iki yerin
+     güncellenmesini gerektirir ve biri unutulduğunda model var olmayan bir tool'u çağırır
+     ya da var olanı hiç görmez — §9.1'in "ikinci, bağımsız metin" hatasının ta kendisi.
++
++    **`tool_mode` promptla grameri aynı yerde tutuyor** (P25). Zorunlu modda gramer düz
++    metin dalını kapatıyor; prompt bunu söylemezse model kapalı bir dalı denemeye devam
++    eder ve her turu bir düzeltme turuna çevirir.
+     """
+-    syntax = instructions(call_format)
++    syntax = instructions(call_format, tool_mode)
+     return f"{role}\n\n{syntax}\n\n{catalog_text(registry)}"
+ 
+ 
+Binary files a/src/mayen/agent/__pycache__/calls.cpython-313.pyc and b/src/mayen/agent/__pycache__/calls.cpython-313.pyc differ
+--- a/src/mayen/main.py
++++ b/src/mayen/main.py
+@@ -81,6 +81,7 @@
+ from mayen.scheduler.reminders import reminder_handler
+ from mayen.session.actor import Session
+ from mayen.tools.catalog import builtin_registry
++from mayen.tools.grammar import ToolMode
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import ToolContext
+ from mayen.transport.server import Connections, FrameSink, Server
+@@ -94,6 +95,11 @@
+ (94/94, %22 daha az token). Ayrıştırıcı ve gramer iki biçimi de tanımaya devam ediyor:
+ model değişirse yeniden ölçülecek tek satır burası, başka hiçbir yer biçime bakmıyor."""
+ 
++TOOL_MODE = ToolMode.SERBEST
++"""P25'in ikinci ekseni: tool dalı zorunlu mu. **Henüz ölçülmedi**, o yüzden montaj
++bugüne kadarki davranışta duruyor — `ZORUNLU`'ya geçmek P25.3'ün raporuna dayanmalı.
++`CALL_FORMAT` gibi tek satır: gramer, prompt ve döngü modu buradan alıyor."""
++
+ MAX_STEPS = 4
+ """§8.2 "sonlu ve küçük" diyor, sayı vermiyor. Dört: kataloğun hiçbir senaryosu üç
+ çağrıdan fazlasını gerektirmiyor, tavan yine de bir çağrı pay bırakıyor."""
+@@ -225,6 +231,7 @@
+                 registry=registry,
+                 tools=tools,
+                 call_format=CALL_FORMAT,
++                tool_mode=TOOL_MODE,
+                 max_steps=MAX_STEPS,
+                 max_corrections=MAX_CORRECTIONS,
+             ),
+@@ -347,7 +354,7 @@
+         raise ConfigError("Rol dosyası verilmedi: MAYEN_ROLE_PATH (örnek: config/rol.txt)")
+     role = load_role(config.role_path)
+     log.info("rol dosyadan yüklendi", path=str(config.role_path), chars=len(role))
+-    return system_prompt(registry, CALL_FORMAT, role=role)
++    return system_prompt(registry, CALL_FORMAT, TOOL_MODE, role=role)
+ 
+ 
+ def _load_schedule(config: Config, courses: CourseRepository) -> str:
+--- a/src/mayen/tools/grammar.py
++++ b/src/mayen/tools/grammar.py
+@@ -24,28 +24,55 @@
+ bayrağa kadar okuyor; sıranın serbest olması gramerdeki her tool için n! dal demekti ve
+ ayrıştırmaya hiçbir şey katmıyordu.
+ 
+-**Zorunlu tool modu ölçüldü ve silindi (P25.3, 2026-08-13).** Bir süre burada `ZORUNLU`
+-diye ikinci bir mod duruyordu: düz metin dalını kapatıp yerine bir `no_tool` işareti
+-koyuyordu, yani model her adımda bir çağrı yazmak zorundaydı. Ölçüm onu düşürdü ve sebebi
+-tam da yukarıdaki dallanma tasarımı: önek zorunlu olduğunda model, bir şeye karar vermeden
+-zaten tool dalının **içinde** oluyor ve soru "tool gerekiyor mu"dan "hangi tool"a dönüşüyor.
+-Orada cümlenin yüzey kelimeleri baskın çıkıyor — "saatin ne kadar hızlı geçtiğine
+-inanamıyorum" `date_time` çağırıyor. 35B'de sohbet kümesinin doğruluğu %94'ten %72'ye
+-(CLI) ve %56'ya (JSON) düşüyordu. Ölçüm `docs/faz4-cagri-modu.md` ve `docs/faz4-ilk-ses*.md`;
+-kodun kendisi `docs/faz4/zorunlu-mod-geri-alma.patch` ile geri alınabilir. Yeniden
+-denenecekse ölçülmesi gereken şey de orada yazılı.
++**İki mod var (P25).** `SERBEST` bugüne kadarki gramer: kök `tool-call | prose`, dal ilk
++token'da belli (§6). `ZORUNLU` düz metin dalını kapatır ve yerine `no_tool` işaretini
++koyar; model her adımda bir çağrı yazmak zorundadır, "çağrı gerekmiyor" da bir çağrıdır.
++Hangisinin daha iyi olduğu **ölçülmedi** — P24 ters yönde bir bulgu taşıyor (35B sohbete
++tool çağırıyor), sahip zorunlu modun bu ayrımı kolaylaştırabileceğini savunuyor, ve ikisi
++de sayı değil. Bu yüzden iki mod yan yana duruyor; P25.3'ün ölçümünden sonra kaybeden
++silinecek. `SERBEST`'in ürettiği bayt dizisi bu değişiklikten **etkilenmiyor** ve bir test
++bunu kilitliyor: aksi hâlde `docs/faz2-olcum.md` ve `faz3-*` karşılaştırılamaz hâle gelirdi.
+ """
+ 
++from enum import StrEnum
++
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import Arg, ArgType, Tool
+ 
+ CALL_PREFIX = "<tool> "
+ """Tool çağrısı dalının zorunlu öneki. Düz metin bu karakterle başlayamaz (§6)."""
+ 
++NO_TOOL = "no_tool"
++"""`ZORUNLU` modda "bu tur tool gerekmiyor" işareti. **Adın yazıldığı tek yer burası.**
++
++Bir tool **değil** ve `Registry`'ye girmiyor: bir tool olsaydı §9.1 uyarınca bir `Effect`
++sınıfı taşıması gerekirdi ve §10.2'nin `TANINMAYAN` satırı dört hücrede de RED — yani
++`MAYEN_ASSUME_OWNER` olmadan zorunlu modda tek çıkış yolu **reddedilen** bir tool olurdu ve
++sistem sohbet bile edemezdi. Bu bir yetenek değil, kontrol akışı işareti; `policy` onu hiç
++görmüyor ve Kural 4 bozulmuyor.
++
++**İki çağrı biçiminde de aynı yazılıyor** (`<tool> no_tool`), JSON'da bile. Ona bir JSON
++kostümü giydirmek onu tool'muş gibi göstermek olurdu; kaldı ki `parse()` defterde
++bulamayıp `UnknownToolError` atardı — yani §17.1'in halüsinasyon sayacı kendi kontrol
++işaretimizi halüsinasyon olarak sayardı."""
++
++
++class ToolMode(StrEnum):
++    """Tool dalının zorunlu olup olmadığı (P25). Ölçüm bu iki değer üzerinde koşar."""
++
++    SERBEST = "serbest"
++    ZORUNLU = "zorunlu"
++
++
+ # Düz metin dalı: ilk karakter '<' olamaz, gerisi serbest.
+ _PROSE = "prose ::= [^<\\r] [^\\r]*"
+ 
+-_ROOT = ("root ::= tool-call | prose", _PROSE)
++_ROOT = {
++    ToolMode.SERBEST: ("root ::= tool-call | prose", _PROSE),
++    # Düz metin dalı yok: `prose` kuralı da yazılmıyor, çünkü ulaşılamayan bir kural
++    # gramerde "bu dal var ama kapalı" izlenimi verirdi.
++    ToolMode.ZORUNLU: ("root ::= tool-call",),
++}
+ 
+ PROSE_GRAMMAR = f"root ::= prose\n{_PROSE}"
+ """Tool dalı **kapalı** gramer: §8.2'nin `MAX_ADIM` sınırına varıldığında kullanılır.
+@@ -140,23 +167,29 @@
+     return rules
+ 
+ 
+-def _branch(registry: Registry) -> str:
++def _branch(registry: Registry, mode: ToolMode) -> str:
+     names = [f"call-{_rule_name(tool.name)}" for tool in registry]
++    if mode is ToolMode.ZORUNLU:
++        # İşaret en sonda: tool adları sabit listenin başında kalsın, `SERBEST` ile
++        # `ZORUNLU` arasındaki tek fark bu satırın kuyruğunda görünsün.
++        names.append(f'"{NO_TOOL}"')
+     return f'tool-call ::= "{CALL_PREFIX}" ({" | ".join(names)})'
+ 
+ 
+-def _grammar(registry: Registry, values: tuple[str, ...], rules: list[str]) -> str:
++def _grammar(
++    registry: Registry, mode: ToolMode, values: tuple[str, ...], rules: list[str]
++) -> str:
+     if not len(registry):
+         raise ValueError("boş defterden gramer üretilemez: tool adları sabit liste (§8.3)")
+-    return "\n".join([*_ROOT, _branch(registry), *values, *rules])
++    return "\n".join([*_ROOT[mode], _branch(registry, mode), *values, *rules])
+ 
+ 
+-def cli_grammar(registry: Registry) -> str:
++def cli_grammar(registry: Registry, mode: ToolMode = ToolMode.SERBEST) -> str:
+     """Aday A — CLI-tarzı (§8.3)."""
+-    return _grammar(registry, _CLI_VALUES, [_cli_tool_rule(tool) for tool in registry])
++    return _grammar(registry, mode, _CLI_VALUES, [_cli_tool_rule(tool) for tool in registry])
+ 
+ 
+-def json_grammar(registry: Registry) -> str:
++def json_grammar(registry: Registry, mode: ToolMode = ToolMode.SERBEST) -> str:
+     """Aday B — JSON (§8.3)."""
+     rules = [rule for tool in registry for rule in _json_tool_rules(tool)]
+-    return _grammar(registry, _JSON_VALUES, rules)
++    return _grammar(registry, mode, _JSON_VALUES, rules)
+Binary files a/src/mayen/tools/__pycache__/grammar.cpython-313.pyc and b/src/mayen/tools/__pycache__/grammar.cpython-313.pyc differ
+--- a/tests/test_agent_calls.py
++++ b/tests/test_agent_calls.py
+@@ -10,11 +10,12 @@
+     UnknownToolError,
+     instructions,
+     is_call,
++    is_no_tool,
+     parse,
+ )
+ from mayen.policy.effects import Effect
+ from mayen.tools.catalog import builtin_registry
+-from mayen.tools.grammar import CALL_PREFIX
++from mayen.tools.grammar import CALL_PREFIX, NO_TOOL, ToolMode
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import Arg, ArgType, Tool, ToolContext, ToolResult
+ 
+@@ -194,3 +195,39 @@
+     payload = '{"name": "date_time", "arguments": {}, "id": "7"}'
+     with pytest.raises(CallParseError):
+         parse(registry, CallFormat.JSON, CALL_PREFIX + payload)
++
++
++# --- P25: zorunlu tool modu -------------------------------------------------
++
++
++def test_no_tool_marker_is_recognized() -> None:
++    assert is_no_tool(f"{CALL_PREFIX}{NO_TOOL}")
++    # Gramer satır sonu üretebilir; işaret satırın tamamı olduğunda hâlâ işarettir.
++    assert is_no_tool(f"{CALL_PREFIX}{NO_TOOL}\n")
++
++
++def test_a_real_call_is_not_the_marker() -> None:
++    assert not is_no_tool(f"{CALL_PREFIX}date_time")
++    assert not is_no_tool("Merhaba.")
++    # Argüman alan bir çağrı, adı işaretle başlasa bile işaret değil.
++    assert not is_no_tool(f"{CALL_PREFIX}{NO_TOOL} --alan değer")
++
++
++def test_the_marker_would_be_a_hallucination_if_it_reached_parse() -> None:
++    """`is_no_tool()` neden `parse()`'tan **önce** sorulmak zorunda: defterde yok, yani
++    §17.1'in birinci halüsinasyon sayacı kendi kontrol işaretimizi sayardı."""
++    with pytest.raises(UnknownToolError):
++        parse(builtin_registry(), CallFormat.CLI, f"{CALL_PREFIX}{NO_TOOL}")
++
++
++@pytest.mark.parametrize("call_format", list(CallFormat))
++def test_zorunlu_instructions_teach_the_marker(call_format: CallFormat) -> None:
++    text = instructions(call_format, ToolMode.ZORUNLU)
++    assert f"{CALL_PREFIX}{NO_TOOL}" in text
++
++
++@pytest.mark.parametrize("call_format", list(CallFormat))
++def test_serbest_instructions_are_unchanged(call_format: CallFormat) -> None:
++    """Ölçümlerin alındığı metin; modun eklenmesi onu değiştirmemeli."""
++    assert instructions(call_format) == instructions(call_format, ToolMode.SERBEST)
++    assert NO_TOOL not in instructions(call_format)
+--- a/tests/test_agent_loop.py
++++ b/tests/test_agent_loop.py
+@@ -12,6 +12,7 @@
+ from mayen.policy.approval import PendingPlan
+ from mayen.policy.authority import Authority, Identity
+ from mayen.policy.effects import Effect
++from mayen.tools.grammar import ToolMode
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import Arg, ArgType, Tool, ToolContext, ToolResult
+ 
+@@ -60,12 +61,14 @@
+     *,
+     max_steps: int = 3,
+     max_corrections: int = 2,
++    tool_mode: ToolMode = ToolMode.SERBEST,
+ ) -> AgentLoop:
+     return AgentLoop(
+         llm=llm,
+         registry=registry,
+         tools=object.__new__(ToolContext),  # gövdeler bağlamı kullanmıyor
+         call_format=CallFormat.CLI,
++        tool_mode=tool_mode,
+         max_steps=max_steps,
+         max_corrections=max_corrections,
+     )
+@@ -271,3 +274,53 @@
+     ):
+         pass
+     assert llm.calls[0][0].content == system
++
++
++# --- P25: zorunlu tool modu -------------------------------------------------
++
++
++def zorunlu(registry: Registry, llm: FakeLLM, *, max_steps: int = 3) -> AgentLoop:
++    return build(registry, llm, max_steps=max_steps, tool_mode=ToolMode.ZORUNLU)
++
++
++async def test_no_tool_marker_ends_the_loop_with_prose(registry: Registry) -> None:
++    llm = FakeLLM(["<tool> no_tool", "Merhaba, nasılsın?"])
++    events = await collect(zorunlu(registry, llm), "selam")
++    assert not any(isinstance(e, ToolStarted) for e in events)
++    text = "".join(e.text for e in events if isinstance(e, TextChunk))
++    assert text == "Merhaba, nasılsın?"
++
++
++async def test_no_tool_closing_carries_no_note(registry: Registry) -> None:
++    """Biten bir hak yok: `[not]` satırı modele "hakkın bitti" der, oysa tool gerekmediğine
++    modelin kendisi karar verdi."""
++    llm = FakeLLM(["<tool> no_tool", "Merhaba."])
++    await collect(zorunlu(registry, llm), "selam")
++    closing = llm.calls[-1]
++    assert not any("[not]" in message.content for message in closing)
++
++
++async def test_no_tool_does_not_spend_a_step(registry: Registry) -> None:
++    """`MAX_ADIM` §8.2'nin *tool* sayacı. Tek adım hakkıyla bir tool çağrılıp ardından
++    işaret geliyorsa, sınır notu değil normal kapanış koşmalı."""
++    llm = FakeLLM(["<tool> hava --sehir Ankara", "<tool> no_tool", "On sekiz derece."])
++    events = await collect(zorunlu(registry, llm, max_steps=2), "hava nasıl")
++    assert ToolStarted("hava") in events
++    closing = llm.calls[-1]
++    assert not any("[not]" in message.content for message in closing)
++
++
++async def test_zorunlu_mode_still_runs_tools(registry: Registry) -> None:
++    llm = FakeLLM(["<tool> hava --sehir Ankara", "<tool> no_tool", "On sekiz derece."])
++    events = await collect(zorunlu(registry, llm), "hava nasıl")
++    assert ToolStarted("hava") in events
++    text = "".join(e.text for e in events if isinstance(e, TextChunk))
++    assert text == "On sekiz derece."
++
++
++async def test_the_marker_is_not_fed_back_as_a_correction(registry: Registry) -> None:
++    """İşaret `parse()`'a gitseydi `UnknownToolError` olur, düzeltme turu harcanır ve
++    §17.1'in halüsinasyon sayacı onu sayardı."""
++    llm = FakeLLM(["<tool> no_tool", "Merhaba."])
++    await collect(zorunlu(registry, llm), "selam")
++    assert len(llm.calls) == 2  # işaret + kapanış; arada düzeltme yok
+--- a/tests/test_agent_prompt.py
++++ b/tests/test_agent_prompt.py
+@@ -9,6 +9,7 @@
+ from mayen.agent.prompt import ContextBlock, build_messages, load_role, system_prompt
+ from mayen.config import ConfigError
+ from mayen.tools.catalog import builtin_registry
++from mayen.tools.grammar import NO_TOOL, ToolMode
+ 
+ ROLE = "Sen Mayen'sin."
+ 
+@@ -139,3 +140,22 @@
+     from mayen.agent import prompt
+ 
+     assert "Sen Mayen'sin" not in inspect.getsource(prompt)
++
++
++# --- P25: zorunlu tool modu -------------------------------------------------
++
++
++def test_serbest_system_prompt_is_unchanged() -> None:
++    """Modun eklenmesi öneği değiştirmemeli: ölçümlerin hepsi bu baytlarla alındı."""
++    registry = builtin_registry()
++    assert system_prompt(registry, CallFormat.CLI, role=ROLE) == system_prompt(
++        registry, CallFormat.CLI, ToolMode.SERBEST, role=ROLE
++    )
++    assert NO_TOOL not in system_prompt(registry, CallFormat.CLI, role=ROLE)
++
++
++def test_zorunlu_system_prompt_teaches_the_marker() -> None:
++    """Gramer düz metin dalını kapatıyorsa prompt da bunu söylemeli; söylemezse model
++    kapalı bir dalı denemeye devam eder ve her tur bir düzeltme turuna döner."""
++    prompt = system_prompt(builtin_registry(), CallFormat.CLI, ToolMode.ZORUNLU, role=ROLE)
++    assert NO_TOOL in prompt
+--- a/tests/test_evals_runner.py
++++ b/tests/test_evals_runner.py
+@@ -13,6 +13,7 @@
+     Context,
+     ScenarioResult,
+     context_of,
++    grammar_for,
+     history_messages,
+     run_all,
+     run_scenario,
+@@ -34,7 +35,7 @@
+ from mayen.adapters.fakes.llm import FakeLLM
+ from mayen.agent.calls import CallFormat
+ from mayen.tools.catalog import builtin_registry
+-from mayen.tools.grammar import CALL_PREFIX
++from mayen.tools.grammar import CALL_PREFIX, NO_TOOL, PROSE_GRAMMAR, ToolMode
+ from mayen.tools.registry import Registry
+ from mayen.turn.runner import called_line
+ 
+@@ -415,6 +416,131 @@
+     assert "Bağlam kırılımı" not in render([("deneme", [result])])
+ 
+ 
++# --- zorunlu mod (P25) ------------------------------------------------------------------
++
++
++def _zorunlu(registry: Registry) -> str:
++    return grammar_for(registry, CallFormat.CLI, ToolMode.ZORUNLU)
++
++
++def test_serbest_mode_prompt_and_grammar_are_byte_identical(registry: Registry) -> None:
++    """Serbest mod bir baytı bile değişirse `docs/faz2-olcum.md` ve `faz3-*` ile
++    karşılaştırma biter. Aynı kilit `tests/test_tools_grammar.py`'de de var; burada
++    ölçüm aracının kendi öneği kilitleniyor."""
++    assert system_prompt(registry, CallFormat.CLI) == system_prompt(
++        registry, CallFormat.CLI, ToolMode.SERBEST
++    )
++    assert grammar_for(registry, CallFormat.CLI) == grammar_for(
++        registry, CallFormat.CLI, ToolMode.SERBEST
++    )
++
++
++def test_zorunlu_mode_changes_both_grammar_and_prompt(registry: Registry) -> None:
++    assert _zorunlu(registry) != grammar_for(registry, CallFormat.CLI)
++    assert NO_TOOL in _zorunlu(registry)
++    assert NO_TOOL in system_prompt(registry, CallFormat.CLI, ToolMode.ZORUNLU)
++
++
++async def test_no_tool_is_not_counted_as_a_hallucinated_tool(registry: Registry) -> None:
++    """İşaret defterde yok; `parse()`'a giderse §17.1'in birinci sayacı kendi kontrol
++    akışımızı uydurulmuş tool diye raporlar ve bir düzeltme turu boşa gider."""
++    llm = FakeLLM([f"{CALL_PREFIX}{NO_TOOL}", "Rica ederim."])
++    result = await run_scenario(
++        registry,
++        llm,
++        CallFormat.CLI,
++        _scenario(kind=Kind.TOOL_GEREKMEZ),
++        tool_mode=ToolMode.ZORUNLU,
++    )
++    assert result.no_tool
++    assert result.call is None
++    assert result.unknown_tool == 0
++    assert result.corrections == 0
++    assert result.tool_correct  # çağrı beklenmiyordu
++
++
++async def test_no_tool_where_a_call_was_expected_is_a_failure(registry: Registry) -> None:
++    """Zorunlu modun kendi kaçış yolu, çağrı gereken turda kaçış olmamalı — iki modun
++    aynı düzlemde ölçülmesinin sebebi bu."""
++    llm = FakeLLM([f"{CALL_PREFIX}{NO_TOOL}", "Bilmiyorum."])
++    result = await run_scenario(
++        registry,
++        llm,
++        CallFormat.CLI,
++        _scenario(ExpectedCall("weather", {"city": "Denizli"})),
++        tool_mode=ToolMode.ZORUNLU,
++    )
++    assert result.no_tool
++    assert not result.tool_correct
++
++
++# --- ilk ses gecikmesi (P25.3) -----------------------------------------------------------
++
++
++async def test_no_tool_runs_a_closing_generation_and_measures_it(registry: Registry) -> None:
++    """Zorunlu modun ölçülmemiş bedeli: `no_tool`'dan sonra ikinci bir üretim koşuyor ve
++    kullanıcının duyduğu ilk token oradan geliyor. `ttft` onu göremez."""
++    llm = FakeLLM([f"{CALL_PREFIX}{NO_TOOL}", "Rica ederim."])
++    result = await run_scenario(
++        registry,
++        llm,
++        CallFormat.CLI,
++        _scenario(kind=Kind.TOOL_GEREKMEZ),
++        tool_mode=ToolMode.ZORUNLU,
++    )
++    assert len(llm.grammars) == 2
++    assert llm.grammars[1] == PROSE_GRAMMAR
++    assert result.speech_ttft is not None
++    assert result.speech_ttft >= result.ttft
++
++
++async def test_prose_needs_no_closing_generation(registry: Registry) -> None:
++    """Serbest modda `agent/loop.py` düz metin dalında döner: ikinci üretim yok, yani ilk
++    ses birinci üretimin ilk token'ıdır. İki mod ancak bu şekilde karşılaştırılabilir."""
++    llm = FakeLLM(["Rica ederim."])
++    result = await run_scenario(
++        registry, llm, CallFormat.CLI, _scenario(kind=Kind.TOOL_GEREKMEZ)
++    )
++    assert len(llm.grammars) == 1
++    assert result.speech_ttft == result.ttft
++
++
++async def test_a_produced_call_has_no_speech_ttft(registry: Registry) -> None:
++    """Çağrı üretilen turda ilk ses tool'un çalışmasını bekliyor; ortalamaya girseydi mod
++    farkı tool süreleriyle seyrelirdi."""
++    llm = FakeLLM([f"{CALL_PREFIX}weather --city Denizli"])
++    result = await run_scenario(
++        registry, llm, CallFormat.CLI, _scenario(ExpectedCall("weather", {"city": "Denizli"}))
++    )
++    assert result.speech_ttft is None
++
++
++async def test_an_empty_closing_generation_is_not_reported_as_fast(
++    registry: Registry,
++) -> None:
++    """Kapanış hiç parça üretmezse ilk ses **yok**; geçen süreyi TTFT diye yazmak sessiz
++    kalan bir turu ortalamaya "hızlı" olarak sokardı (Kural 13)."""
++    llm = FakeLLM([f"{CALL_PREFIX}{NO_TOOL}", ""])
++    result = await run_scenario(
++        registry,
++        llm,
++        CallFormat.CLI,
++        _scenario(kind=Kind.TOOL_GEREKMEZ),
++        tool_mode=ToolMode.ZORUNLU,
++    )
++    assert result.no_tool
++    assert result.speech_ttft is None
++
++
++async def test_prose_in_serbest_mode_never_sets_the_no_tool_flag(registry: Registry) -> None:
++    llm = FakeLLM(["Rica ederim."])
++    result = await run_scenario(
++        registry, llm, CallFormat.CLI, _scenario(kind=Kind.TOOL_GEREKMEZ)
++    )
++    assert not result.no_tool
++    assert result.tool_mode is ToolMode.SERBEST
++
++
+ # --- ikinci adım (P25.2) ----------------------------------------------------------------
+ 
+ 
+@@ -664,3 +790,15 @@
+ 
+ def test_a_clean_run_has_no_such_section() -> None:
+     assert "Ölçülemeyen senaryolar" not in render([("x", [_result()])])
++
++
++def test_an_unmeasured_row_does_not_look_like_a_missing_sentinel() -> None:
++    """`no_tool` tablosunun eşitlik kontrolü, servis kesintisini "işaret yazılmadı" diye
++    okumamalı: ölçülemeyen satırda `call` zaten `None`."""
++    good = replace(_result(), tool_mode=ToolMode.ZORUNLU, no_tool=True)
++    broken = replace(
++        _result(), scenario_id="t-02", tool_mode=ToolMode.ZORUNLU, error="akış kesildi"
++    )
++    text = render([("x", [good, broken])])
++    row = next(line for line in text.splitlines() if line.startswith("| x | zorunlu"))
++    assert row == "| x | zorunlu | 1 | 1 |"
+--- a/tests/test_tools_grammar.py
++++ b/tests/test_tools_grammar.py
+@@ -5,7 +5,7 @@
+ GBNF'i doğru anladığımı ölçerdi. O adım P7'de, gerçek koşucuyla atılıyor.
+ """
+ 
+-from collections.abc import Mapping
++from collections.abc import Callable, Mapping
+ 
+ import pytest
+ 
+@@ -13,6 +13,8 @@
+ from mayen.tools.catalog import builtin_registry
+ from mayen.tools.grammar import (
+     CALL_PREFIX,
++    NO_TOOL,
++    ToolMode,
+     cli_grammar,
+     json_grammar,
+ )
+@@ -155,3 +157,45 @@
+     assert rule(cli_grammar(registry), "call-only-tool") == (
+         'call-only-tool ::= "only_tool" " --count " cli-integer'
+     )
++
++
++# --- P25: zorunlu tool modu -------------------------------------------------
++
++type Generator = Callable[..., str]
++
++
++@pytest.mark.parametrize("generate", [cli_grammar, json_grammar])
++def test_serbest_mode_is_the_unchanged_grammar(generate: Generator) -> None:
++    """P25'in birinci koşulu: `SERBEST` bayt bayt eskisi.
++
++    Bozulursa `docs/faz2-olcum.md` ve `faz3-*` karşılaştırılamaz hâle gelir — ölçümlerin
++    hepsi bu gramerle alındı.
++    """
++    registry = builtin_registry()
++    assert generate(registry) == generate(registry, ToolMode.SERBEST)
++    grammar = generate(registry)
++    assert rule(grammar, "root") == "root ::= tool-call | prose"
++    assert rule(grammar, "prose") is not None
++    assert NO_TOOL not in grammar
++
++
++@pytest.mark.parametrize("generate", [cli_grammar, json_grammar])
++def test_zorunlu_mode_closes_the_prose_branch(generate: Generator) -> None:
++    grammar = generate(builtin_registry(), ToolMode.ZORUNLU)
++    assert rule(grammar, "root") == "root ::= tool-call"
++    # Ulaşılamayan bir kural bırakmak "bu dal var ama kapalı" izlenimi verirdi.
++    assert "prose" not in grammar
++
++
++@pytest.mark.parametrize("generate", [cli_grammar, json_grammar])
++def test_no_tool_is_a_branch_of_the_call_rule(generate: Generator) -> None:
++    """İşaret iki biçimde de aynı yazılıyor: JSON kostümü onu tool gibi gösterirdi."""
++    grammar = generate(builtin_registry(), ToolMode.ZORUNLU)
++    assert rule(grammar, "tool-call").endswith(f'| "{NO_TOOL}")')
++
++
++def test_no_tool_is_not_in_the_registry() -> None:
++    """Bir tool olsaydı bir `Effect` taşırdı ve §10.2'nin `TANINMAYAN` satırında
++    reddedilirdi — zorunlu modda tanınmayan konuşmacı sohbet bile edemezdi."""
++    with pytest.raises(KeyError):
++        builtin_registry().get(NO_TOOL)
+--- a/tests/test_turn_runner.py
++++ b/tests/test_turn_runner.py
+@@ -21,6 +21,7 @@
+ from mayen.policy.effects import Effect
+ from mayen.session.actor import Segment, Session
+ from mayen.session.state import State
++from mayen.tools.grammar import ToolMode
+ from mayen.tools.registry import Registry
+ from mayen.tools.spec import Arg, ArgType, Tool, ToolContext, ToolResult
+ from mayen.turn.replay import Collector, Recording, RecordingLLM, replay
+@@ -174,6 +175,7 @@
+             registry=reg,
+             tools=object.__new__(ToolContext),
+             call_format=CallFormat.CLI,
++            tool_mode=ToolMode.SERBEST,
+             max_steps=3,
+             max_corrections=2,
+         ),
