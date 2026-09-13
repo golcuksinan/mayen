@@ -1,0 +1,42 @@
+[Unit]
+Description=Mayen LLM sunucusu (llama-server, model=%i)
+Documentation=file://%h/Projects/mayen/docs/ARCHITECTURE.md
+# **Bu unit enable edilmez ve hiçbir şeyin bağımlılığı değildir** — 2026-08-15'te sahibin
+# kararı: model elle açılıyor, ölçüm koşarken değiştiriliyor, farklı `-c`/`-ngl` ile
+# açılıyor. Unit'in değiştirdiği tek şey, bayrakların kabuk tarihçesi yerine bir dosyada
+# yazılı olması. Model şablon örneği olarak veriliyor:
+#
+#   systemctl --user start mayen-llm@Qwen3.8-27B-IQ4_XS
+#   systemctl --user start mayen-llm@Qwen3.6-35B-A3B-IQ4_XS
+After=network.target
+# Model dosyası yoksa ya da karta sığmıyorsa yeniden başlatmak düzeltmez; tavan alçak.
+# (Bu iki anahtar `[Unit]`'e ait, `[Service]`'e değil — systemd onları oradan okuyor.)
+StartLimitBurst=3
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+# Bayraklar bu fork'a özel (`-cram`, `-ctxcp`, `--spec-type draft-mtp`); unit'in hangi
+# build'e baktığı böylece kayda geçiyor.
+WorkingDirectory=%h/Projects/forks/llama.cpp
+
+# **Örnekleme bayrakları burada, ve üretimin örneklemesini bunlar belirliyor.**
+# `main.py` ayarları `/props`'tan okuyor (`server_sampling()`, sahibin kararı: kendi
+# sıcaklığına ayarlı bir model gelebilir). Yani bu satırı değiştirmek üretimi değiştirir.
+# Not: `docs/`teki her sayı **açgözlü** okundu; buradaki ayarlarla fark hiç ölçülmedi —
+# `evals` tarafında karşılığı `--ornekleme sunucu`.
+ExecStart=%h/Projects/forks/llama.cpp/build/bin/llama-server \
+    -m %h/Projects/mayen-legacy/inference/models/%i.gguf \
+    -ngl 99 -c 24576 -cram 2048 -ctxcp 2 \
+    --cache-type-k q4_0 --cache-type-v q4_0 \
+    --flash-attn on --parallel 1 --threads 8 --threads-batch 8 \
+    --jinja --reasoning off \
+    --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 \
+    --presence-penalty 1.5 --repeat-penalty 1.0 \
+    --batch-size 512 --ubatch-size 256 \
+    --spec-type draft-mtp --spec-draft-n-max 2 --spec-draft-n-min 1
+
+Restart=on-failure
+RestartSec=10
+
+# `[Install]` bölümü **bilerek yok**: bu unit enable edilmiyor, elle başlatılıyor.

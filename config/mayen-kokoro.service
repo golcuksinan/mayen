@@ -1,0 +1,26 @@
+[Unit]
+Description=Mayen TTS servisi (Kokoro)
+Documentation=file://%h/Projects/mayen/docs/faz7-kokoro.md
+# `mayen.service`'in tersine bu servis **enable edilir**: elle değiştirilen bir hâli yok,
+# GPU tutmuyor, ve kapalıyken tek sonucu asistanın sessiz kalması.
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/mayen
+# Kendi uv projesi, kendi `.venv`'i — torch depodakine girmesin diye (`services/kokoro/`).
+ExecStart=%h/.local/bin/uv run --project services/kokoro python services/kokoro/main.py
+
+# `EnvironmentFile` **yok**: `.env` uygulamanın yapılandırması, servisin değil. Adres iki
+# tarafta da varsayılanla buluşuyor (127.0.0.1:8081; uygulama `MAYEN_TTS_URL`, servis
+# `MAYEN_KOKORO_HOST`/`PORT`). `.env`'de `MAYEN_TTS_URL` değişirse buraya da
+# `Environment=MAYEN_KOKORO_PORT=…` yazılmalı — bugün ikisi de yazılmamış durumda.
+#
+# `MAYEN_KOKORO_DEVICE` de bilerek yazılmadı: varsayılan `cpu` ve bu ölçülmüş bir kısıt
+# (kartta yer yok). Kart boşalırsa burada `cuda` denenir ve ilk ses yeniden ölçülür.
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

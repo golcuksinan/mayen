@@ -1,0 +1,28 @@
+[Unit]
+Description=Mayen sesli asistanı
+Documentation=file://%h/Projects/mayen/docs/ARCHITECTURE.md
+# `llama-server` bilerek burada değil (2026-08-15, sahibin kararı): model elle açılıyor,
+# ölçüm koşarken değiştiriliyor. Kapalıysa adaptör hata yükseltiyor ve tur başarısız olur —
+# süreç ölmez, yani bir `Requires=` yanlış bir bağımlılık kurardı.
+#
+# Kokoro **burada**, çünkü elle değiştirilen bir hâli yok. Ama `Wants=`, `Requires=` değil:
+# aynı gerekçe — TTS servisi ölünce uygulamanın da ölmesi yanlış olur, asistan yalnızca
+# sessiz kalır. `Wants` "onu da başlat" der, ömrünü bağlamaz.
+After=network.target mayen-kokoro.service
+Wants=mayen-kokoro.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/mayen
+EnvironmentFile=%h/Projects/mayen/.env
+ExecStart=%h/.local/bin/uv run python -m mayen
+
+Restart=on-failure
+RestartSec=5
+# 78 = `main.py`'nin EXIT_CONFIG'i: kalıcı hata (rol dosyası yok, yapılandırma bozuk,
+# veritabanı başka bir süreçte açık). Yeniden başlatmak düzeltmez, yalnızca hatayı bir
+# döngünün içine gömer ve kimse görmez.
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target

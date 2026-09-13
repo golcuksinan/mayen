@@ -1,0 +1,4 @@
+# Wake-on-LAN hedefleri (§19.9). Kopyala: config/wol.toml
+# Tool ham MAC kabul etmiyor; yalnızca buradaki adlar uyandırılabilir.
+[targets]
+masaustu = "AA:BB:CC:DD:EE:FF"

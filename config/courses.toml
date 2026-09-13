@@ -1,0 +1,16 @@
+term = "2026-2027 Güz"
+
+[[sessions]]
+course_code = "MAT101"
+title = "Matematik I"
+day = 1            # 1 = Pazartesi … 7 = Pazar
+start = "09:00"    # HH:MM, 24 saat
+end = "10:50"
+location = "B-204" # isteğe bağlı
+
+[[sessions]]
+course_code = "FIZ101"
+title = "Fizik I"
+day = 3
+start = "13:00"
+end = "14:50"

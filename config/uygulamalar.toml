@@ -1,0 +1,10 @@
+# Açılabilir uygulamalar (Değişmez 8). Kopyala: config/uygulamalar.toml
+#
+# Model komut yazmaz, buradaki **adı** seçer — `wol.toml`'un ham MAC'i reddetmesiyle aynı
+# gerekçe. Ad kullanıcının söyleyeceği kelime; değer argv dizisi (tek bir metin değil,
+# çünkü onu bölmek bir kabuk ayrıştırması isterdi).
+[apps]
+tarayici = ["firefox"]
+dosyalar = ["dolphin"]
+metin-duzenleyici = ["kwrite"]
+terminal = ["konsole"]
