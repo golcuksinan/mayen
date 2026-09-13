@@ -38,6 +38,7 @@ class Event(StrEnum):
     ONAY_GEREKLI = "onay_gerekli"
     KAYIT_GEREKLI = "kayıt_gerekli"
     SES_BITTI = "ses_bitti"
+    YANIT_BOS = "yanıt_boş"
     SOZ_KESILDI = "söz_kesildi"
     ONAY_VERILDI = "onay_verildi"
     ONAY_REDDEDILDI = "onay_reddedildi"
@@ -61,6 +62,15 @@ TRANSITIONS: dict[tuple[State, Event], State] = {
     (State.DUSUNUYOR, Event.ILK_SES_HAZIR): State.KONUSUYOR,
     (State.DUSUNUYOR, Event.ONAY_GEREKLI): State.ONAY_BEKLIYOR,
     (State.DUSUNUYOR, Event.KAYIT_GEREKLI): State.KAYIT,
+    # Üretim sırasında söz kesme turu iptal eder (2026-08-10 kararı). Kural 12 "her
+    # aşamada iptal edilebilir" diyor ve model üretirken iptal en çok istenen andır;
+    # yoksaymak Kural 13'e, tabloda bırakmamak da metin istemcisinin `/iptal`'ini
+    # kullanılamaz hâle getirmeye denk düşüyordu.
+    (State.DUSUNUYOR, Event.SOZ_KESILDI): State.IDLE,
+    # Ajan hiç metin üretmedi: ses hiç başlamadığı için `İLK_SES_HAZIR` da olmaz, yani
+    # `SES_BİTTİ` ile kapanacak bir KONUŞUYOR yok. Tur bu çıkışla temiz biter; sebep
+    # ayrıca §14'ün hata kanalından bildirilir (2026-08-10 kararı).
+    (State.DUSUNUYOR, Event.YANIT_BOS): State.IDLE,
     (State.KONUSUYOR, Event.SES_BITTI): State.IDLE,
     # Söz kesme turu iptal eder; kapsamı **tur**, TTS kuyruğunun tamamı değil (§12).
     (State.KONUSUYOR, Event.SOZ_KESILDI): State.IDLE,

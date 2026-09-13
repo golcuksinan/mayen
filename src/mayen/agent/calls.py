@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from mayen.adapters.llm import NativeCall
 from mayen.tools.grammar import CALL_PREFIX
 from mayen.tools.registry import Registry
 from mayen.tools.spec import Arg, Tool
@@ -34,6 +35,20 @@ class CallFormat(StrEnum):
 
     CLI = "cli"
     JSON = "json"
+    YEREL = "yerel"
+    """Modelin **kendi** tool-calling şablonu (Faz B/2, 2026-08-16).
+
+    Diğer ikisinin kardeşi değil, kuzeni: burada çağrı bir metin biçimi değil, isteğin
+    ayrı bir alanı. Katalog `tools` alanında JSON şema (`tools/schema.py`), çağrıyı
+    sunucu ayrıştırıyor, gramer yok — bu yüzden `instructions()` ve `parse()` bu değeri
+    tanımıyor ve tanımamalı; onların işi metin.
+
+    **Neden var:** metin biçimlerinde dal ilk token'da seçiliyor (§6/C3), yani model bir
+    üretimde ya konuşabiliyor ya çağırabiliyor. İkisini birden istediğinde çağrıyı düz
+    metnin içinde **taklit ediyor** ve taklit sesli okunuyor; `<` yasaklanınca köşeli
+    parantezle aynısını yazdı. Yerel biçimde `content` ile `tool_calls` aynı yanıtta
+    durur, yani çakışma yok. Ölçüm: `docs/faz-b-yerel.md`.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +71,62 @@ class UnknownArgumentError(CallParseError):
     """Tool'un imzasında olmayan bir argüman — halüsinasyon sayacı 2 (§17.1)."""
 
 
+_INSTRUCTIONS = {
+    CallFormat.CLI: (
+        f'Bir tool çağırmak için tek satır yaz: "{CALL_PREFIX}" öneki, sonra tool adı,'
+        ' sonra "--alan değer" çiftleri. Bir alanın değeri çok kelimeli olabilir;'
+        " bir sonraki alana kadar okunur.\n"
+        f"Örnek: {CALL_PREFIX}tool_adi --alan değer --başka_alan çok kelimeli değer"
+    ),
+    CallFormat.JSON: (
+        f'Bir tool çağırmak için tek satır yaz: "{CALL_PREFIX}" öneki, sonra JSON nesnesi.\n'
+        f'Örnek: {CALL_PREFIX}{{"name": "tool_adi", "arguments": {{"alan": "değer"}}}}'
+    ),
+}
+
+_PROSE_RULE = 'Tool gerekmiyorsa doğrudan kullanıcıya yanıt yaz; o yanıt "<" ile başlayamaz.'
+"""Düz metin dalının modele anlatıldığı yer. **Katalogda değil**, bilerek: katalog §9.1'in
+yetenek listesi ve "tool çağırmamak" bir yetenek değil."""
+
+
+def instructions(call_format: CallFormat) -> str:
+    """Sistem promptunun "çağrı nasıl yazılır" bölümü (§8.1'in sabit öneki).
+
+    **Katalogla aynı yerde değil, bilerek:** `tools/prompt.py` hangi tool'ların *var*
+    olduğunu yazıyor, burası onların nasıl *çağrılacağını*. İkincisi biçim kararına
+    (§19.1) bağlı, `tools` ise `agent`'i import edemez (§4) — yani `CallFormat`'ı görmesi
+    zaten mümkün değil. Biçimin tüm yüzü tek dosyada duruyor: gramer önekini kullanan,
+    ayrıştıran ve tarif eden metin.
+
+    **Örnekte gerçek tool adı yok.** Katalog hemen altında geliyor; buraya yazılacak
+    gerçek bir çağrı, imza değiştiğinde sessizce yalan söyleyen ikinci bir kopya olurdu —
+    `usage()`'ın ayrıca yazılmamasıyla aynı gerekçe. Deneyle doğrulandı: şematik örnekle
+    de model doğru dalı seçiyor.
+
+    **Bu metnin kendisi bir ölçüm değişkenidir.** §17.1 prompt değişikliğini de değerlendirme
+    kapısına bağlıyor; burada değişen bir kelime, P7'nin kapısından geçmek zorundadır.
+    """
+    return f"{_INSTRUCTIONS[call_format]}\n{_PROSE_RULE}"
+
+
+def from_native(registry: Registry, call: NativeCall) -> ToolCall:
+    """Sunucunun ayrıştırdığı çağrıyı doğrulanmış bir `ToolCall`'a çevirir.
+
+    **Değerler metne çevrilip `Tool.validate`'e veriliyor.** Şema tipli değer üretiyor
+    (`{"level": 40}` bir `int`), `validate` ise metin bekliyor — çünkü §8.3'ün iki metin
+    biçiminin ürünü. Esneyen taraf burası: `validate` üretimin tek doğrulama noktası
+    (§9.1) ve bir çağrı biçimi için gevşetilmesi, kısıtı biçim başına ikiye bölmek olurdu.
+    Liste virgülle birleşiyor — `_coerce`'ün ayırdığı yer.
+    """
+    tool = _lookup(registry, call.name)
+    raw = {
+        name: ",".join(str(item) for item in value) if isinstance(value, list) else str(value)
+        for name, value in call.arguments.items()
+    }
+    tool.validate(raw)
+    return ToolCall(name=call.name, arguments=raw)
+
+
 def is_call(text: str) -> bool:
     """Çıktı tool dalında mı, düz metin dalında mı (§6: ilk token'da belli)."""
     return text.startswith(CALL_PREFIX)
@@ -71,6 +142,10 @@ def parse(registry: Registry, call_format: CallFormat, text: str) -> ToolCall:
             return _parse_cli(registry, body)
         case CallFormat.JSON:
             return _parse_json(registry, body)
+        case CallFormat.YEREL:
+            # Yerel biçimde ayrıştırma taşımanın altında (`from_native`); buraya düşmek
+            # kodun hatası, modelin değil.
+            raise ValueError("yerel biçimde metin ayrıştırılmaz: from_native() kullanın")
 
 
 def _lookup(registry: Registry, name: str) -> Tool:
