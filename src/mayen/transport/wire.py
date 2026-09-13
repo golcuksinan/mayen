@@ -20,6 +20,7 @@ from typing import Any
 from mayen.adapters.audio import AudioFormat, Codec
 from mayen.session.state import State
 from mayen.transport.frames import (
+    Announcement,
     AudioChunk,
     AudioEnd,
     Cancelled,
@@ -30,6 +31,7 @@ from mayen.transport.frames import (
     Ping,
     Pong,
     Rejected,
+    Reply,
     SpeechSegment,
     StateChanged,
     TextSegment,
@@ -57,10 +59,12 @@ _FRAME_TYPES: tuple[type[Frame], ...] = (
     Transcript,
     StateChanged,
     ToolRunning,
+    Reply,
     AudioChunk,
     AudioEnd,
     Cancelled,
     ErrorFrame,
+    Announcement,
     Pong,
 )
 _BY_TYPE: dict[str, type[Frame]] = {frame.TYPE: frame for frame in _FRAME_TYPES}

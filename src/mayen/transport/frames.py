@@ -11,6 +11,13 @@ ikisini birbirine bağlar.
 **Metin segmenti sesin yanında birinci sınıf bir çerçevedir** (P1). Sahte STT istemcinin
 metnini transkript sayıyor; o yol protokolde yoksa gerçek STT geldiğinde protokol
 yeniden açılır.
+
+**Cevabın metni de öyle** (`Reply`, Faz 7). Sahte TTS'in yükü okunabilir metin olduğu için
+istemciler cevabı ses parçalarını UTF-8 çözerek gösteriyordu; Kokoro bağlanınca o yol
+kapandı ve kullanıcı kendi sorusunu görüp cevabı göremez oldu. Metin sesin yanında ayrı
+bir çerçeve olarak gidiyor — `Transcript`'in kullanıcı için yaptığının aynısı. Sesin
+*yerine* değil: ikisi de aynı `turn_id`'yi taşıyor ve metin, ait olduğu cümlenin sesinden
+**önce** yazılıyor.
 """
 
 from dataclasses import dataclass, field
@@ -21,7 +28,9 @@ from mayen.session.state import State
 
 # Sürüm çerçeve biçimi her değiştiğinde artar. El sıkışmada karşılaştırılır ve
 # uyuşmazlık açık bir hatayla reddedilir — sessizce farklı davranılmaz (§13).
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+"""2: `Reply` eklendi (Faz 7). Eski bir istemci cevabın metnini hiç görmezdi, yani
+uyuşmazlık sessizce yaşanabilecek bir fark değil — el sıkışma onu reddediyor."""
 
 
 # --- istemci → sunucu ------------------------------------------------------------------
@@ -130,6 +139,21 @@ class ToolRunning:
 
 
 @dataclass(frozen=True, slots=True)
+class Reply:
+    """Seslendirilen cümlenin metni.
+
+    Cümle başına bir çerçeve ve **kendi sesinden önce** gidiyor: TTS kuyruğunda paralellik
+    yok (§6), yani sıra zaten cümlelerin sırası. Ayrı bir sayaç taşımıyor — `seq` sesin
+    parçalarını sayıyor, bu ise cümleyi.
+    """
+
+    TYPE: ClassVar[str] = "reply"
+
+    turn_id: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class AudioChunk:
     """Ses parçası. İkili çerçeve.
 
@@ -172,6 +196,26 @@ class ErrorFrame:
 
 
 @dataclass(frozen=True, slots=True)
+class Announcement:
+    """Proaktif bildirimin turunu açan çerçeve (§12).
+
+    Zamanlanmış bir görev kullanıcı bir şey sormadan ses üretebilir ve o ses **kendi
+    `turn_id`'sini** taşır. Ama §13'ün filtresi gereği istemci bilmediği turun parçasını
+    atar; kullanıcının açmadığı bir turu ona duyuran tek çerçeve budur. `Transcript`'in
+    yerini tutmuyor: transkript kullanıcının konuşmasını tura bağlar, burada konuşan
+    kullanıcı değil.
+
+    Durum değişikliği ile duyurulamazdı: proaktif ses bir tur değil ve §5'in tablosunda
+    karşılığı yok — oraya bir geçiş uydurmak açık bir kararı kapatmak olurdu.
+    """
+
+    TYPE: ClassVar[str] = "announcement"
+
+    turn_id: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class Pong:
     TYPE: ClassVar[str] = "pong"
 
@@ -183,10 +227,12 @@ type ServerFrame = (
     | Transcript
     | StateChanged
     | ToolRunning
+    | Reply
     | AudioChunk
     | AudioEnd
     | Cancelled
     | ErrorFrame
+    | Announcement
     | Pong
 )
 type Frame = ClientFrame | ServerFrame
