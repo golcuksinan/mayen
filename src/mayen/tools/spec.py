@@ -13,14 +13,18 @@ barındırabilir ve o alan imzada en sonda durur. Bu kural burada, tanım anınd
 CLI ayrıştırıcısının çalışma anında keşfetmesine bırakılmaz.
 """
 
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from string import Formatter
 
 import httpx
 
+from mayen.adapters.desktop import Desktop
 from mayen.config import Config
 from mayen.data.repositories.courses import CourseRepository
+from mayen.data.repositories.facts import FactRepository
 from mayen.data.repositories.notes import NoteRepository
 from mayen.data.repositories.people import PeopleRepository
 from mayen.data.repositories.tasks import TaskRepository
@@ -33,6 +37,18 @@ class ArgType(StrEnum):
     STRING = "string"
     INTEGER = "integer"
     LIST = "list"
+    ENUM = "enum"
+    """Sayılı seçenekler. Değer gramerde harfi harfine alternatiftir, yani **geçersiz bir
+    seçenek üretilemez** — tool adlarındaki güvencenin argüman tarafındaki eşi (§17.1).
+
+    Serbest metinle kapatılabilecek bir boşluk değil: "eylem" alanına metin denseydi model
+    `kapat`, `close`, `close window` arasında seçim yapardı ve gövde bunları elle eşlemek
+    zorunda kalırdı. Eşleme kodda değil, tanımda."""
+
+
+_CHOICE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+"""Seçeneğin alabileceği biçim. Dar tutuldu: seçenek adları koda ve gramere birlikte
+giriyor, kullanıcıya okunan metin değil."""
 
 
 class ToolSpecError(Exception):
@@ -61,6 +77,25 @@ class Arg:
     description: str
     required: bool = True
     trailing: bool = False
+    choices: tuple[str, ...] = ()
+    """`ENUM` alanının seçenekleri; başka tipte boş kalır. Sıra korunuyor: katalog metni
+    sabit önekin parçası (§8.1) ve küme kullanmak onu koşudan koşuya değiştirirdi."""
+
+    def __post_init__(self) -> None:
+        if (self.type is ArgType.ENUM) != bool(self.choices):
+            raise ToolSpecError(
+                f"{self.name}: seçenek listesi yalnızca ve her zaman {ArgType.ENUM} ile"
+                " birlikte bulunur"
+            )
+        if self.type is ArgType.ENUM and self.trailing:
+            raise ToolSpecError(f"{self.name}: seçenekli alan serbest metin olamaz (§8.3)")
+        if len(set(self.choices)) != len(self.choices):
+            raise ToolSpecError(f"{self.name}: yinelenen seçenek")
+        for choice in self.choices:
+            if not _CHOICE.fullmatch(choice):
+                # Gramerde harfi harfine yazılıyor: boşluk değeri böler, `<` ve `"` iki
+                # biçimin ayraçları. Tanım anında patlıyor, üretimde değil (§9.1).
+                raise ToolSpecError(f"{self.name}: geçersiz seçenek {choice!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,8 +126,13 @@ class ToolContext:
     kurmuyor: bağlantı havuzu ve zaman aşımı çağıranın elinde kalsın, testte de gerçek ağa
     çıkmadan taşıma değiştirilebilsin diye."""
 
+    desktop: Desktop
+    """Masaüstü denetimi. `http` ile aynı gerekçe: tool kendi süreçlerini çağırmıyor,
+    mekanizma adaptörde duruyor ve testte sahtesiyle değiştiriliyor (§4)."""
+
     people: PeopleRepository
     notes: NoteRepository
+    facts: FactRepository
     courses: CourseRepository
     tasks: TaskRepository
     course_term: str
@@ -101,6 +141,13 @@ class ToolContext:
 
 
 Handler = Callable[[ToolContext, Mapping[str, object]], Awaitable[ToolResult]]
+
+
+def _shape(arg: Arg) -> str:
+    """İmzada alanın yerine yazılan şey. Seçenekli alanda tipin adı değil **seçeneklerin
+    kendisi** yazılıyor: katalog metni buradan üretiliyor (§8.4) ve modelin `<enum>`
+    görmesi ona hiçbir şey söylemezdi."""
+    return "|".join(arg.choices) if arg.type is ArgType.ENUM else str(arg.type)
 
 
 def text(arguments: Mapping[str, object], name: str) -> str:
@@ -114,6 +161,18 @@ def text(arguments: Mapping[str, object], name: str) -> str:
 
 def optional_text(arguments: Mapping[str, object], name: str) -> str | None:
     return None if name not in arguments else text(arguments, name)
+
+
+def strings(arguments: Mapping[str, object], name: str) -> list[str]:
+    """Liste argümanını okur. `validate()` boş listeyi zaten reddediyor."""
+    value = arguments[name]
+    if not isinstance(value, list):
+        raise TypeError(f"{name}: liste bekleniyordu, {type(value).__name__} geldi")
+    return value
+
+
+def optional_strings(arguments: Mapping[str, object], name: str) -> list[str] | None:
+    return None if name not in arguments else strings(arguments, name)
 
 
 def number(arguments: Mapping[str, object], name: str) -> int:
@@ -137,6 +196,15 @@ class Tool:
     timeout_seconds: float
     handler: Handler
     args: Sequence[Arg] = field(default_factory=tuple)
+    #: §8.5 adım 3'te sahibe okunan soru. **`description` bunun yerine geçemez** ve bu
+    #: ölçülmüş bir hata: 2026-08-16'ya kadar okunan cümle katalog açıklamasının kendisiydi,
+    #: yani sahip "kapat" deyince "Etkin pencereyi kapatır." duyuyordu — bildirim kipinde ve
+    #: Türkçe. Sahip işin bittiğini sandı, sistem yirmi saniye cevap bekledi, üç kez.
+    #: İki alan iki dinleyiciye bakıyor: `description` modele giden katalog metni (Türkçe,
+    #: §9.1), `confirm` sahibin duyduğu cümle (İngilizce, Faz 7). Aynı cümle olamazlar.
+    #: Argümanlar `{ad}` ile gömülür — parantez içinde listelemek "Bir notu siler (id: 3)"
+    #: gibi okunuyordu, ki o bir soru değil bir kayıt satırı.
+    confirm: str | None = None
 
     def __post_init__(self) -> None:
         seen: set[str] = set()
@@ -155,6 +223,26 @@ class Tool:
             )
         if self.timeout_seconds <= 0:
             raise ToolSpecError(f"{self.name}: zaman aşımı pozitif olmalı")
+        # Onay isteyen tek etki sınıfı bu (`policy/authority.py`'nin matrisinde tek hücre).
+        # Şart tanım anında zorlanıyor: geri alınamaz bir tool'un onay cümlesiz gönderilmesi,
+        # çalışma anında yine katalog açıklamasının okunması demek olurdu.
+        if (self.effect is Effect.GERI_ALINAMAZ) != (self.confirm is not None):
+            raise ToolSpecError(
+                f"{self.name}: onay cümlesi yalnızca ve mutlaka GERİ_ALINAMAZ"
+                " tool'larda bulunur (§8.5 adım 3)"
+            )
+        if self.confirm is not None:
+            required = {arg.name for arg in self.args if arg.required}
+            for _, field_name, _, _ in Formatter().parse(self.confirm):
+                if field_name is None:
+                    continue
+                if field_name not in required:
+                    # İsteğe bağlı argüman da kabul edilmiyor: yokluğunda cümle
+                    # kurulamaz ve okunacak soru çalışma anında patlardı.
+                    raise ToolSpecError(
+                        f"{self.name}: onay cümlesindeki {field_name!r} zorunlu bir"
+                        f" argüman değil ({', '.join(sorted(required)) or 'hiç yok'})"
+                    )
 
     def validate(self, raw: Mapping[str, str]) -> dict[str, object]:
         """Ham argümanları tipli değerlere çevirir (§9.1: tipli ve doğrulanmış).
@@ -194,6 +282,16 @@ class Tool:
                         f"{self.name}: {arg.name!r} bir tam sayı olmalı, {text!r} verildi",
                         self.usage(),
                     ) from exc
+            case ArgType.ENUM:
+                # Gramer bunu zaten üretilemez kılıyor; doğrulama yine de burada, çünkü
+                # gramer bir güvenlik sınırı değil (Değişmez 4) ve tek yol o değil.
+                if text not in arg.choices:
+                    raise ToolArgumentError(
+                        f"{self.name}: {arg.name!r} şunlardan biri olmalı"
+                        f" ({'|'.join(arg.choices)}), {text!r} verildi",
+                        self.usage(),
+                    )
+                return text
             case ArgType.LIST:
                 items = [item.strip() for item in text.split(",") if item.strip()]
                 if not items:
@@ -202,10 +300,22 @@ class Tool:
                     )
                 return items
 
+    def confirmation(self, values: Mapping[str, object]) -> str:
+        """§8.5 adım 3'te okunacak soru, doğrulanmış değerlerden kurulur.
+
+        Ham metinden değil `validate()`'in çıktısından kuruluyor: sahibe okunan cümle ile
+        onay verilince çalışacak çağrı **aynı şey** olmak zorunda.
+        """
+        if self.confirm is None:
+            raise ToolSpecError(f"{self.name}: onay cümlesi yok, onay da istenmemeli")
+        return self.confirm.format(**values)
+
     def usage(self) -> str:
         """Hatalı çağrıdan sonra modele dönen `--help` çıktısı (§8.3)."""
         signature = " ".join(
-            f"--{arg.name} <{arg.type}>" if arg.required else f"[--{arg.name} <{arg.type}>]"
+            f"--{arg.name} <{_shape(arg)}>"
+            if arg.required
+            else f"[--{arg.name} <{_shape(arg)}>]"
             for arg in self.args
         )
         lines = [f"{self.name} {signature}".rstrip(), f"  {self.description}"]

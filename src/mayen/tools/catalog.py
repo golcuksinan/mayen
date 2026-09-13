@@ -9,12 +9,18 @@ oturum durumu (`KAYIT`) ve birden fazla ses örneği istiyor; konuşmacı adapt�
 bağlanmadan (P8) gövdesi yazılamaz.
 """
 
+from mayen.config import Config
 from mayen.tools import (
+    app_launch,
     contact_delete,
     contact_get,
     contact_save,
     course_schedule,
     date_time,
+    fact_forget,
+    fact_list,
+    fact_save,
+    media_control,
     note_create,
     note_delete,
     note_search,
@@ -22,8 +28,11 @@ from mayen.tools import (
     task_cancel,
     task_create,
     task_list,
+    volume,
     wake_on_lan,
     weather,
+    window_action,
+    window_close,
 )
 from mayen.tools.registry import Registry
 
@@ -41,12 +50,29 @@ _TOOLS = (
     task_cancel.TOOL,
     weather.TOOL,
     system_metrics.TOOL,
+    fact_list.TOOL,
+    fact_save.TOOL,
+    fact_forget.TOOL,
     wake_on_lan.TOOL,
+    volume.TOOL,
+    media_control.TOOL,
+    window_action.TOOL,
+    window_close.TOOL,
 )
 
 
-def builtin_registry() -> Registry:
+def builtin_registry(config: Config | None = None) -> Registry:
+    """§9.2'nin defteri. Yapılandırma verilirse ona bağlı tool'lar da kurulur.
+
+    `app_launch` bir sabit değil: açılabilir uygulamaların adları gramere seçenek olarak
+    giriyor, çünkü modelin göremediği bir izin listesi kullanılamıyor (gerekçesi o
+    dosyanın başlığında). Yapılandırma yoksa ya da liste boşsa **tool da yok** — hiçbir
+    şey açamayan bir tool katalogda yalnızca token tutardı.
+    """
     registry = Registry()
     for tool in _TOOLS:
         registry.register(tool)
+    launcher = app_launch.build(sorted(config.apps)) if config is not None else None
+    if launcher is not None:
+        registry.register(launcher)
     return registry

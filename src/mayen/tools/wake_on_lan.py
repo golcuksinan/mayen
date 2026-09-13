@@ -47,6 +47,7 @@ TOOL = Tool(
     name="wake_on_lan",
     description="Yapılandırmada tanımlı bir cihaza uyandırma paketi gönderir.",
     effect=Effect.GERI_ALINAMAZ,
+    confirm="Send a wake signal to {target}?",
     timeout_seconds=5.0,
     handler=_run,
     args=(Arg("target", ArgType.STRING, "Cihazın yapılandırmadaki adı"),),

@@ -17,6 +17,7 @@ TOOL = Tool(
     name="note_delete",
     description="Bir notu numarasıyla siler.",
     effect=Effect.GERI_ALINAMAZ,
+    confirm="Should I delete note {id}?",
     timeout_seconds=2.0,
     handler=_run,
     args=(Arg("id", ArgType.INTEGER, "Silinecek notun numarası"),),
