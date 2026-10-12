@@ -1,0 +1,7 @@
+# Devir dosyası oturumlar arası notlardır, herkese açık depoya girmez.
+DEVIR.md
+.venv/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
