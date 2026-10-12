@@ -455,6 +455,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pipecat-ai" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -466,7 +467,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pipecat-ai", specifier = "==1.12.0" }]
+requires-dist = [
+    { name = "pipecat-ai", specifier = "==1.12.0" },
+    { name = "pydantic", specifier = ">=2.11" },
+]
 
 [package.metadata.requires-dev]
 dev = [
