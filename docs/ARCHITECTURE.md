@@ -241,11 +241,15 @@ Tur sürerken yeni bir tetikleyici gelirse önceliği yüksekse mevcut turu kese
 girer. Ses turunda konuşan sahipse yalnızca `urgent` keser; konuşan başkasıysa her yüksek
 öncelikli tetikleyici keser. Sahip birincil kullanıcıdır: başkasının turu sahibe ait bir
 tetikleyiciyi bekletmez, sahibin kendi turunu ise yalnızca acil bir durum böler. Kesilen
-turun akıbeti tur türüne göre config'ten seçilir:
+turun akıbeti turu açan tetikleyicinin kaynağına göre config'ten seçilir:
 
 - iptal edilir ve bağlama "yarıda kesildi" notu düşer,
 - sıranın başına eklenip baştan başlar,
 - kaldığı yerden devam eder.
+
+**Ödünç alınan çerçevenin karşılamadığı bir akıbet config'te seçilirse açılış hata verir.**
+Sessizce başka bir akıbete düşen ayar, kesilen turun ne olacağını config'i okuyana yanlış
+söyler.
 
 **İptalin kapsamı turdur, kuyruğun tamamı değil.** Kesme yalnızca o `turn_id`'ye ait işleri
 ve ses parçalarını düşürür. Aksi hâlde bir turu kesmek, kuyrukta bekleyen bir hatırlatmayı da
