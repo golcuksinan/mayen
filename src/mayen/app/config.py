@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from mayen.core.models import ModelConfigError, ModelRegistry
 from mayen.ports.models import ModelRecord
@@ -22,3 +22,18 @@ def load_models(path: Path, env: Mapping[str, str]) -> ModelRegistry:
     return ModelRegistry(
         _records.validate_python(raw.get("models", {})), env[ACTIVE_MODEL_ENV], env
     )
+
+
+class StorageConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: Path
+
+
+def storage_path(path: Path) -> Path:
+    """YAML'ın `storage` bölümünden veritabanı dosyası (§11.6). Göreli yol config dosyasının
+    yanına göredir: çalışma dizinine göre olsaydı, servisi başka yerden başlatmak boş bir
+    veritabanı açardı."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    storage = StorageConfig.model_validate(raw.get("storage"))
+    return path.parent / storage.path.expanduser()

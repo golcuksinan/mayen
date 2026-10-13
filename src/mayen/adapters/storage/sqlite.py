@@ -1,0 +1,269 @@
+"""SQLite deposu (§11.6): tek dosya, tek sahip, WAL; şema sürümlü, sözlük `ports`'tan.
+
+Süreçte tek bağlantı vardır ve bir kilitle sıraya girer; SQLite'ta yazmalar WAL'da da tek
+yazarlıdır, bağlantı çoğaltmak yalnızca kilit beklemesini hataya çevirir. Bunun karşılığı tek
+kuraldır: bir transaction asla bir LLM ya da HTTP çağrısını kapsamaz.
+
+`autocommit=True` altında `Connection.commit()`/`.rollback()` sessizce hiçbir şey yapmaz;
+transaction düz `BEGIN`/`COMMIT`/`ROLLBACK` SQL'iyle yönetilir. `executescript` örtük COMMIT
+yaptığı için kullanılmaz; migration'lar ifade ifade aynı transaction'da çalışır.
+"""
+
+import fcntl
+import json
+import sqlite3
+import threading
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from datetime import datetime
+from enum import StrEnum
+from pathlib import Path
+from types import TracebackType
+from typing import IO, Any, Self
+from uuid import UUID
+
+from mayen.ports.events import Event, EventId, EventKind, Header, parse_stamp, stamp
+from mayen.ports.tools import Status
+from mayen.ports.triggers import TurnId
+
+# Ayrı bir bağlantının (yedek gibi) tuttuğu yazma kilidi için beklenecek süre.
+BUSY_TIMEOUT_MS = 5_000
+
+
+class StorageError(Exception):
+    """Veritabanı beklenen durumda değil; sessizce devam edilmez (§14)."""
+
+
+def check_in(column: str, vocabulary: type[StrEnum]) -> str:
+    """Saklanan sözlüğün CHECK kısıtı (§11.6). Açılışta veritabanındakiyle karşılaştırılır."""
+    values = ", ".join(f"'{v.value}'" for v in vocabulary)
+    return f"CHECK ({column} IN ({values}))"
+
+
+# Hangi tablonun hangi sütunu hangi sözlüğe bağlı. Sözlük büyüyünce açılış kırılır ve kısıtı
+# yeniden kuran bir migration gerekir; eski kısıt, yeni değeri yazma anında reddederdi.
+VOCABULARIES: Sequence[tuple[str, str, type[StrEnum]]] = (
+    ("events", "kind", EventKind),
+    ("events", "status", Status),
+)
+
+# Sürüm = sıradaki yeri (1'den başlar). Uygulanmış bir migration değiştirilmez; düzeltme
+# yeni bir migration'dır.
+MIGRATIONS: Sequence[Sequence[str]] = (
+    (
+        f"""CREATE TABLE events (
+            seq INTEGER PRIMARY KEY,
+            id TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL {check_in("kind", EventKind)},
+            source TEXT NOT NULL,
+            time TEXT NOT NULL,
+            session TEXT,
+            turn_id TEXT,
+            duration_s REAL,
+            status TEXT {check_in("status", Status)},
+            body TEXT NOT NULL
+        ) STRICT""",
+        # İlgili kayıtlar ayrı tabloda: sil, bir kaydın kopyalarını dizinle bulur (§11.4).
+        """CREATE TABLE event_related (
+            event_seq INTEGER NOT NULL REFERENCES events (seq) ON DELETE CASCADE,
+            record_id TEXT NOT NULL,
+            PRIMARY KEY (event_seq, record_id)
+        ) STRICT""",
+        "CREATE INDEX events_time ON events (time, seq)",
+        "CREATE INDEX events_session ON events (session, time, seq)",
+        "CREATE INDEX events_turn ON events (turn_id, time, seq)",
+        "CREATE INDEX event_related_record ON event_related (record_id)",
+    ),
+)
+
+
+def _own(path: Path) -> IO[str]:
+    """Dosyanın tek sahibi olunduğunu kilitle zorlar (§3): ikinci süreç açamaz."""
+    lock_path = path.with_name(f"{path.name}.lock")
+    handle = lock_path.open("w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise StorageError(f"database is open in another process: {path}") from None
+    return handle
+
+
+class Database:
+    """Sahibi olunan SQLite dosyası; açılışta bekleyen migration'lar uygulanır."""
+
+    def __init__(self, path: Path, migrations: Sequence[Sequence[str]] = MIGRATIONS) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        # Kilit bağlantıdan sonra: yanlış yolun hatası kilit dosyasının hatası gibi görünmesin.
+        self._conn = sqlite3.connect(path, autocommit=True, check_same_thread=False)
+        try:
+            self._owner = _own(path)
+        except StorageError:
+            self._conn.close()
+            raise
+        try:
+            self._configure()
+            self.migrate(migrations)
+            self._check_vocabularies()
+        except BaseException:
+            self.close()
+            raise
+
+    def _configure(self) -> None:
+        mode = str(self._conn.execute("PRAGMA journal_mode = WAL").fetchone()[0])
+        if mode.lower() != "wal":
+            # Ağ dosya sistemlerinde WAL sessizce reddedilir.
+            raise StorageError(f"could not enable WAL, journal mode is {mode!r}: {self.path}")
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        self._conn.execute("PRAGMA synchronous = NORMAL")
+        self._conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Tek bir işlem; hata olursa geri alınır ve yükselir. Okumalar da buradan geçer."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
+
+    def version(self) -> int:
+        with self.transaction() as conn:
+            return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+    def migrate(self, migrations: Sequence[Sequence[str]]) -> None:
+        """Bekleyen migration'lar sırayla; her biri sürüm damgasıyla aynı transaction'da."""
+        current = self.version()
+        if current > len(migrations):
+            # Eski kodun yeni şemayı tanıdığını varsaymak sessiz bozulmanın en kısa yolu.
+            raise StorageError(
+                f"database version {current} is newer than the code ({len(migrations)})"
+            )
+        for number, statements in enumerate(migrations[current:], start=current + 1):
+            try:
+                with self.transaction() as conn:
+                    for statement in statements:
+                        conn.execute(statement)
+                    # PRAGMA bağlama kabul etmez; değer koddaki sıradan gelir.
+                    conn.execute(f"PRAGMA user_version = {number}")
+            except sqlite3.Error as e:
+                raise StorageError(f"migration {number} failed: {e}") from e
+
+    def _check_vocabularies(self) -> None:
+        with self.transaction() as conn:
+            for table, column, vocabulary in VOCABULARIES:
+                row = conn.execute(
+                    "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?", (table,)
+                ).fetchone()
+                if row is None or check_in(column, vocabulary) not in row[0]:
+                    raise StorageError(
+                        f"{table}.{column} constraint differs from {vocabulary.__name__}; "
+                        "a migration must rebuild it"
+                    )
+
+    def close(self) -> None:
+        self._conn.close()
+        # Kilit bağlantıdan sonra bırakılır; tersinde kapanan dosyayı başkası açabilirdi.
+        self._owner.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+
+class SqliteEventLog:
+    """Olay kaydı (§11) SQLite'ta."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def append(self, event: Event) -> None:
+        h = event.header
+        body = json.dumps(event.body, ensure_ascii=False, allow_nan=False)
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                "INSERT INTO events (id, kind, source, time, session, turn_id, duration_s,"
+                " status, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(h.id),
+                    h.kind.value,
+                    h.source,
+                    stamp(h.time),
+                    h.session,
+                    None if h.turn_id is None else str(h.turn_id),
+                    h.duration_s,
+                    None if h.status is None else h.status.value,
+                    body,
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO event_related (event_seq, record_id) VALUES (?, ?)",
+                [(cursor.lastrowid, record) for record in dict.fromkeys(h.related)],
+            )
+
+    def read(
+        self,
+        *,
+        session: str | None = None,
+        turn_id: TurnId | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[Event]:
+        where: list[str] = []
+        params: list[str] = []
+        if session is not None:
+            where.append("session = ?")
+            params.append(session)
+        if turn_id is not None:
+            where.append("turn_id = ?")
+            params.append(str(turn_id))
+        if since is not None:
+            where.append("time >= ?")
+            params.append(stamp(since))
+        if until is not None:
+            where.append("time < ?")
+            params.append(stamp(until))
+        condition = f"WHERE {' AND '.join(where)}" if where else ""
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT seq, id, kind, source, time, session, turn_id, duration_s, status, body"
+                f" FROM events {condition} ORDER BY time, seq",
+                params,
+            ).fetchall()
+            related: dict[int, list[str]] = {}
+            for seq, record in conn.execute(
+                "SELECT event_seq, record_id FROM event_related"
+                f" WHERE event_seq IN (SELECT seq FROM events {condition})"
+                " ORDER BY rowid",
+                params,
+            ):
+                related.setdefault(seq, []).append(record)
+        return [_event(row, related.get(row[0], [])) for row in rows]
+
+
+def _event(row: tuple[Any, ...], related: list[str]) -> Event:
+    # STRICT tablo sütun tiplerini zorlar; satır burada dataclass'a çevrilir ve yukarı çıkmaz.
+    _, id_, kind, source, time, session, turn_id, duration_s, status, body = row
+    header = Header(
+        id=EventId(UUID(id_)),
+        kind=EventKind(kind),
+        source=source,
+        time=parse_stamp(time),
+        session=session,
+        turn_id=None if turn_id is None else TurnId(UUID(turn_id)),
+        duration_s=duration_s,
+        status=None if status is None else Status(status),
+        related=tuple(related),
+    )
+    return Event(header, json.loads(body))
