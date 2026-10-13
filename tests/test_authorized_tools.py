@@ -97,6 +97,7 @@ class Gate:
         args: BaseModel,
         kind: Confirmation,
         execute: Callable[[], Awaitable[ToolResult]],
+        requester: Caller,
     ) -> None:
         self.kind = kind
         self.execute = execute

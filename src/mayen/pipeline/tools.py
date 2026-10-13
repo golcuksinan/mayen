@@ -41,6 +41,7 @@ class ConfirmationGate(Protocol):
         args: BaseModel,
         kind: Confirmation,
         execute: Callable[[], Awaitable[ToolResult]],
+        requester: Caller,
     ) -> None: ...
 
 
@@ -130,7 +131,7 @@ class AuthorizedTools:
             async def run_confirmed() -> ToolResult:
                 return filter_records(await execute(spec, args, self._ctx), caller, self._table)
 
-            await self._gate.request(spec, args, decision.confirmation, run_confirmed)
+            await self._gate.request(spec, args, decision.confirmation, run_confirmed, caller)
             # Model burada konuşmaz; soruyu kapı plandan yazdırıp okutur (§10.5).
             return {"status": AWAITING_CONFIRMATION}, FunctionCallResultProperties(
                 run_llm=False
