@@ -135,6 +135,7 @@ class TriggerGate(FrameProcessor):
         self._responding = False
         self._open_calls: set[str] = set()
         self._awaiting_since: float | None = None
+        self._answered = False  # son söz başladığından beri model cevap verdi mi
         self._quiet_since: float | None = None
         self._unanswered = False
         self._ticker: asyncio.Task[None] | None = None
@@ -151,6 +152,7 @@ class TriggerGate(FrameProcessor):
 
     def response_started(self) -> None:
         self._responding = True
+        self._answered = True
         self._awaiting_since = None
 
     def response_stopped(self) -> None:
@@ -225,6 +227,7 @@ class TriggerGate(FrameProcessor):
         await super().process_frame(frame, direction)
         if isinstance(frame, UserStartedSpeakingFrame):
             self._user_speaking = True
+            self._answered = False
             self._quiet_since = None
             voice_turn = (
                 self._turn is not None and self._turn.trigger.source is TriggerSource.VOICE
@@ -236,8 +239,10 @@ class TriggerGate(FrameProcessor):
                 )
                 await self._sessions.submit(trigger)
         elif isinstance(frame, UserStoppedSpeakingFrame | UserMuteStartedFrame):
-            # Susturma sözün ortasında başlarsa sözün bittiği hiç duyulmaz.
-            if self._user_speaking:
+            # Susturma sözün ortasında başlarsa sözün bittiği hiç duyulmaz. Cevap sözün
+            # bittiği duyulmadan gelmiş olabilir: onay kapısının yuttuğu söz, toplayıcıya
+            # metin ulaşmadığı için ancak onun zaman aşımıyla biter.
+            if self._user_speaking and not self._answered:
                 self._awaiting_since = time.monotonic()
             self._user_speaking = False
         elif isinstance(frame, TranscriptionFrame) and not self._identified:

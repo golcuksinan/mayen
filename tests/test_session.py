@@ -318,3 +318,21 @@ async def test_unanswered_turn_says_so_in_the_finish_event() -> None:
     await run(gate, frames)
     [done] = log.of(EventKind.TURN_FINISHED)
     assert done.body == {"unanswered": True}
+
+
+async def test_speech_answered_before_it_is_heard_to_end_expects_nothing() -> None:
+    """Onay kapısının yuttuğu söz geç biter; cevap o arada geldiyse yeni cevap beklenmez."""
+    log = MemoryEventLog()
+    _, gate = make(log=log)
+    frames: list[Frame] = [
+        UserStartedSpeakingFrame(),
+        Call(gate.response_started),
+        Call(gate.response_stopped),
+        SleepFrame(0.05),  # adımlar kapıdan sonra çalışır; söz bitişi cevaptan sonra gelsin
+        UserStoppedSpeakingFrame(),
+        SleepFrame(SETTLE_S * 4),
+    ]
+    await run(gate, frames)
+    [done] = log.of(EventKind.TURN_FINISHED)
+    assert done.body == {"unanswered": False}
+    assert done.header.duration_s is not None and done.header.duration_s < TIMEOUT_S
