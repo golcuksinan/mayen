@@ -1,0 +1,86 @@
+"""Hattan olay üretimi (§5.5): Pipecat gözlemcisinin gördüğü kareler ve oturum bağlamı.
+
+Ayrı bir olay altyapısı yoktur; gözlemci her kareyi ilk itilişinde bir kez görür ve
+olaya dönüştürdüklerini çekirdeğin `Recorder`'ına verir. Mayen'in kendi katmanındaki
+olaylar (tur, tool, onay) onları üreten işlemcilerde yayımlanır.
+"""
+
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
+from pipecat.frames.frames import MetricsFrame, TranscriptionFrame
+from pipecat.metrics.metrics import LLMUsageMetricsData
+from pipecat.observers.base_observer import BaseObserver, FramePushed
+
+from mayen.core.events import Recorder
+from mayen.ports.events import Event, EventKind
+from mayen.ports.tools import Status
+from mayen.ports.triggers import TurnId
+
+
+class SessionEvents:
+    """Bir oturumun olayları: oturum ve o anki tur kimliği başlığa kendiliğinden girer."""
+
+    def __init__(
+        self, recorder: Recorder, session: str, turn: Callable[[], TurnId | None]
+    ) -> None:
+        self._recorder = recorder
+        self.session = session
+        self._turn = turn
+
+    def monotonic(self) -> float:
+        return self._recorder.clock.monotonic()
+
+    def emit(
+        self,
+        kind: EventKind,
+        source: str,
+        body: Mapping[str, Any] | None = None,
+        *,
+        duration_s: float | None = None,
+        status: Status | None = None,
+        related: Sequence[str] = (),
+    ) -> Event:
+        return self._recorder.emit(
+            kind,
+            source,
+            body,
+            session=self.session,
+            turn_id=self._turn(),
+            duration_s=duration_s,
+            status=status,
+            related=related,
+        )
+
+
+class EventObserver(BaseObserver):
+    """STT segmentleri ve LLM token sayıları; token sayısı yalnızca hatta kullanım
+    ölçümü açıkken gelir."""
+
+    def __init__(self, events: SessionEvents) -> None:
+        # Her kare hattın her adımında yeniden itilir; olay ilk itilişte bir kez üretilir.
+        super().__init__(observe_every_push=False)
+        self._events = events
+
+    async def on_push_frame(self, data: FramePushed) -> None:
+        frame = data.frame
+        if isinstance(frame, TranscriptionFrame):
+            self._events.emit(
+                EventKind.STT_SEGMENT,
+                __name__,
+                {
+                    "text": frame.text,
+                    "language": None if frame.language is None else str(frame.language),
+                    "finalized": frame.finalized,
+                },
+                status=Status.OK,
+            )
+        elif isinstance(frame, MetricsFrame):
+            for metric in frame.data:
+                if isinstance(metric, LLMUsageMetricsData):
+                    self._events.emit(
+                        EventKind.LLM_USAGE,
+                        __name__,
+                        {"model": metric.model, **metric.value.model_dump(exclude_none=True)},
+                        status=Status.OK,
+                    )

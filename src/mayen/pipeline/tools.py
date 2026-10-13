@@ -7,6 +7,7 @@ bir konuşmadır.
 """
 
 import asyncio
+import dataclasses
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
@@ -18,6 +19,8 @@ from pydantic import BaseModel
 
 from mayen.core.policy import PolicyTable, decide, filter_records
 from mayen.core.registry import ToolRegistry, parse_args
+from mayen.pipeline.events import SessionEvents
+from mayen.ports.events import EventKind
 from mayen.ports.tools import (
     Caller,
     Confirmation,
@@ -78,6 +81,7 @@ class AuthorizedTools:
         gate: ConfirmationGate,
         caller: Callable[[], Caller],
         flags: Callable[[], TurnFlags],
+        events: SessionEvents,
     ) -> None:
         self._registry = registry
         self._table = table
@@ -86,6 +90,7 @@ class AuthorizedTools:
         # Çağıran ve işaretler çağrı anında oturum durumundan okunur (§8.1).
         self._caller = caller
         self._flags = flags
+        self._events = events
 
     def schema(self) -> ToolsSchema:
         functions = []
@@ -118,18 +123,21 @@ class AuthorizedTools:
         """Tek bir çağrı: doğrula, karar ver, uygula. Pipecat'siz test edilebilsin diye ayrı."""
         args = parse_args(spec, raw)
         if isinstance(args, str):
-            return to_model(ToolResult(Status.ERROR, error=args)), None
+            return to_model(self._refused(spec, dict(raw), Status.ERROR, args)), None
 
         caller = self._caller()
         decision = decide(spec, caller, self._table, self._flags())
         if decision.verdict is Verdict.DENY:
-            return to_model(ToolResult(Status.DENIED, error=decision.reason)), None
+            arguments = args.model_dump(mode="json")
+            return to_model(
+                self._refused(spec, arguments, Status.DENIED, decision.reason)
+            ), None
 
         if decision.verdict is Verdict.CONFIRM:
             assert decision.confirmation is not None
 
             async def run_confirmed() -> ToolResult:
-                return filter_records(await execute(spec, args, self._ctx), caller, self._table)
+                return await self._run(spec, args, caller)
 
             await self._gate.request(spec, args, decision.confirmation, run_confirmed, caller)
             # Model burada konuşmaz; soruyu kapı plandan yazdırıp okutur (§10.5).
@@ -137,5 +145,29 @@ class AuthorizedTools:
                 run_llm=False
             )
 
+        return to_model(await self._run(spec, args, caller)), None
+
+    async def _run(self, spec: ToolSpec[Any], args: BaseModel, caller: Caller) -> ToolResult:
+        """Gövdenin çalışması olay kaydına girer; eylem geçmişi bu olaylardır (§11)."""
+        body = {"tool": spec.name, "arguments": args.model_dump(mode="json")}
+        self._events.emit(EventKind.TOOL_STARTED, __name__, body)
+        started = self._events.monotonic()
         result = await execute(spec, args, self._ctx)
-        return to_model(filter_records(result, caller, self._table)), None
+        self._events.emit(
+            EventKind.TOOL_FINISHED,
+            __name__,
+            # Sonuç zarfının skill kısmı, yetki süzgecinden önce (§5.5).
+            {**body, "result": dataclasses.asdict(result)},
+            duration_s=self._events.monotonic() - started,
+            status=result.status,
+        )
+        return filter_records(result, caller, self._table)
+
+    def _refused(
+        self, spec: ToolSpec[Any], arguments: dict[str, Any], status: Status, error: str
+    ) -> ToolResult:
+        """Gövdesi hiç çalışmayan çağrı da eylem geçmişindedir."""
+        result = ToolResult(status, error=error)
+        body = {"tool": spec.name, "arguments": arguments, "result": dataclasses.asdict(result)}
+        self._events.emit(EventKind.TOOL_FINISHED, __name__, body, status=status)
+        return result

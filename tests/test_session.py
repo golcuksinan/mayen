@@ -22,9 +22,12 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.tests.utils import SleepFrame, run_test
 
+from fakes import MemoryEventLog
+from mayen.core.events import Recorder, SystemClock
 from mayen.core.turns import Turns
 from mayen.pipeline.session import HeardOnly, Sessions, TriggerGate
-from mayen.ports.tools import Caller, Role
+from mayen.ports.events import EventKind
+from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource
 
 OWNER = Caller(Role.OWNER, "p1", has_personal_device=True)
@@ -55,6 +58,7 @@ class Steps(FrameProcessor):
 def make(
     fates: dict[TriggerSource, Fate] | None = None,
     holds: Sequence[Callable[[], bool]] = (),
+    log: MemoryEventLog | None = None,
 ) -> tuple[Sessions, TriggerGate]:
     turns = Turns(fates or dict.fromkeys(TriggerSource, Fate.CANCEL))
     sessions = Sessions(turns, Priority.NORMAL)
@@ -62,6 +66,7 @@ def make(
         "s1",
         sessions,
         lambda _: OWNER,
+        Recorder(log or MemoryEventLog(), SystemClock()),
         settle_s=SETTLE_S,
         response_timeout_s=TIMEOUT_S,
         holds=holds,
@@ -274,3 +279,42 @@ async def test_restarted_voice_turn_runs_the_model_again() -> None:
     ]
     down, _ = await run(gate, frames)
     assert any(isinstance(f, LLMRunFrame) for f in down)
+
+
+async def test_turn_events_carry_session_turn_and_duration() -> None:
+    log = MemoryEventLog()
+    sessions, gate = make(log=log)
+    frames: list[Frame] = [
+        Call(lambda: sessions.submit(trig(Priority.LOW, content="chat"))),
+        Call(lambda: sessions.submit(trig(Priority.URGENT, content="alarm"))),
+        Call(gate.response_started),
+        Call(gate.response_stopped),
+        SleepFrame(SETTLE_S * 3),
+    ]
+    await run(gate, frames)
+
+    assert log.kinds() == [
+        EventKind.TURN_STARTED,
+        EventKind.TURN_INTERRUPTED,
+        EventKind.TURN_STARTED,
+        EventKind.TURN_FINISHED,
+    ]
+    first, cut, second, done = (e.header for e in log.events)
+    assert {h.session for h in (first, cut, second, done)} == {"s1"}
+    assert cut.turn_id == first.turn_id != second.turn_id == done.turn_id
+    assert cut.status is Status.CANCELLED and log.events[1].body == {"fate": "cancel"}
+    assert done.status is Status.OK and done.duration_s is not None
+    assert done.duration_s >= SETTLE_S
+    assert log.events[3].body == {"unanswered": False}
+
+
+async def test_unanswered_turn_says_so_in_the_finish_event() -> None:
+    log = MemoryEventLog()
+    sessions, gate = make(log=log)
+    frames: list[Frame] = [
+        Call(lambda: sessions.submit(trig(Priority.NORMAL))),
+        SleepFrame(TIMEOUT_S + SETTLE_S * 3),
+    ]
+    await run(gate, frames)
+    [done] = log.of(EventKind.TURN_FINISHED)
+    assert done.body == {"unanswered": True}

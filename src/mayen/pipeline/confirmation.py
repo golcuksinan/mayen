@@ -37,6 +37,7 @@ from mayen.core.confirmation import (
     next_step,
     resolve_answer,
 )
+from mayen.pipeline.events import SessionEvents
 from mayen.pipeline.tools import to_model
 from mayen.ports.confirmation import (
     Answer,
@@ -45,13 +46,23 @@ from mayen.ports.confirmation import (
     PlannedCall,
     QuestionWriter,
 )
-from mayen.ports.tools import Caller, Confirmation, ToolResult, ToolSpec
+from mayen.ports.events import EventKind
+from mayen.ports.tools import Caller, Confirmation, Status, ToolResult, ToolSpec
 
 log = logging.getLogger(__name__)
 
 # Segmenti kimin söylediği; hattı kuran bağlar. Konuşmacı tanıma geldiğinde değişen
 # yalnızca bu kaynaktır, kapı ve kural değişmez (§10.5 adım 4).
 type SpeakerSource = Callable[[TranscriptionFrame], str | None]
+
+# Planın kapanışı olay başlığında hangi durumla görünür (§5.5).
+OUTCOME_STATUS = {
+    Outcome.CONFIRMED: Status.OK,
+    Outcome.REJECTED: Status.DENIED,
+    Outcome.TIMED_OUT: Status.TIMEOUT,
+    Outcome.CANCELLED: Status.CANCELLED,
+    Outcome.ERROR: Status.ERROR,
+}
 
 
 class ConfirmationGateProcessor(FrameProcessor):
@@ -61,12 +72,15 @@ class ConfirmationGateProcessor(FrameProcessor):
         resolver: AnswerResolver,
         timeout_s: float,
         speaker: SpeakerSource,
+        events: SessionEvents,
     ) -> None:
         super().__init__()
         self._writer = writer
         self._resolver = resolver
         self._timeout_s = timeout_s
         self._speaker = speaker
+        self._events = events
+        self._opened_at: float | None = None
         self._plan: Plan | None = None
         self._open_calls: set[str] = set()
         self._asking: asyncio.Task[None] | None = None
@@ -96,6 +110,7 @@ class ConfirmationGateProcessor(FrameProcessor):
         if self._plan is None:
             # Önce durum, sonra cümle (§5.4).
             self._plan = Plan(requester)
+            self._opened_at = self._events.monotonic()
         self._plan.entries.append(Entry(call, kind, execute))
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -126,7 +141,8 @@ class ConfirmationGateProcessor(FrameProcessor):
             for _ in range(2):
                 question = await self._writer.write(plan.calls)
                 missing = missing_values(plan.calls, question)
-                log.info("confirmation question missing=%s question=%r", missing, question)
+                # Loga içerik girmez (§14): eksik değerlerin kendisi değil sayısı.
+                log.info("confirmation question written, %d values missing", len(missing))
                 if not missing:
                     plan.question = question
                     await self._read(plan)
@@ -156,18 +172,18 @@ class ConfirmationGateProcessor(FrameProcessor):
     async def _answer(self, plan: Plan, answer: Answer) -> None:
         async with self._lock:
             if self._plan is not plan:
-                log.warning("segment after the plan closed dropped: %r", answer.text)
+                log.warning("segment after the plan closed dropped")
                 return
             if not plan.question:
                 # Soru okunmadan gelen söz cevap sayılamaz: sorulmamış bir şeye verilmiştir.
-                log.warning("segment before the question dropped: %r", answer.text)
+                log.warning("segment before the question dropped")
                 return
             try:
                 resolution = await resolve_answer(plan, answer, self._resolver)
             except Exception as e:  # kısıt dışı cevap belirsiz değil, hatadır (§10.5 adım 4)
                 await self._finish(plan, Outcome.ERROR, error=str(e))
                 return
-            log.info("confirmation answer=%r → %s", answer.text, resolution)
+            log.info("confirmation answer resolved: %s", resolution)
             match next_step(plan, resolution):
                 case Step.EXECUTE:
                     # Yan etkili çağrılar sırayla çalışır (§9.3).
@@ -195,7 +211,11 @@ class ConfirmationGateProcessor(FrameProcessor):
         self._timer = None
         self._asking = None
         self._plan = None
-        await self._report(plan.calls, outcome, results=results, speak=speak, **detail)
+        opened, self._opened_at = self._opened_at, None
+        duration_s = None if opened is None else self._events.monotonic() - opened
+        await self._report(
+            plan.calls, outcome, results=results, speak=speak, duration_s=duration_s, **detail
+        )
 
     async def _report(
         self,
@@ -204,6 +224,7 @@ class ConfirmationGateProcessor(FrameProcessor):
         *,
         results: list[dict[str, Any]] | None = None,
         speak: bool = True,
+        duration_s: float | None = None,
         **detail: str,
     ) -> None:
         """Planın sonucu modele bir geliştirici mesajı olarak eklenir; çağrının sonucu
@@ -212,10 +233,15 @@ class ConfirmationGateProcessor(FrameProcessor):
         if results is not None:
             for item, result in zip(listed, results, strict=True):
                 item["result"] = result
-        content = json.dumps(
-            {"confirmation": outcome.value, "calls": listed, **detail}, ensure_ascii=False
+        report = {"confirmation": outcome.value, "calls": listed, **detail}
+        self._events.emit(
+            EventKind.CONFIRMATION_CLOSED,
+            __name__,
+            report,
+            duration_s=duration_s,
+            status=OUTCOME_STATUS[outcome],
         )
-        log.info("confirmation closed %s", content)
+        content = json.dumps(report, ensure_ascii=False)
         await self.push_frame(
             LLMMessagesAppendFrame(
                 messages=[{"role": "developer", "content": content}], run_llm=speak

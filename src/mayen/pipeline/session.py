@@ -13,7 +13,6 @@ yeniden söylenir. Susturma Pipecat'in kullanıcı susturma stratejisiyle yapıl
 
 import asyncio
 import json
-import logging
 import time
 from collections.abc import Callable, Sequence
 
@@ -38,11 +37,11 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 
+from mayen.core.events import Recorder
 from mayen.core.turns import Interrupt, Start, Turn, Turns
-from mayen.ports.tools import Caller, Role
+from mayen.ports.events import EventKind
+from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource, TurnId
-
-log = logging.getLogger(__name__)
 
 # İlk segmentin konuşmacısı; hattı kuran bağlar. Konuşmacı tanıma gelince değişen yalnızca
 # bu kaynaktır (onay kapısındaki `SpeakerSource` gibi).
@@ -110,6 +109,7 @@ class TriggerGate(FrameProcessor):
         session: str,
         sessions: Sessions,
         caller: CallerSource,
+        recorder: Recorder,
         *,
         settle_s: float,
         response_timeout_s: float,
@@ -119,6 +119,8 @@ class TriggerGate(FrameProcessor):
         self.session = session
         self._sessions = sessions
         self._caller = caller
+        self._recorder = recorder
+        self._started_at = 0.0
         self._settle_s = settle_s
         self._response_timeout_s = response_timeout_s
         self._holds = holds  # turu açık tutan başka durumlar; onay beklemek gibi (§5.4)
@@ -130,6 +132,7 @@ class TriggerGate(FrameProcessor):
         self._open_calls: set[str] = set()
         self._awaiting_since: float | None = None
         self._quiet_since: float | None = None
+        self._unanswered = False
         self._ticker: asyncio.Task[None] | None = None
         sessions.attach(self)
 
@@ -154,9 +157,15 @@ class TriggerGate(FrameProcessor):
     async def start(self, turn: Turn, *, fresh: bool) -> None:
         self._turn = turn
         self._quiet_since = None
+        self._unanswered = False
         source = turn.trigger.source
         self._identified = source is not TriggerSource.VOICE or not fresh
-        log.info("turn %s started: %s %s", turn.id, source, turn.trigger.priority)
+        self._started_at = self._recorder.clock.monotonic()
+        self._emit(
+            EventKind.TURN_STARTED,
+            turn,
+            {"source": source.value, "priority": turn.trigger.priority.value, "fresh": fresh},
+        )
         if source is TriggerSource.VOICE:
             if fresh:
                 return  # söz zaten hatta; cevabı Pipecat tetikler
@@ -185,7 +194,13 @@ class TriggerGate(FrameProcessor):
             )
 
     async def interrupt(self, turn: Turn, fate: Fate, *, already_cut: bool) -> None:
-        log.info("turn %s interrupted: %s", turn.id, fate)
+        self._emit(
+            EventKind.TURN_INTERRUPTED,
+            turn,
+            {"fate": fate.value},
+            duration_s=self._elapsed(turn),
+            status=Status.CANCELLED,
+        )
         self._turn = None
         self._responding = False
         self._awaiting_since = None
@@ -239,6 +254,31 @@ class TriggerGate(FrameProcessor):
             await self.cancel_task(self._ticker)
             self._ticker = None
 
+    def _elapsed(self, turn: Turn) -> float | None:
+        # Kapı yalnızca kendi yürüttüğü turun başlangıcını bilir.
+        if self._turn is None or self._turn.id != turn.id:
+            return None
+        return self._recorder.clock.monotonic() - self._started_at
+
+    def _emit(
+        self,
+        kind: EventKind,
+        turn: Turn,
+        body: dict[str, object],
+        *,
+        duration_s: float | None = None,
+        status: Status | None = None,
+    ) -> None:
+        self._recorder.emit(
+            kind,
+            __name__,
+            body,
+            session=self.session,
+            turn_id=turn.id,
+            duration_s=duration_s,
+            status=status,
+        )
+
     async def _push_run(self, frame: Frame) -> None:
         self._awaiting_since = time.monotonic()
         await self.push_frame(frame)
@@ -246,7 +286,8 @@ class TriggerGate(FrameProcessor):
     def _quiet(self, now: float) -> bool:
         awaiting = self._awaiting_since
         if awaiting is not None and now - awaiting >= self._response_timeout_s:
-            log.info("turn %s: no response, closing", self._turn and self._turn.id)
+            # Cevap gelmedi; tur sessizce kapanacak, sebebi bitiş olayının gövdesindedir.
+            self._unanswered = True
             self._awaiting_since = awaiting = None
         return not (
             self._user_speaking
@@ -268,9 +309,15 @@ class TriggerGate(FrameProcessor):
             if self._quiet_since is None:
                 self._quiet_since = now
             elif now - self._quiet_since >= self._settle_s:
+                self._emit(
+                    EventKind.TURN_FINISHED,
+                    turn,
+                    {"unanswered": self._unanswered},
+                    duration_s=self._elapsed(turn),
+                    status=Status.OK,
+                )
                 self._turn = None
                 self._quiet_since = None
-                log.info("turn %s finished", turn.id)
                 await self._sessions.finished(turn.id)
 
 

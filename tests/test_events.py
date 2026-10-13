@@ -2,34 +2,17 @@
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from fakes import T0, FakeClock
 from mayen.adapters.storage.sqlite import Database, SqliteEventLog
 from mayen.core.events import Recorder
 from mayen.ports.events import EventKind, parse_stamp, stamp
 from mayen.ports.tools import Status
 from mayen.ports.triggers import TurnId
-
-T0 = datetime(2026, 10, 13, 12, 0, 0, tzinfo=UTC)
-
-
-class FakeClock:
-    def __init__(self, start: datetime = T0) -> None:
-        self.wall = start
-        self.mono = 0.0
-
-    def now(self) -> datetime:
-        return self.wall
-
-    def monotonic(self) -> float:
-        return self.mono
-
-    def advance(self, seconds: float) -> None:
-        self.wall += timedelta(seconds=seconds)
-        self.mono += seconds
 
 
 def test_stamp_is_utc_iso_with_fixed_width() -> None:

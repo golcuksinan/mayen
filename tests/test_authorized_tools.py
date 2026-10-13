@@ -6,9 +6,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from fakes import FakeClock, MemoryEventLog
+from mayen.core.events import Recorder
 from mayen.core.policy import ROLE_TABLE
 from mayen.core.registry import ToolRegistry
+from mayen.pipeline.events import SessionEvents
 from mayen.pipeline.tools import AWAITING_CONFIRMATION, AuthorizedTools
+from mayen.ports.events import EventKind
 from mayen.ports.tools import (
     Caller,
     Confirmation,
@@ -103,11 +107,14 @@ class Gate:
         self.execute = execute
 
 
-def tools(caller: Caller = OWNER) -> tuple[AuthorizedTools, Ctx, Gate]:
+def tools(
+    caller: Caller = OWNER, log: MemoryEventLog | None = None
+) -> tuple[AuthorizedTools, Ctx, Gate]:
     ctx, gate = Ctx(), Gate()
     registry = ToolRegistry([SEARCH, DELETE, SLOW, BROKEN])
+    events = SessionEvents(Recorder(log or MemoryEventLog(), FakeClock()), "s1", lambda: None)
     return (
-        AuthorizedTools(registry, ROLE_TABLE, ctx, gate, lambda: caller, TurnFlags),
+        AuthorizedTools(registry, ROLE_TABLE, ctx, gate, lambda: caller, TurnFlags, events),
         ctx,
         gate,
     )
@@ -176,3 +183,37 @@ def test_schema_lists_every_tool() -> None:
     assert names == ["note_search", "note_delete", "slow", "broken"]
     delete = schema.standard_tools[1]
     assert delete.required == ["id"]
+
+
+async def test_run_is_recorded_with_the_skills_own_result() -> None:
+    log = MemoryEventLog()
+    t, _, _ = tools(GUEST, log)
+    await t.call(SEARCH, {})
+    started, finished = log.events
+    assert started.header.kind is EventKind.TOOL_STARTED
+    assert started.body == {"tool": "note_search", "arguments": {}}
+    assert finished.header.kind is EventKind.TOOL_FINISHED
+    assert finished.header.status is Status.OK
+    assert finished.header.duration_s is not None
+    # Olay kaydı yetki süzgecinden önceki sonucu tutar; modele giden süzülmüş olandır.
+    assert len(finished.body["result"]["records"]) == 2
+    assert finished.header.session == "s1"
+
+
+async def test_refused_calls_are_recorded_without_a_start() -> None:
+    log = MemoryEventLog()
+    t, _, _ = tools(GUEST, log)
+    await t.call(DELETE, {"id": 1})
+    await t.call(DELETE, {"id": "first"})
+    assert log.kinds() == [EventKind.TOOL_FINISHED, EventKind.TOOL_FINISHED]
+    assert [e.header.status for e in log.events] == [Status.DENIED, Status.ERROR]
+
+
+async def test_confirmed_body_is_recorded_when_it_runs() -> None:
+    log = MemoryEventLog()
+    t, _, gate = tools(log=log)
+    await t.call(DELETE, {"id": 2})
+    assert log.events == []
+    assert gate.execute is not None
+    await gate.execute()
+    assert log.kinds() == [EventKind.TOOL_STARTED, EventKind.TOOL_FINISHED]
