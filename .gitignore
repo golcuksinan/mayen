@@ -1,7 +1,14 @@
-# Devir dosyası oturumlar arası notlardır, herkese açık depoya girmez.
-DEVIR.md
-.venv/
+# İzin listesi: yalnızca aşağıda adı geçenler depoya girer. Deney, kaynaklar, devir notları
+# ve yeni açılan her şey varsayılan olarak dışarıda kalır; kazara yayımlanamaz.
+/*
+!/.gitignore
+!/LICENSE
+!/pyproject.toml
+!/uv.lock
+!/src/
+!/tests/
+!/docs/
+/docs/*
+!/docs/ARCHITECTURE.md
+
 __pycache__/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
