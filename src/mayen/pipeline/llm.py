@@ -15,6 +15,8 @@ def llm_service(endpoint: Endpoint, system_instruction: str) -> OpenAILLMService
             system_instruction=system_instruction,
             extra={"extra_body": dict(endpoint.body)},
         ),
+        # Yan etkili çağrılar sırayla (§9.3); READ'lerin paralelliği izin, zorunluluk değil.
+        run_in_parallel=False,
     )
     # Şablon ortadaki geliştirici mesajını reddediyorsa Pipecat onu kullanıcı mesajına çevirir.
     service.supports_developer_role = endpoint.developer_role

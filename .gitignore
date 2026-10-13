@@ -10,5 +10,8 @@
 !/docs/
 /docs/*
 !/docs/ARCHITECTURE.md
+!/config/
+/config/*
+!/config/mayen.yaml.example
 
 __pycache__/

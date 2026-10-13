@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from fakes import FakeClock, MemoryEventLog
+from mayen.adapters.storage.memory import MemoryNoteStore
 from mayen.core.events import Recorder
 from mayen.core.policy import ROLE_TABLE
 from mayen.core.registry import ToolRegistry
@@ -37,21 +38,23 @@ class NoteId(BaseModel):
 
 class Ctx:
     def __init__(self) -> None:
-        self.notes: dict[int, tuple[Sensitivity, str]] = {
+        self.data: dict[int, tuple[Sensitivity, str]] = {
             1: (Sensitivity.GENERAL, "çöpü çıkar"),
             2: (Sensitivity.PERSONAL, "tahlil sonucu"),
         }
+        self.notes = MemoryNoteStore()
+        self.clock = FakeClock()
 
 
 async def _search(args: BaseModel, ctx: ToolContext) -> ToolResult:
     assert isinstance(ctx, Ctx)
-    records = [Record(s, {"id": i, "body": b}) for i, (s, b) in ctx.notes.items()]
+    records = [Record(s, {"id": i, "body": b}) for i, (s, b) in ctx.data.items()]
     return ToolResult(Status.OK, records=records)
 
 
 async def _delete(args: BaseModel, ctx: ToolContext) -> ToolResult:
     assert isinstance(args, NoteId) and isinstance(ctx, Ctx)
-    del ctx.notes[args.id]
+    del ctx.data[args.id]
     return ToolResult(Status.OK, {"deleted": args.id})
 
 
@@ -139,7 +142,7 @@ async def test_denied_call_does_not_run() -> None:
     t, ctx, gate = tools(GUEST)
     result, _ = await t.call(DELETE, {"id": 1})
     assert result["status"] == "denied"
-    assert 1 in ctx.notes
+    assert 1 in ctx.data
     assert gate.execute is None
 
 
@@ -156,12 +159,12 @@ async def test_confirmation_holds_the_body_and_silences_the_model() -> None:
     assert result == {"status": AWAITING_CONFIRMATION}
     assert props is not None and props.run_llm is False
     assert gate.kind is Confirmation.INTENT
-    assert 2 in ctx.notes, "onaydan önce gövde çalışmamalı"
+    assert 2 in ctx.data, "onaydan önce gövde çalışmamalı"
 
     assert gate.execute is not None
     done = await gate.execute()
     assert done.status is Status.OK
-    assert 2 not in ctx.notes
+    assert 2 not in ctx.data
 
 
 async def test_timeout_is_a_result() -> None:

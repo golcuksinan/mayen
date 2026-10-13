@@ -70,6 +70,10 @@ class Sessions:
             raise ValueError(f"session {gate.session!r} already has a gate")
         self._gates[gate.session] = gate
 
+    def running(self, session: str) -> Turn | None:
+        """Oturumun süren turu; sahibi tanındıysa güncel hâliyle (`identify`)."""
+        return self._turns.running(session)
+
     def hears(self, session: str) -> bool:
         return self._turns.hears(session, self._voice)
 

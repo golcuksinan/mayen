@@ -1,0 +1,49 @@
+# Mayen config örneği (ARCHITECTURE §14). Kopyalayıp `mayen.yaml` adıyla düzenleyin.
+# Göreli yollar bu dosyanın bulunduğu klasöre göredir. Gizli bilgiler buraya yazılmaz:
+# yalnızca tutuldukları ortam değişkeninin adı geçer.
+# Etkin model ortamdan seçilir: MAYEN_MODEL=<aşağıdaki models anahtarlarından biri>
+
+storage:
+  path: ~/.local/share/mayen/mayen.db
+
+prompts:
+  system: prompts/system.txt   # rol metni (persona ve kurallar), modele giden dilde
+
+output_language: English       # modelin kullanıcıya konuştuğu dil (§8.6)
+
+triggers:
+  voice_priority: normal       # sesli tetikleyicinin önceliği (§5.1)
+  max_running: 1               # aynı anda süren tur sayısı (§5.2)
+  settle_s: 1.0                # her şey bu kadar sessiz kalınca tur biter (§5.4)
+  response_timeout_s: 20       # beklenen cevap bu sürede başlamazsa tur sessizce kapanır
+  fates:                       # kesilen turun akıbeti, turu açan kaynağa göre (§5.3)
+    voice: cancel
+    text: restart
+    timer: restart
+    event: restart
+
+confirmation:
+  timeout_s: 20                # onay cevabı beklenen süre (§10.5)
+
+# Model deposu (§8.9, §8.10). Her rol her istekte kendi ayarlarını gönderir.
+models:
+  local:
+    base_url: http://127.0.0.1:8080/v1   # OpenAI uyumlu uç
+    model: my-model                      # sunucunun tanıdığı model adı
+    context_tokens: 16384
+    slot_field: id_slot                  # sunucu yuva seçimini bu gövde alanıyla yapıyorsa
+    developer_role: true                 # şablon ortadaki geliştirici mesajını kabul ediyor mu
+    thinking:
+      enabled: {chat_template_kwargs: {enable_thinking: true}}
+      disabled: {chat_template_kwargs: {enable_thinking: false}}
+    roles:
+      talker: {thinking: false, slot: 0, sampling: {temperature: 0.7}}
+      reasoner: {thinking: false, slot: 1, sampling: {temperature: 0.6}}
+  # cloud:
+  #   base_url: https://api.example.com/v1
+  #   model: some-model
+  #   context_tokens: 131072
+  #   api_key_env: EXAMPLE_API_KEY       # anahtarın kendisi değil, değişkenin adı
+  #   roles:
+  #     talker: {thinking: false}
+  #     reasoner: {thinking: false}

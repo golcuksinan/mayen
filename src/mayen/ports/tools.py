@@ -3,9 +3,13 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:  # döngü: bu portlar `ports.tools`'un sözlüğünü kullanır
+    from mayen.ports.events import Clock
+    from mayen.ports.notes import NoteStore
 
 
 class Effect(StrEnum):
@@ -98,7 +102,16 @@ class ToolResult:
 
 
 class ToolContext(Protocol):
-    """Skill'e verilen bağlam: yalnızca depo portları taşır, veritabanı tutamacı asla (§9.1)."""
+    """Skill'e verilen bağlam: yalnızca depo portları taşır, veritabanı tutamacı asla (§9.1).
+
+    Saat de buradadır: zamanı her modül ortak saatten alır (§5.5).
+    """
+
+    @property
+    def notes(self) -> "NoteStore": ...
+
+    @property
+    def clock(self) -> "Clock": ...
 
 
 @dataclass(frozen=True)
