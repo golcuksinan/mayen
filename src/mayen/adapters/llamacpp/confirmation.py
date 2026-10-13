@@ -5,12 +5,12 @@ kalmaz. Modelin gördüğü her şey İngilizcedir (§8.6).
 """
 
 import json
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Sequence
 
 from openai import AsyncOpenAI
 
 from mayen.ports.confirmation import PlannedCall, Resolution
+from mayen.ports.models import NO_KEY, Endpoint
 
 GRAMMAR = 'root ::= "CONFIRM" | "REJECT" | "UNCLEAR"'
 WORDS = {
@@ -51,18 +51,16 @@ class OutOfGrammarError(ValueError):
     """Çözümleyici üç sözcükten birini üretmedi; belirsiz sayılmaz (§10.5 adım 4)."""
 
 
+def client(endpoint: Endpoint) -> AsyncOpenAI:
+    key = endpoint.api_key.get_secret_value() if endpoint.api_key else NO_KEY
+    return AsyncOpenAI(base_url=endpoint.base_url, api_key=key)
+
+
 class LlamaCppQuestionWriter:
-    def __init__(
-        self,
-        client: AsyncOpenAI,
-        model: str,
-        language: str,
-        extra_body: Mapping[str, Any] | None = None,
-    ) -> None:
-        self._client = client
-        self._model = model
+    def __init__(self, endpoint: Endpoint, language: str) -> None:
+        self._endpoint = endpoint
+        self._client = client(endpoint)
         self._language = language
-        self._extra_body = dict(extra_body or {})
 
     async def write(self, calls: Sequence[PlannedCall]) -> str:
         plan = [
@@ -70,34 +68,31 @@ class LlamaCppQuestionWriter:
             for c in calls
         ]
         response = await self._client.chat.completions.create(
-            model=self._model,
+            model=self._endpoint.model,
             messages=[
                 {"role": "system", "content": WRITER_SYSTEM.format(language=self._language)},
                 {"role": "user", "content": json.dumps(plan, ensure_ascii=False)},
             ],
-            extra_body=self._extra_body,
+            extra_body=dict(self._endpoint.body),
         )
         return (response.choices[0].message.content or "").strip()
 
 
 class LlamaCppAnswerResolver:
-    def __init__(
-        self, client: AsyncOpenAI, model: str, extra_body: Mapping[str, Any] | None = None
-    ) -> None:
-        self._client = client
-        self._model = model
-        self._extra_body = {**(extra_body or {}), "grammar": GRAMMAR}
+    def __init__(self, endpoint: Endpoint) -> None:
+        self._endpoint = endpoint
+        self._client = client(endpoint)
 
     async def resolve(self, question: str, answer: str) -> Resolution:
         response = await self._client.chat.completions.create(
-            model=self._model,
+            model=self._endpoint.model,
             messages=[
                 {"role": "system", "content": RESOLVER_SYSTEM},
                 # Soru da verilir: v1'de soru verilmeyince "kapat" cevabı ret okunmuştu.
                 {"role": "user", "content": f"Question: {question}\nAnswer: {answer}"},
             ],
             max_tokens=8,
-            extra_body=self._extra_body,
+            extra_body={**self._endpoint.body, "grammar": GRAMMAR},
         )
         word = (response.choices[0].message.content or "").strip()
         if word not in WORDS:
