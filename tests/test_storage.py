@@ -16,13 +16,16 @@ from mayen.adapters.storage.sqlite import (
     VOCABULARIES,
     Database,
     SqliteEventLog,
+    SqliteNoteStore,
+    SqliteTimerStore,
     StorageError,
     check_in,
 )
 from mayen.app.config import storage_path
 from mayen.ports.events import Event, EventId, EventKind, Header
-from mayen.ports.tools import Status
-from mayen.ports.triggers import TurnId
+from mayen.ports.timers import TimerState
+from mayen.ports.tools import Sensitivity, Status
+from mayen.ports.triggers import Priority, TurnId
 
 T0 = datetime(2026, 10, 13, 12, 0, 0, tzinfo=UTC)
 
@@ -195,3 +198,57 @@ def test_storage_path_is_relative_to_config(tmp_path: Path) -> None:
     config.parent.mkdir()
     config.write_text("storage:\n  path: data/mayen.db\n", encoding="utf-8")
     assert storage_path(config) == tmp_path / "conf" / "data" / "mayen.db"
+
+
+def test_notes_survive_reopening_and_search_folds_turkish(tmp_path: Path) -> None:
+    path = tmp_path / "m.db"
+    with Database(path) as db:
+        SqliteNoteStore(db).add("Yarın saat üçte dişçi", Sensitivity.PERSONAL)
+        SqliteNoteStore(db).add("çöpü çıkar", Sensitivity.GENERAL)
+    with Database(path) as db:
+        notes = SqliteNoteStore(db)
+        [found] = notes.search("DİŞÇİ")
+        assert (found.id, found.sensitivity) == ("1", Sensitivity.PERSONAL)
+        assert len(notes.search("")) == 2
+
+
+def test_deleted_note_number_is_not_given_again(db: Database) -> None:
+    notes = SqliteNoteStore(db)
+    first = notes.add("a", Sensitivity.GENERAL)
+    assert notes.delete(first.id)
+    assert not notes.delete(first.id)
+    assert not notes.delete("not-a-number")
+    assert notes.add("b", Sensitivity.GENERAL).id == "2"
+
+
+def add_timer(timers: SqliteTimerStore, at: float, text: str = "x") -> str:
+    due = T0 + timedelta(seconds=at)
+    return timers.add(due, text, Priority.NORMAL, 60.0, Sensitivity.PERSONAL, "p1").id
+
+
+def test_pending_timers_in_due_order(db: Database) -> None:
+    timers = SqliteTimerStore(db)
+    late, early = add_timer(timers, 20, "b"), add_timer(timers, 10, "a")
+    [first, second] = timers.pending()
+    assert (first.id, second.id) == (early, late)
+    assert first.due == T0 + timedelta(seconds=10)
+    assert (first.person_id, first.state) == ("p1", TimerState.PENDING)
+
+
+def test_closed_timer_leaves_pending_once(db: Database) -> None:
+    timers = SqliteTimerStore(db)
+    timer = add_timer(timers, 0)
+    timers.close(timer, TimerState.FIRED)
+    assert timers.pending() == []
+    # İkinci kapanış, aynı hatırlatmanın iki kez çaldığı demektir.
+    with pytest.raises(StorageError, match="not pending"):
+        timers.close(timer, TimerState.MISSED)
+    # Çalmış bir zamanlayıcı silinemez: silme yalnızca bekleyenler içindir.
+    assert not timers.delete(timer)
+
+
+def test_pending_timer_is_deleted(db: Database) -> None:
+    timers = SqliteTimerStore(db)
+    timer = add_timer(timers, 0)
+    assert timers.delete(timer)
+    assert timers.pending() == []

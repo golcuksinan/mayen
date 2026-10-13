@@ -10,6 +10,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:  # döngü: bu portlar `ports.tools`'un sözlüğünü kullanır
     from mayen.ports.events import Clock
     from mayen.ports.notes import NoteStore
+    from mayen.ports.timers import TimerStore
 
 
 class Effect(StrEnum):
@@ -104,14 +105,28 @@ class ToolResult:
 class ToolContext(Protocol):
     """Skill'e verilen bağlam: yalnızca depo portları taşır, veritabanı tutamacı asla (§9.1).
 
-    Saat de buradadır: zamanı her modül ortak saatten alır (§5.5).
+    Saat de buradadır: zamanı her modül ortak saatten alır (§5.5). Bağlam çağrı başınadır:
+    çağıran kişi ve skill'in config'le birleşmiş varsayılanları çağrıdan çağrıya değişir.
     """
 
     @property
     def notes(self) -> "NoteStore": ...
 
     @property
+    def timers(self) -> "TimerStore": ...
+
+    @property
     def clock(self) -> "Clock": ...
+
+    @property
+    def caller(self) -> Caller:
+        """Kaydın kime ait olduğu buradan yazılır; yetkiye çekirdek bakar, skill değil."""
+        ...
+
+    @property
+    def defaults(self) -> Mapping[str, Any]:
+        """`ToolSpec.defaults`, sahibin config'te üzerine yazdıklarıyla (§9.1)."""
+        ...
 
 
 @dataclass(frozen=True)

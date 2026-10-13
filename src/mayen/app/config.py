@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from mayen.core.models import ModelConfigError, ModelRegistry
 from mayen.core.turns import TurnConfigError, Turns
 from mayen.ports.models import ModelRecord
+from mayen.ports.tools import Effect, Sensitivity
 from mayen.ports.triggers import Fate, Priority, TriggerSource
 
 ACTIVE_MODEL_ENV = "MAYEN_MODEL"
@@ -57,6 +58,10 @@ class _File(_Strict):
     output_language: str  # modelin kullanıcıya konuştuğu dil (§8.6)
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
+    # Kimse konuşmadan açılan turun yetkisi, turu açan kaynağa göre (§10.2).
+    system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
+    # Skill varsayılanlarının üzerine yazılanlar (§9.1); doğrulaması skill'ler bulununca.
+    skills: dict[str, dict[str, Any]] = {}
     models: dict[str, ModelRecord]
 
 
@@ -68,6 +73,8 @@ class Config:
     output_language: str
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
+    system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
+    skills: dict[str, dict[str, Any]]
 
     def turns(self) -> Turns:
         return Turns(self.triggers.fates, self.triggers.max_running)
@@ -97,6 +104,8 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             output_language=file.output_language,
             triggers=file.triggers,
             confirmation=file.confirmation,
+            system_role=file.system_role,
+            skills=file.skills,
         )
         config.turns()  # eksik ya da hatta karşılığı olmayan akıbet açılışta görünsün (§5.3)
     except (OSError, yaml.YAMLError, ValidationError, ModelConfigError, TurnConfigError) as e:

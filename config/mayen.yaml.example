@@ -25,6 +25,16 @@ triggers:
 confirmation:
   timeout_s: 20                # onay cevabı beklenen süre (§10.5)
 
+# Kimse konuşmadan açılan turun (system rolü) yetkisi, turu açan kaynağa göre (§10.2).
+# Etki sınıfı başına okunabilen/yazılabilen hassasiyetler; yazılmayan hücre kapalıdır.
+system_role:
+  timer: {READ: [GENERAL]}
+
+# Skill varsayılanlarının üzerine yazma (§9.1); tek bir kayıt için kullanıcı ayrıca söyler.
+skills:
+  reminder_add:
+    tolerance_minutes: 30      # Mayen kapalıyken vadesi geçen hatırlatma en çok bu kadar geç çalar (§12)
+
 # Model deposu (§8.9, §8.10). Her rol her istekte kendi ayarlarını gönderir.
 models:
   local:

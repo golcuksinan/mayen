@@ -65,6 +65,10 @@ class Sessions:
     def voice(self) -> Priority:
         return self._voice
 
+    def names(self) -> list[str]:
+        """Hattı kurulmuş oturumlar, kuruluş sırasıyla."""
+        return list(self._gates)
+
     def attach(self, gate: "TriggerGate") -> None:
         if gate.session in self._gates:
             raise ValueError(f"session {gate.session!r} already has a gate")
@@ -185,14 +189,14 @@ class TriggerGate(FrameProcessor):
             )
         else:
             # Sistem cümle kurmaz: olay, modele etiketli bir mesaj olarak gider (§2.1).
-            content = json.dumps(
-                {
-                    "trigger": source.value,
-                    "priority": turn.trigger.priority.value,
-                    "content": turn.trigger.content,
-                },
-                ensure_ascii=False,
-            )
+            message: dict[str, object] = {
+                "trigger": source.value,
+                "priority": turn.trigger.priority.value,
+                "content": turn.trigger.content,
+            }
+            if turn.trigger.details:
+                message["details"] = dict(turn.trigger.details)
+            content = json.dumps(message, ensure_ascii=False)
             await self._push_run(
                 LLMMessagesAppendFrame(
                     messages=[{"role": "developer", "content": content}], run_llm=True

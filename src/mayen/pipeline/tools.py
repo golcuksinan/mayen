@@ -76,18 +76,19 @@ class AuthorizedTools:
     def __init__(
         self,
         registry: ToolRegistry,
-        table: PolicyTable,
-        ctx: ToolContext,
+        table: Callable[[], PolicyTable],
+        context: Callable[[ToolSpec[Any], Caller], ToolContext],
         gate: ConfirmationGate,
         caller: Callable[[], Caller],
         flags: Callable[[], TurnFlags],
         events: SessionEvents,
     ) -> None:
         self._registry = registry
+        # Tablo, bağlam, çağıran ve işaretler çağrı anında oturum durumundan okunur (§8.1):
+        # `system` rolünün yetkisi turu açan tetikleyicinin kaynağına göredir (§10.2).
         self._table = table
-        self._ctx = ctx
+        self._context = context
         self._gate = gate
-        # Çağıran ve işaretler çağrı anında oturum durumundan okunur (§8.1).
         self._caller = caller
         self._flags = flags
         self._events = events
@@ -126,7 +127,8 @@ class AuthorizedTools:
             return to_model(self._refused(spec, dict(raw), Status.ERROR, args)), None
 
         caller = self._caller()
-        decision = decide(spec, caller, self._table, self._flags())
+        table = self._table()
+        decision = decide(spec, caller, table, self._flags())
         if decision.verdict is Verdict.DENY:
             arguments = args.model_dump(mode="json")
             return to_model(
@@ -137,7 +139,7 @@ class AuthorizedTools:
             assert decision.confirmation is not None
 
             async def run_confirmed() -> ToolResult:
-                return await self._run(spec, args, caller)
+                return await self._run(spec, args, caller, table)
 
             await self._gate.request(spec, args, decision.confirmation, run_confirmed, caller)
             # Model burada konuşmaz; soruyu kapı plandan yazdırıp okutur (§10.5).
@@ -145,14 +147,16 @@ class AuthorizedTools:
                 run_llm=False
             )
 
-        return to_model(await self._run(spec, args, caller)), None
+        return to_model(await self._run(spec, args, caller, table)), None
 
-    async def _run(self, spec: ToolSpec[Any], args: BaseModel, caller: Caller) -> ToolResult:
+    async def _run(
+        self, spec: ToolSpec[Any], args: BaseModel, caller: Caller, table: PolicyTable
+    ) -> ToolResult:
         """Gövdenin çalışması olay kaydına girer; eylem geçmişi bu olaylardır (§11)."""
         body = {"tool": spec.name, "arguments": args.model_dump(mode="json")}
         self._events.emit(EventKind.TOOL_STARTED, __name__, body)
         started = self._events.monotonic()
-        result = await execute(spec, args, self._ctx)
+        result = await execute(spec, args, self._context(spec, caller))
         self._events.emit(
             EventKind.TOOL_FINISHED,
             __name__,
@@ -161,7 +165,7 @@ class AuthorizedTools:
             duration_s=self._events.monotonic() - started,
             status=result.status,
         )
-        return filter_records(result, caller, self._table)
+        return filter_records(result, caller, table)
 
     def _refused(
         self, spec: ToolSpec[Any], arguments: dict[str, Any], status: Status, error: str

@@ -1,6 +1,7 @@
 """Bağlama ve açılış (§4, §14): config, skill keşfi, oturum kurulumu, çıkış kodu."""
 
 import shutil
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -8,15 +9,29 @@ from pipecat.audio.vad.vad_analyzer import VADAnalyzer
 from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from mayen.adapters.storage.memory import MemoryNoteStore
-from mayen.adapters.storage.sqlite import Database
+from fakes import FakeClock
+from mayen.adapters.storage.sqlite import Database, SqliteNoteStore, SqliteTimerStore
 from mayen.app.config import ConfigError, load
 from mayen.app.main import EXIT_CONFIG, main
-from mayen.app.wiring import Core, ToolCtx, Voice, discover_skills, voice_session
-from mayen.core.events import SystemClock
-from mayen.ports.tools import Caller, Role, Sensitivity, Status
-from mayen.ports.triggers import Fate, TriggerSource
-from mayen.skills import note_add, note_delete, note_search
+from mayen.app.wiring import (
+    Core,
+    ToolCtx,
+    Voice,
+    discover_skills,
+    skill_defaults,
+    voice_session,
+)
+from mayen.core.policy import ROLE_TABLE
+from mayen.ports.tools import Caller, Effect, Role, Sensitivity, Status
+from mayen.ports.triggers import Fate, Priority, TriggerSource
+from mayen.skills import (
+    note_add,
+    note_delete,
+    note_search,
+    reminder_add,
+    reminder_delete,
+    reminder_list,
+)
 from mayen.skills import time as time_skill
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "config" / "mayen.yaml.example"
@@ -58,6 +73,7 @@ def test_home_in_storage_path_is_expanded(tmp_path: Path) -> None:
         (("    event: restart\n", ""), "event"),  # akıbeti eksik kaynak
         (("timer: restart", "timer: resume"), "timer"),  # hatta karşılığı olmayan akıbet
         (("system: prompts/system.txt", "system: prompts/none.txt"), "none.txt"),
+        (("timer: {READ: [GENERAL]}", "timer: {READ: [SECRET]}"), "SECRET"),
     ],
 )
 def test_bad_config_is_a_config_error(
@@ -84,20 +100,116 @@ def test_skills_are_discovered_from_the_folder() -> None:
         "note_add",
         "note_delete",
         "note_search",
+        "reminder_add",
+        "reminder_delete",
+        "reminder_list",
         "time",
     ]
 
 
-async def test_note_skills_share_the_store() -> None:
-    ctx = ToolCtx(MemoryNoteStore(), SystemClock())
-    added = await note_add.run(note_add.Args(text="Yarın saat üçte dişçi"), ctx)
-    assert added.data == {"id": "1"}
-    found = await note_search.run(note_search.Args(query="DİŞÇİ"), ctx)
-    assert [r.data for r in found.records] == [{"id": "1", "text": "Yarın saat üçte dişçi"}]
-    assert found.records[0].sensitivity is Sensitivity.PERSONAL
-    assert (await note_delete.run(note_delete.Args(id="1"), ctx)).status is Status.OK
-    assert (await note_delete.run(note_delete.Args(id="1"), ctx)).status is Status.ERROR
-    assert (await time_skill.run(time_skill.NoArgs(), ctx)).status is Status.OK
+def ctx_for(db: Database, defaults: dict[str, object] | None = None) -> ToolCtx:
+    return ToolCtx(
+        SqliteNoteStore(db), SqliteTimerStore(db), FakeClock(), OWNER, defaults or {}
+    )
+
+
+async def test_note_skills_share_the_store(tmp_path: Path) -> None:
+    with Database(tmp_path / "m.db") as db:
+        ctx = ctx_for(db)
+        added = await note_add.run(note_add.Args(text="Yarın saat üçte dişçi"), ctx)
+        assert added.data == {"id": "1"}
+        found = await note_search.run(note_search.Args(query="DİŞÇİ"), ctx)
+        assert [r.data for r in found.records] == [{"id": "1", "text": "Yarın saat üçte dişçi"}]
+        assert found.records[0].sensitivity is Sensitivity.PERSONAL
+        assert (await note_delete.run(note_delete.Args(id="1"), ctx)).status is Status.OK
+        assert (await note_delete.run(note_delete.Args(id="1"), ctx)).status is Status.ERROR
+        assert (await time_skill.run(time_skill.NoArgs(), ctx)).status is Status.OK
+
+
+async def test_reminder_skills(tmp_path: Path) -> None:
+    with Database(tmp_path / "m.db") as db:
+        ctx = ctx_for(db, {"tolerance_minutes": 30.0})
+        added = await reminder_add.run(reminder_add.Args(text="ilacını iç", in_minutes=10), ctx)
+        assert added.status is Status.OK
+        [timer] = ctx.timers.pending()
+        # Öncelik sırası kayıt, config, skill (§9.1): kayıtta söylenmediyse bağlamdan.
+        assert (timer.tolerance_s, timer.person_id) == (1800.0, "owner")
+        assert timer.due == ctx.clock.now() + timedelta(minutes=10)
+        own = await reminder_add.run(
+            reminder_add.Args(
+                text="uyan", in_minutes=60, priority=Priority.URGENT, tolerance_minutes=0
+            ),
+            ctx,
+        )
+        assert ctx.timers.pending()[1].tolerance_s == 0.0
+        listed = await reminder_list.run(reminder_list.NoArgs(), ctx)
+        assert [r.data["text"] for r in listed.records] == ["ilacını iç", "uyan"]
+        assert listed.records[1].data["priority"] == "urgent"
+        deleted = await reminder_delete.run(reminder_delete.Args(id=own.data["id"]), ctx)
+        assert deleted.status is Status.OK
+        assert len(ctx.timers.pending()) == 1
+
+
+@pytest.mark.parametrize(
+    ("at", "in_minutes", "error"),
+    [
+        (None, None, "exactly one"),
+        ("2026-10-13 15:00", 5.0, "exactly one"),
+        ("yarın üçte", None, "look like"),
+        ("2020-01-01 10:00", None, "past"),
+    ],
+)
+async def test_reminder_needs_one_future_time(
+    tmp_path: Path, at: str | None, in_minutes: float | None, error: str
+) -> None:
+    with Database(tmp_path / "m.db") as db:
+        ctx = ctx_for(db, {"tolerance_minutes": 30.0})
+        args = reminder_add.Args(text="x", at=at, in_minutes=in_minutes)
+        result = await reminder_add.run(args, ctx)
+        assert result.status is Status.ERROR and error in (result.error or "")
+        assert ctx.timers.pending() == []
+
+
+def test_config_overrides_skill_defaults() -> None:
+    specs = discover_skills()
+    merged = skill_defaults(specs, {"reminder_add": {"tolerance_minutes": 5}})
+    assert merged["reminder_add"] == {"tolerance_minutes": 5}
+    assert merged["note_add"] == {}
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"nope": {}}, "no such skill"),
+        ({"reminder_add": {"tolerance": 5}}, "no such default"),
+        ({"reminder_add": {"tolerance_minutes": "5"}}, "expected float"),
+    ],
+)
+def test_bad_skill_override_is_a_config_error(
+    overrides: dict[str, dict[str, object]], match: str
+) -> None:
+    with pytest.raises(ConfigError, match=match):
+        skill_defaults(discover_skills(), overrides)
+
+
+def test_timer_without_system_permissions_is_a_config_error(tmp_path: Path) -> None:
+    text = EXAMPLE.read_text(encoding="utf-8").replace(
+        "system_role:\n  timer: {READ: [GENERAL]}\n", "system_role: {}\n"
+    )
+    config = load(config_dir(tmp_path, text), {"MAYEN_MODEL": "local"})
+    with Database(tmp_path / "m.db") as db, pytest.raises(ConfigError, match="timer"):
+        Core(config, db)
+
+
+def test_system_role_rights_follow_the_turn_source(tmp_path: Path) -> None:
+    config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
+    with Database(tmp_path / "m.db") as db:
+        core = Core(config, db)
+        assert core.table("s1") is ROLE_TABLE
+        timer_table = core.tables[TriggerSource.TIMER]
+        assert timer_table[(Role.SYSTEM, Effect.READ, Sensitivity.GENERAL)]
+        assert not timer_table[(Role.SYSTEM, Effect.READ, Sensitivity.PERSONAL)]
+        assert not timer_table[(Role.SYSTEM, Effect.WRITE, Sensitivity.GENERAL)]
 
 
 class Passing(FrameProcessor):

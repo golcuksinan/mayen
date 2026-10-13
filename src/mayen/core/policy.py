@@ -1,6 +1,6 @@
 """Yetki kararı: tek zorlama noktası (§10.3)."""
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -58,6 +58,14 @@ ROLE_TABLE: PolicyTable = {
     (Role.UNKNOWN, _E.DANGEROUS, _S.GENERAL): False,
     (Role.UNKNOWN, _E.DANGEROUS, _S.PERSONAL): False,
 }
+
+
+def system_table(allowed: Mapping[Effect, Collection[Sensitivity]]) -> PolicyTable:
+    """Bir tetikleyici kaynağının açtığı turda `system` rolünün hücreleri (§10.2).
+
+    Kaynağın yetkisi config'te tanımlı olmalıdır; tanımın içinde yazılmayan hücre kapalıdır.
+    """
+    return {(Role.SYSTEM, e, s): s in allowed.get(e, ()) for e in Effect for s in Sensitivity}
 
 
 class MissingCellError(LookupError):

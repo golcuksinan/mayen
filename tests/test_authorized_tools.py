@@ -2,14 +2,13 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
 from fakes import FakeClock, MemoryEventLog
-from mayen.adapters.storage.memory import MemoryNoteStore
 from mayen.core.events import Recorder
-from mayen.core.policy import ROLE_TABLE
+from mayen.core.policy import ROLE_TABLE, system_table
 from mayen.core.registry import ToolRegistry
 from mayen.pipeline.events import SessionEvents
 from mayen.pipeline.tools import AWAITING_CONFIRMATION, AuthorizedTools
@@ -42,8 +41,7 @@ class Ctx:
             1: (Sensitivity.GENERAL, "çöpü çıkar"),
             2: (Sensitivity.PERSONAL, "tahlil sonucu"),
         }
-        self.notes = MemoryNoteStore()
-        self.clock = FakeClock()
+        self.caller: Caller | None = None  # bağlam çağrı başınadır; son çağıran
 
 
 async def _search(args: BaseModel, ctx: ToolContext) -> ToolResult:
@@ -114,10 +112,17 @@ def tools(
     caller: Caller = OWNER, log: MemoryEventLog | None = None
 ) -> tuple[AuthorizedTools, Ctx, Gate]:
     ctx, gate = Ctx(), Gate()
+
+    def context(spec: ToolSpec[Any], c: Caller) -> ToolContext:
+        ctx.caller = c
+        return cast(ToolContext, ctx)
+
     registry = ToolRegistry([SEARCH, DELETE, SLOW, BROKEN])
     events = SessionEvents(Recorder(log or MemoryEventLog(), FakeClock()), "s1", lambda: None)
     return (
-        AuthorizedTools(registry, ROLE_TABLE, ctx, gate, lambda: caller, TurnFlags, events),
+        AuthorizedTools(
+            registry, lambda: ROLE_TABLE, context, gate, lambda: caller, TurnFlags, events
+        ),
         ctx,
         gate,
     )
@@ -129,6 +134,34 @@ async def test_allowed_call_runs() -> None:
     assert result["status"] == "ok"
     assert len(result["records"]) == 2
     assert props is None
+
+
+async def test_the_body_sees_its_caller() -> None:
+    t, ctx, _ = tools(GUEST)
+    await t.call(SEARCH, {})
+    assert ctx.caller == GUEST
+
+
+async def test_the_table_is_read_at_call_time() -> None:
+    # `system`'in yetkisi turu açan kaynağa göredir (§10.2): tablo çağrı anında okunur.
+    ctx, gate = Ctx(), Gate()
+    events = SessionEvents(Recorder(MemoryEventLog(), FakeClock()), "s1", lambda: None)
+    system = Caller(Role.SYSTEM, None, has_personal_device=False)
+    tables = [{**ROLE_TABLE, **system_table({Effect.READ: [Sensitivity.GENERAL]})}]
+    t = AuthorizedTools(
+        ToolRegistry([SEARCH]),
+        lambda: tables[0],
+        lambda spec, c: cast(ToolContext, ctx),
+        gate,
+        lambda: system,
+        TurnFlags,
+        events,
+    )
+    result, _ = await t.call(SEARCH, {})
+    assert [r["body"] for r in result["records"]] == ["çöpü çıkar"]
+    tables[0] = {**ROLE_TABLE, **system_table({})}
+    result, _ = await t.call(SEARCH, {})
+    assert result["status"] == "denied"
 
 
 async def test_guest_gets_general_records_and_a_count() -> None:

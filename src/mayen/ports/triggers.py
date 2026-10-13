@@ -1,8 +1,9 @@
 """Tetikleyici ve turun sözlüğü (§5.1–§5.3)."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import NewType
+from typing import Any, NewType
 from uuid import UUID
 
 from mayen.ports.tools import Caller
@@ -52,3 +53,6 @@ class Trigger:
     source: TriggerSource
     content: str
     requester: Caller
+    # Kaynağın modele verdiği yapılandırılmış ayrıntı (hatırlatmanın vadesi gibi); JSON'a
+    # çevrilebilir. Sistem cümle kurmaz, olayı etiketli veri olarak verir (§2.1).
+    details: Mapping[str, Any] = field(default_factory=dict)

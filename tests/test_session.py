@@ -119,6 +119,17 @@ async def test_system_trigger_is_a_labelled_developer_message() -> None:
     }
 
 
+async def test_trigger_details_go_to_the_model_as_data() -> None:
+    sessions, gate = make()
+    trigger = Trigger(
+        "s1", Priority.NORMAL, TriggerSource.TIMER, "su iç", SYSTEM, {"due": "2026-10-13 15:00"}
+    )
+    down, _ = await run(gate, [Call(lambda: sessions.submit(trigger))])
+    [message] = appended(down)
+    assert json.loads(message["content"])["details"] == {"due": "2026-10-13 15:00"}
+    assert sessions.names() == ["s1"]
+
+
 async def test_waiting_trigger_starts_when_the_turn_goes_quiet() -> None:
     sessions, gate = make()
     frames: list[Frame] = [

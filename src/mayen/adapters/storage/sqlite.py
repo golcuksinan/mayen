@@ -23,8 +23,10 @@ from typing import IO, Any, Self
 from uuid import UUID
 
 from mayen.ports.events import Event, EventId, EventKind, Header, parse_stamp, stamp
-from mayen.ports.tools import Status
-from mayen.ports.triggers import TurnId
+from mayen.ports.notes import Note
+from mayen.ports.timers import Timer, TimerState
+from mayen.ports.tools import Sensitivity, Status
+from mayen.ports.triggers import Priority, TurnId
 
 # Ayrı bir bağlantının (yedek gibi) tuttuğu yazma kilidi için beklenecek süre.
 BUSY_TIMEOUT_MS = 5_000
@@ -45,6 +47,10 @@ def check_in(column: str, vocabulary: type[StrEnum]) -> str:
 VOCABULARIES: Sequence[tuple[str, str, type[StrEnum]]] = (
     ("events", "kind", EventKind),
     ("events", "status", Status),
+    ("notes", "sensitivity", Sensitivity),
+    ("timers", "priority", Priority),
+    ("timers", "sensitivity", Sensitivity),
+    ("timers", "state", TimerState),
 )
 
 # Sürüm = sıradaki yeri (1'den başlar). Uygulanmış bir migration değiştirilmez; düzeltme
@@ -73,6 +79,26 @@ MIGRATIONS: Sequence[Sequence[str]] = (
         "CREATE INDEX events_session ON events (session, time, seq)",
         "CREATE INDEX events_turn ON events (turn_id, time, seq)",
         "CREATE INDEX event_related_record ON event_related (record_id)",
+    ),
+    (
+        # AUTOINCREMENT: silinmiş bir kaydın numarası yeniden verilmez; verilseydi eski
+        # numarayla yapılan bir silme yeni kaydı silerdi.
+        f"""CREATE TABLE notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            sensitivity TEXT NOT NULL {check_in("sensitivity", Sensitivity)}
+        ) STRICT""",
+        f"""CREATE TABLE timers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            due TEXT NOT NULL,
+            text TEXT NOT NULL,
+            priority TEXT NOT NULL {check_in("priority", Priority)},
+            tolerance_s REAL NOT NULL CHECK (tolerance_s >= 0),
+            sensitivity TEXT NOT NULL {check_in("sensitivity", Sensitivity)},
+            person_id TEXT,
+            state TEXT NOT NULL {check_in("state", TimerState)}
+        ) STRICT""",
+        "CREATE INDEX timers_state ON timers (state, due, id)",
     ),
 )
 
@@ -267,3 +293,121 @@ def _event(row: tuple[Any, ...], related: list[str]) -> Event:
         related=tuple(related),
     )
     return Event(header, json.loads(body))
+
+
+def _fold(text: str) -> str:
+    # "İ".casefold() "i" + birleşen nokta verir; nokta atılmazsa "DİŞÇİ" "dişçi"yi bulamaz.
+    return text.casefold().replace("\u0307", "")
+
+
+class SqliteNoteStore:
+    """Not deposu (§11). Arama Python'da: SQLite'ın `LIKE`'ı yalnızca ASCII harfleri katlar."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def add(self, text: str, sensitivity: Sensitivity) -> Note:
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                "INSERT INTO notes (text, sensitivity) VALUES (?, ?)", (text, sensitivity.value)
+            )
+        return Note(str(cursor.lastrowid), text, sensitivity)
+
+    def search(self, query: str) -> list[Note]:
+        needle = _fold(query)
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, text, sensitivity FROM notes ORDER BY id"
+            ).fetchall()
+        return [
+            Note(str(id_), text, Sensitivity(sensitivity))
+            for id_, text, sensitivity in rows
+            if needle in _fold(text)
+        ]
+
+    def delete(self, note_id: str) -> bool:
+        with self._db.transaction() as conn:
+            cursor = conn.execute("DELETE FROM notes WHERE id = ?", (_number(note_id),))
+        return cursor.rowcount > 0
+
+
+def _number(record_id: str) -> int | None:
+    # Numara olmayan bir kimlik hiçbir kayda denk gelmez; hata değil, "yok"tur.
+    return int(record_id) if record_id.isdecimal() else None
+
+
+_TIMER_COLUMNS = "id, due, text, priority, tolerance_s, sensitivity, person_id, state"
+
+
+class SqliteTimerStore:
+    """İş ve zamanlayıcı deposu (§11, §12)."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def add(
+        self,
+        due: datetime,
+        text: str,
+        priority: Priority,
+        tolerance_s: float,
+        sensitivity: Sensitivity,
+        person_id: str | None,
+    ) -> Timer:
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "INSERT INTO timers (due, text, priority, tolerance_s, sensitivity, person_id,"
+                f" state) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING {_TIMER_COLUMNS}",
+                (
+                    stamp(due),
+                    text,
+                    priority.value,
+                    tolerance_s,
+                    sensitivity.value,
+                    person_id,
+                    TimerState.PENDING.value,
+                ),
+            ).fetchone()
+        return _timer(row)
+
+    def pending(self) -> list[Timer]:
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                f"SELECT {_TIMER_COLUMNS} FROM timers WHERE state = ? ORDER BY due, id",
+                (TimerState.PENDING.value,),
+            ).fetchall()
+        return [_timer(row) for row in rows]
+
+    def delete(self, timer_id: str) -> bool:
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM timers WHERE id = ? AND state = ?",
+                (_number(timer_id), TimerState.PENDING.value),
+            )
+        return cursor.rowcount > 0
+
+    def close(self, timer_id: str, state: TimerState) -> None:
+        if state is TimerState.PENDING:
+            raise ValueError("a timer is closed with its outcome, not reopened")
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE timers SET state = ? WHERE id = ? AND state = ?",
+                (state.value, _number(timer_id), TimerState.PENDING.value),
+            )
+            if cursor.rowcount == 0:
+                # İki kez kapatmak, aynı hatırlatmanın iki kez çaldığı demektir.
+                raise StorageError(f"timer {timer_id} is not pending")
+
+
+def _timer(row: tuple[Any, ...]) -> Timer:
+    id_, due, text, priority, tolerance_s, sensitivity, person_id, state = row
+    return Timer(
+        id=str(id_),
+        due=parse_stamp(due),
+        text=text,
+        priority=Priority(priority),
+        tolerance_s=tolerance_s,
+        sensitivity=Sensitivity(sensitivity),
+        person_id=person_id,
+        state=TimerState(state),
+    )
