@@ -2,9 +2,9 @@
 
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from mayen.ports.tools import Role
+from mayen.ports.tools import Caller, Role
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource, TurnId
 
 # Hatta karşılığı olan akıbetler; kaldığı yerden devam ödünç alınan çerçevede yok (§5.3).
@@ -25,16 +25,16 @@ def new_turn(trigger: Trigger) -> Turn:
     return Turn(TurnId(uuid.uuid4()), trigger)
 
 
-def interrupts(current: Turn, incoming: Trigger) -> bool:
-    """Gelen tetikleyici süren turu keser mi, yoksa sıraya mı girer (§5.3)."""
-    if incoming.priority.rank <= current.trigger.priority.rank:
+def interrupts(current: Turn, incoming: Priority) -> bool:
+    """Bu öncelikte gelen tetikleyici süren turu keser mi, yoksa sıraya mı girer (§5.3)."""
+    if incoming.rank <= current.trigger.priority.rank:
         return False
     owner_speaking = (
         current.trigger.source is TriggerSource.VOICE
         and current.trigger.requester.role is Role.OWNER
     )
     # Sahibin kendi turunu yalnızca acil bir durum böler.
-    return not owner_speaking or incoming.priority is Priority.URGENT
+    return not owner_speaking or incoming is Priority.URGENT
 
 
 @dataclass(frozen=True)
@@ -98,10 +98,29 @@ class Turns:
             if w.turn.trigger.session == session
         ]
 
+    def hears(self, session: str, voice: Priority) -> bool:
+        """Bu oturumda şimdi söylenen söz duyulur mu.
+
+        Sesli tetikleyici de §5.3'e uyar; ama sıraya alınamaz, duyulmayan söz yeniden
+        söylenir. Süren sesli tur ise konuşmanın kendisidir: içindeki söz kesme ödünç alınan
+        çerçevenindir (§5.4) ve yeni bir tetikleyici sayılmaz.
+        """
+        current = self._running.get(session)
+        if current is None:
+            return len(self._running) < self.max_running
+        return current.trigger.source is TriggerSource.VOICE or interrupts(current, voice)
+
+    def identify(self, session: str, requester: Caller) -> None:
+        """Sesli turun sahibi ancak ilk segment tanınınca bilinir; kesme kuralı ona bakar."""
+        current = self._running.get(session)
+        if current is not None and current.trigger.source is TriggerSource.VOICE:
+            trigger = replace(current.trigger, requester=requester)
+            self._running[session] = replace(current, trigger=trigger)
+
     def submit(self, trigger: Trigger) -> list[Action]:
         turn = new_turn(trigger)
         current = self._running.get(trigger.session)
-        if current is not None and interrupts(current, trigger):
+        if current is not None and interrupts(current, trigger.priority):
             fate = self.fates[current.trigger.source]
             if fate is Fate.RESTART:
                 # Baştan başlayan tur yeni bir kimlik alır: eski koşunun geç gelen parçaları

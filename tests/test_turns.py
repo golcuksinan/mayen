@@ -33,9 +33,9 @@ def started(actions: list[Interrupt | Start]) -> list[str]:
 @pytest.mark.parametrize("incoming", list(Priority))
 def test_equal_or_lower_priority_never_interrupts(incoming: Priority) -> None:
     current = new_turn(trig(Priority.URGENT if incoming is Priority.URGENT else incoming))
-    assert not interrupts(current, trig(incoming))
+    assert not interrupts(current, incoming)
     if incoming is not Priority.URGENT:
-        assert not interrupts(new_turn(trig(Priority.URGENT)), trig(incoming))
+        assert not interrupts(new_turn(trig(Priority.URGENT)), incoming)
 
 
 @pytest.mark.parametrize(
@@ -44,18 +44,18 @@ def test_equal_or_lower_priority_never_interrupts(incoming: Priority) -> None:
 )
 def test_owner_speaking_is_cut_only_by_urgent(incoming: Priority, cuts: bool) -> None:
     current = new_turn(trig(Priority.LOW, TriggerSource.VOICE, OWNER))
-    assert interrupts(current, trig(incoming, requester=SYSTEM)) is cuts
+    assert interrupts(current, incoming) is cuts
 
 
 def test_someone_else_speaking_is_cut_by_any_higher_priority() -> None:
     current = new_turn(trig(Priority.LOW, TriggerSource.VOICE, GUEST))
-    assert interrupts(current, trig(Priority.NORMAL, TriggerSource.TIMER, SYSTEM))
+    assert interrupts(current, Priority.NORMAL)
 
 
 def test_owner_written_turn_is_not_protected_like_speech() -> None:
     # Kural ses turu içindir; yazılı tur genel öncelik kuralına uyar.
     current = new_turn(trig(Priority.NORMAL, TriggerSource.TEXT, OWNER))
-    assert interrupts(current, trig(Priority.HIGH, TriggerSource.TIMER, SYSTEM))
+    assert interrupts(current, Priority.HIGH)
 
 
 # --- Turns: config ---
@@ -166,3 +166,42 @@ def test_waiting_turn_of_a_busy_session_does_not_block_another_session() -> None
     turns.submit(trig(session="s1", content="a"))
     turns.submit(trig(Priority.URGENT, TriggerSource.VOICE, session="s1", content="a2"))
     assert started(turns.submit(trig(Priority.LOW, session="s2", content="b"))) == ["b"]
+
+
+# --- Turns: ses (§5.3, sesli tetikleyici sıraya alınmaz) ---
+
+
+def test_speech_is_heard_in_an_idle_session() -> None:
+    assert Turns(CANCEL_ALL).hears("s1", Priority.NORMAL)
+
+
+def test_speech_is_not_heard_over_a_higher_priority_turn() -> None:
+    turns = Turns(CANCEL_ALL)
+    turns.submit(trig(Priority.URGENT, TriggerSource.TIMER, SYSTEM))
+    assert not turns.hears("s1", Priority.NORMAL)
+
+
+def test_speech_is_heard_over_a_lower_priority_turn() -> None:
+    turns = Turns(CANCEL_ALL)
+    turns.submit(trig(Priority.LOW, TriggerSource.TIMER, SYSTEM))
+    assert turns.hears("s1", Priority.NORMAL)
+
+
+def test_speech_inside_a_voice_turn_is_the_conversation() -> None:
+    turns = Turns(CANCEL_ALL)
+    turns.submit(trig(Priority.NORMAL, TriggerSource.VOICE, OWNER))
+    assert turns.hears("s1", Priority.NORMAL)
+
+
+def test_speech_is_not_heard_when_no_turn_slot_is_free() -> None:
+    turns = Turns(CANCEL_ALL)
+    turns.submit(trig(session="s2"))
+    assert not turns.hears("s1", Priority.URGENT)
+
+
+def test_identified_owner_is_protected_from_high_priority() -> None:
+    turns = Turns(CANCEL_ALL)
+    unknown = Caller(Role.UNKNOWN, None, has_personal_device=False)
+    turns.submit(trig(Priority.NORMAL, TriggerSource.VOICE, unknown))
+    turns.identify("s1", OWNER)
+    assert turns.submit(trig(Priority.HIGH, TriggerSource.TIMER, SYSTEM)) == []
