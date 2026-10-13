@@ -294,8 +294,10 @@ gördüğü karelerden ve Mayen'in kendi katmanından üretilir; ayrı bir olay 
 **Her olay aynı zarfı taşır: sabit bir başlık ve türe özgü bir gövde.**
 
 - **Başlık** (her olayda aynı, çekirdek doldurur): olay kimliği, tür (`tool.finished`,
-  `stt.segment`, `state.changed` gibi), kaynak bileşen, oturum ve tur kimliği, zaman, süre ve
-  durum. Durumu olayı üreten bileşen bildirir, çekirdek başlığa yazar.
+  `stt.segment`, `state.changed` gibi), kaynak bileşen, oturum ve tur kimliği, zaman, süre,
+  durum ve olayın ilgili olduğu kayıtların kimlikleri (boş olabilir). Durumu olayı üreten
+  bileşen bildirir, çekirdek başlığa yazar. İlgili kayıtlar başlıktadır, çünkü sil bir kaydın
+  olay kaydındaki kopyalarını gövdeyi okumadan bulabilmelidir (§11.4).
 - **Gövde** (türe özgü, olayı üreten bileşen doldurur): tool için sonuç zarfının skill kısmı
   (§9.1), STT için metin ve skor, LLM için token sayıları gibi.
 
