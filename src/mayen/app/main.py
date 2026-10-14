@@ -45,7 +45,8 @@ def _parser() -> argparse.ArgumentParser:
         "--device",
         action="append",
         default=[],
-        help="personal device: 'local' for this machine's audio, or a Tailscale node StableID",
+        # `local` geliştirme istisnasıdır: mimaride bu makinenin ses birimleri ortaktır.
+        help="personal device: a Tailscale node StableID, or 'local' (development only)",
     )
     commands.add_parser("serve", help="run the text channel and reminders")
     return parser

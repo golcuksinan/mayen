@@ -8,8 +8,9 @@ from mayen.ports.tools import Role
 # Taşımanın doğruladığı cihaz kimliği (§10.1); istemcinin beyanı hiçbir zaman buraya girmez.
 DeviceId = NewType("DeviceId", str)
 
-# Çekirdeğin kendi makinesine bağlı ses birimleri. Taşımadan geçmez ve hiçbir bağlantıya
-# verilmez; kimliğini istemci değil, hattı kuran çekirdek bilir.
+# Çekirdeğin kendi makinesine bağlı ses birimleri; hiçbir bağlantıya verilmez. Geliştirme
+# istisnası: mimaride bu cihaz ortaktır (önünde kimin olduğunu kanıtlamaz, §10.1). Sahibe
+# eşleştirilmesi yalnızca tailnet'ten bağlanan bir kişisel istemci yokken işi kolaylaştırır.
 LOCAL_DEVICE = DeviceId("local")
 
 
