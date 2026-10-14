@@ -205,3 +205,12 @@ def test_identified_owner_is_protected_from_high_priority() -> None:
     turns.submit(trig(Priority.NORMAL, TriggerSource.VOICE, unknown))
     turns.identify("s1", OWNER)
     assert turns.submit(trig(Priority.HIGH, TriggerSource.TIMER, SYSTEM)) == []
+
+
+def test_dropped_session_takes_its_turns_and_frees_the_slot() -> None:
+    turns = Turns(CANCEL_ALL)
+    turns.submit(trig(session="s1", content="a"))
+    turns.submit(trig(session="s1", content="b"))
+    turns.submit(trig(session="s2", content="c"))
+    assert started(turns.drop("s1")) == ["c"]
+    assert turns.running("s1") is None and turns.waiting("s1") == []

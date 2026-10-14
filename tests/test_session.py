@@ -347,3 +347,23 @@ async def test_speech_answered_before_it_is_heard_to_end_expects_nothing() -> No
     [done] = log.of(EventKind.TURN_FINISHED)
     assert done.body == {"unanswered": False}
     assert done.header.duration_s is not None and done.header.duration_s < TIMEOUT_S
+
+
+async def test_turn_owner_is_reported_as_seen_and_detach_frees_the_session() -> None:
+    seen: list[tuple[str, Caller]] = []
+    turns = Turns(dict.fromkeys(TriggerSource, Fate.CANCEL))
+    sessions = Sessions(turns, Priority.NORMAL, lambda s, c: seen.append((s, c)))
+    gate = TriggerGate(
+        "s1",
+        sessions,
+        lambda _: OWNER,
+        Recorder(MemoryEventLog(), SystemClock()),
+        settle_s=SETTLE_S,
+        response_timeout_s=TIMEOUT_S,
+    )
+    await run(gate, [Call(lambda: sessions.submit(trig(Priority.NORMAL, TriggerSource.TEXT)))])
+    assert seen == [("s1", OWNER)]
+    await sessions.detach("s1")
+    assert sessions.names() == [] and sessions.running("s1") is None
+    with pytest.raises(ValueError):
+        await sessions.submit(trig(Priority.NORMAL))

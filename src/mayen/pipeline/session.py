@@ -56,9 +56,15 @@ _TICK_S = 0.05
 class Sessions:
     """Oturumların kapıları ve ortak `Turns`; kararları ilgili oturumun kapısına taşır."""
 
-    def __init__(self, turns: Turns, voice: Priority) -> None:
+    def __init__(
+        self,
+        turns: Turns,
+        voice: Priority,
+        seen: Callable[[str, Caller], None] = lambda session, requester: None,
+    ) -> None:
         self._turns = turns
         self._voice = voice  # sesli tetikleyicinin önceliği (§5.1)
+        self._seen = seen  # tur kime aitse onun bu oturumda etkileşimde bulunduğu (§12)
         self._gates: dict[str, TriggerGate] = {}
 
     @property
@@ -74,6 +80,11 @@ class Sessions:
             raise ValueError(f"session {gate.session!r} already has a gate")
         self._gates[gate.session] = gate
 
+    async def detach(self, session: str) -> None:
+        """Oturumun hattı kapandı; turları düşer, yeri bekleyenlere geçer."""
+        self._gates.pop(session, None)
+        await self._apply(self._turns.drop(session), None)
+
     def running(self, session: str) -> Turn | None:
         """Oturumun süren turu; sahibi tanındıysa güncel hâliyle (`identify`)."""
         return self._turns.running(session)
@@ -83,6 +94,7 @@ class Sessions:
 
     def identify(self, session: str, requester: Caller) -> None:
         self._turns.identify(session, requester)
+        self._seen(session, requester)
 
     async def submit(self, trigger: Trigger) -> None:
         if trigger.session not in self._gates:
@@ -101,6 +113,7 @@ class Sessions:
             if isinstance(action, Interrupt):
                 await gate.interrupt(action.turn, action.fate, already_cut=by_voice)
             else:
+                self._seen(gate.session, action.turn.trigger.requester)
                 await gate.start(action.turn, fresh=action.turn.trigger is fresh)
 
 

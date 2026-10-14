@@ -1,18 +1,30 @@
 """Bağlama ve açılış (§4, §14): config, skill keşfi, oturum kurulumu, çıkış kodu."""
 
+import asyncio
 import shutil
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+import uvicorn
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer
 from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from websockets.asyncio.client import connect
+from websockets.exceptions import InvalidStatus
+from websockets.typing import Origin
 
 from fakes import FakeClock
-from mayen.adapters.storage.sqlite import Database, SqliteNoteStore, SqliteTimerStore
+from mayen.adapters.storage.sqlite import (
+    Database,
+    SqliteNoteStore,
+    SqlitePersonStore,
+    SqliteTimerStore,
+)
 from mayen.app.config import ConfigError, load
-from mayen.app.main import EXIT_CONFIG, main
+from mayen.app.main import EXIT_CONFIG, EXIT_REFUSED, main
+from mayen.app.server import TEXT_PATH, text_app
 from mayen.app.wiring import (
     Core,
     ToolCtx,
@@ -22,6 +34,7 @@ from mayen.app.wiring import (
     voice_session,
 )
 from mayen.core.policy import ROLE_TABLE
+from mayen.ports.people import LOCAL_DEVICE, DeviceId
 from mayen.ports.tools import Caller, Effect, Role, Sensitivity, Status
 from mayen.ports.triggers import Fate, Priority, TriggerSource
 from mayen.skills import (
@@ -73,7 +86,7 @@ def test_home_in_storage_path_is_expanded(tmp_path: Path) -> None:
         (("    event: restart\n", ""), "event"),  # akıbeti eksik kaynak
         (("timer: restart", "timer: resume"), "timer"),  # hatta karşılığı olmayan akıbet
         (("system: prompts/system.txt", "system: prompts/none.txt"), "none.txt"),
-        (("timer: {READ: [GENERAL]}", "timer: {READ: [SECRET]}"), "SECRET"),
+        (("timer: {}", "timer: {READ: [SECRET]}"), "SECRET"),
     ],
 )
 def test_bad_config_is_a_config_error(
@@ -194,7 +207,7 @@ def test_bad_skill_override_is_a_config_error(
 
 def test_timer_without_system_permissions_is_a_config_error(tmp_path: Path) -> None:
     text = EXAMPLE.read_text(encoding="utf-8").replace(
-        "system_role:\n  timer: {READ: [GENERAL]}\n", "system_role: {}\n"
+        "system_role:\n  timer: {}", "system_role: {}"
     )
     config = load(config_dir(tmp_path, text), {"MAYEN_MODEL": "local"})
     with Database(tmp_path / "m.db") as db, pytest.raises(ConfigError, match="timer"):
@@ -202,7 +215,8 @@ def test_timer_without_system_permissions_is_a_config_error(tmp_path: Path) -> N
 
 
 def test_system_role_rights_follow_the_turn_source(tmp_path: Path) -> None:
-    config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
+    text = EXAMPLE.read_text(encoding="utf-8").replace("timer: {}", "timer: {READ: [GENERAL]}")
+    config = load(config_dir(tmp_path, text), {"MAYEN_MODEL": "local"})
     with Database(tmp_path / "m.db") as db:
         core = Core(config, db)
         assert core.table("s1") is ROLE_TABLE
@@ -210,6 +224,13 @@ def test_system_role_rights_follow_the_turn_source(tmp_path: Path) -> None:
         assert timer_table[(Role.SYSTEM, Effect.READ, Sensitivity.GENERAL)]
         assert not timer_table[(Role.SYSTEM, Effect.READ, Sensitivity.PERSONAL)]
         assert not timer_table[(Role.SYSTEM, Effect.WRITE, Sensitivity.GENERAL)]
+
+
+def test_empty_system_role_closes_every_cell(tmp_path: Path) -> None:
+    config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
+    with Database(tmp_path / "m.db") as db:
+        timer_table = Core(config, db).tables[TriggerSource.TIMER]
+        assert not any(v for (role, _, _), v in timer_table.items() if role is Role.SYSTEM)
 
 
 class Passing(FrameProcessor):
@@ -234,7 +255,88 @@ def test_voice_session_is_wired(tmp_path: Path) -> None:
         def caller(_: TranscriptionFrame) -> Caller:
             return OWNER
 
-        voice = Voice(Passing(), Passing(), Passing(), Passing(), SilentVAD(), caller)
+        voice = Voice(
+            Passing(), Passing(), Passing(), Passing(), SilentVAD(), caller, LOCAL_DEVICE
+        )
         session = voice_session(core, "s1", voice)
         assert session.gate.session == "s1"
         assert core.sessions.running("s1") is None
+
+
+def test_setup_sets_up_the_owner_once(tmp_path: Path) -> None:
+    path = config_dir(tmp_path)
+    args = ["--config", str(path), "setup", "--name", "Sinan", "--language", "tr"]
+    assert main([*args, "--device", "local", "--device", "nPhone"]) == 0
+    assert main(args) == EXIT_REFUSED
+    with Database(tmp_path / "data" / "mayen.db") as db:
+        owner = SqlitePersonStore(db).owner()
+    assert owner is not None and owner.devices == (LOCAL_DEVICE, DeviceId("nPhone"))
+
+
+def test_setup_needs_no_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MAYEN_MODEL", raising=False)
+    path = config_dir(tmp_path)
+    assert main(["--config", str(path), "setup", "--name", "S", "--language", "tr"]) == 0
+
+
+def test_setup_with_a_broken_config_is_a_config_error(tmp_path: Path) -> None:
+    path = config_dir(tmp_path, "storage: {}\n")
+    assert main(["--config", str(path), "setup", "--name", "S", "--language", "tr"]) == (
+        EXIT_CONFIG
+    )
+
+
+class FixedIdentity:
+    def __init__(self) -> None:
+        self.next: DeviceId | None = None
+        self.asked: list[str] = []
+
+    async def device(self, address: str) -> DeviceId | None:
+        self.asked.append(address)
+        return self.next
+
+
+async def until(condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition never held")
+
+
+async def test_each_connection_gets_a_session_from_its_device(tmp_path: Path) -> None:
+    config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
+    config.storage_path.parent.mkdir(parents=True)
+    with Database(config.storage_path) as db:
+        core = Core(config, db)
+        owner = core.people.create_owner("Sinan", "tr", None, (DeviceId("nPhone"),))
+        identity = FixedIdentity()
+        server = uvicorn.Server(
+            uvicorn.Config(text_app(core, identity), host="127.0.0.1", port=0, log_config=None)
+        )
+        serving = asyncio.create_task(server.serve())
+        await until(lambda: server.started)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        url = f"ws://127.0.0.1:{port}{TEXT_PATH}"
+        try:
+            # Tarayıcıdan gelen bağlantı reddedilir (Origin başlığı).
+            with pytest.raises(InvalidStatus):
+                async with connect(url, origin=Origin("http://example.com")):
+                    pass
+            async with connect(url):
+                await until(lambda: len(core.sessions.names()) == 1)
+                [unverified] = core.sessions.names()
+                assert core.presence.personal(unverified) is None
+            await until(lambda: core.sessions.names() == [])
+            identity.next = DeviceId("nPhone")
+            async with connect(url):
+                await until(lambda: len(core.sessions.names()) == 1)
+                [phone] = core.sessions.names()
+                assert core.presence.personal(phone) == owner.id
+                assert core.presence.target(owner.id, Sensitivity.PERSONAL) == phone
+            await until(lambda: core.sessions.names() == [])
+            assert core.presence.target(owner.id, Sensitivity.PERSONAL) is None
+            assert identity.asked == ["127.0.0.1", "127.0.0.1"]
+        finally:
+            server.should_exit = True
+            await serving

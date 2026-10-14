@@ -13,7 +13,7 @@ from typing import Any
 
 from mayen.ports.events import Clock
 from mayen.ports.timers import Timer, TimerState, TimerStore
-from mayen.ports.tools import Caller, Role
+from mayen.ports.tools import Caller, Role, Sensitivity
 from mayen.ports.triggers import Trigger, TriggerSource
 
 # Kimse konuşmadan açılan tur (§10.2); yetkisi tetikleyici kaynağına göre config'tedir.
@@ -50,8 +50,9 @@ class TimerDispatcher:
     """Vadesi gelenleri tetikleyici olarak gönderir ve akıbetlerini depoya yazar.
 
     Akıbet gönderimden sonra yazılır: gönderilemeyen zamanlayıcı beklemede kalır ve bir
-    sonraki bakışta yeniden denenir. Hedef oturum yoksa hiçbir şey gönderilmez (§12: hiçbir
-    cihaz bağlı değilse kuyruklanır).
+    sonraki bakışta yeniden denenir. Hedef, zamanlayıcının kişisine ve hassasiyetine göre
+    seçilir (§12, §7); hedefi olmayan zamanlayıcı beklemede kalır (§12: kuyruklanır) ve
+    süresi o arada dolarsa bağlanılınca "kaçırılanlar" özetine girer.
     """
 
     def __init__(
@@ -59,7 +60,7 @@ class TimerDispatcher:
         store: TimerStore,
         clock: Clock,
         submit: Callable[[Trigger], Awaitable[None]],
-        target: Callable[[], str | None],
+        target: Callable[[str | None, Sensitivity], str | None],
     ) -> None:
         self._store = store
         self._clock = clock
@@ -67,11 +68,11 @@ class TimerDispatcher:
         self._target = target
 
     async def dispatch(self) -> None:
-        session = self._target()
-        if session is None:
-            return
         due = sort_due(self._store.pending(), self._clock.now())
         for timer in due.fire:
+            session = self._target(timer.person_id, timer.sensitivity)
+            if session is None:
+                continue
             await self._submit(
                 Trigger(
                     session,
@@ -83,14 +84,20 @@ class TimerDispatcher:
                 )
             )
             self._store.close(timer.id, TimerState.FIRED)
-        if due.missed:
-            # Tek özet: uzun bir kapanıştan sonra hatırlatmalar art arda çalmasın (§12).
-            missed: list[dict[str, Any]] = [
-                {"text": t.text, "due": local(t.due)} for t in due.missed
+        # Tek özet her oturum için: uzun bir kapanıştan sonra hatırlatmalar art arda
+        # çalmasın (§12).
+        missed: dict[str, list[Timer]] = {}
+        for timer in due.missed:
+            session = self._target(timer.person_id, timer.sensitivity)
+            if session is not None:
+                missed.setdefault(session, []).append(timer)
+        for session, timers in missed.items():
+            summary: list[dict[str, Any]] = [
+                {"text": t.text, "due": local(t.due)} for t in timers
             ]
-            priority = max((t.priority for t in due.missed), key=lambda p: p.rank)
+            priority = max((t.priority for t in timers), key=lambda p: p.rank)
             await self._submit(
-                Trigger(session, priority, TriggerSource.TIMER, "", SYSTEM, {"missed": missed})
+                Trigger(session, priority, TriggerSource.TIMER, "", SYSTEM, {"missed": summary})
             )
-            for timer in due.missed:
+            for timer in timers:
                 self._store.close(timer.id, TimerState.MISSED)

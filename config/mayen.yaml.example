@@ -13,6 +13,7 @@ output_language: English       # modelin kullanıcıya konuştuğu dil (§8.6)
 
 triggers:
   voice_priority: normal       # sesli tetikleyicinin önceliği (§5.1)
+  text_priority: normal        # yazılı tetikleyicinin önceliği (§5.1)
   max_running: 1               # aynı anda süren tur sayısı (§5.2)
   settle_s: 1.0                # her şey bu kadar sessiz kalınca tur biter (§5.4)
   response_timeout_s: 20       # beklenen cevap bu sürede başlamazsa tur sessizce kapanır
@@ -25,10 +26,17 @@ triggers:
 confirmation:
   timeout_s: 20                # onay cevabı beklenen süre (§10.5)
 
+# Yazılı kanalın dinlediği adres (§7, §13). Erişim yalnızca özel ağdan: tailnet adresi ya da
+# yerel makine. Cihaz kimliği Tailscale'den okunur; Tailscale'den geçmeyen bağlantı ortak
+# cihazdır (§10.1).
+channel:
+  host: 127.0.0.1
+  port: 8765
+
 # Kimse konuşmadan açılan turun (system rolü) yetkisi, turu açan kaynağa göre (§10.2).
 # Etki sınıfı başına okunabilen/yazılabilen hassasiyetler; yazılmayan hücre kapalıdır.
 system_role:
-  timer: {READ: [GENERAL]}
+  timer: {}                    # hatırlatma metni tetikleyiciyle gelir; tool gerekmez
 
 # Skill varsayılanlarının üzerine yazma (§9.1); tek bir kayıt için kullanıcı ayrıca söyler.
 skills:

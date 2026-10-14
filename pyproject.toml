@@ -6,13 +6,16 @@ license = "Apache-2.0"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "openai>=3.29",  # llama.cpp adaptörü OpenAI uyumlu ucu kullanır
-    "pipecat-ai==1.12.0",  # sabit: güncelleme bilinçli bir karardır
+    "pipecat-ai[websocket]==1.12.0",  # sabit; `websocket`: çok istemcili taşıma (§13)
     "pydantic>=2.11",  # tool argümanları (§9.1); pipecat de ona bağlı
     "pyyaml>=6.0.3",  # config (§14)
+    "uvicorn>=0.30",  # yazılı kanalın sunucusu (§7, §13)
+    "websockets>=14",  # terminal istemcisi (clients/)
 ]
 
 [project.scripts]
 mayen = "mayen.app.main:main"
+mayen-terminal = "mayen.clients.terminal:main"
 
 [build-system]
 requires = ["hatchling"]

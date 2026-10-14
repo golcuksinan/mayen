@@ -23,6 +23,7 @@ ALLOWED: dict[str, frozenset[str]] = {
     "pipeline": frozenset({"ports", "core"}),
     "app": frozenset({"ports", "core", "skills", "adapters", "pipeline", "replay"}),
     "replay": frozenset({"ports", "core", "pipeline", "skills"}),
+    "clients": frozenset({"ports"}),
 }
 
 FRAMEWORK = "pipecat"

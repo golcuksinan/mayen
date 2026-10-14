@@ -1,8 +1,10 @@
 """Bağlama (§4): somut adaptörleri, servisleri ve skill'leri tanıyan tek yer.
 
 Süreçte bir `Core` vardır (depolar, kayıt defteri, tur kuyruğu); her oturum ondan kendi
-hattını kurar (§5.2). Ses birimleri (girdi, STT, TTS, çıktı) dışarıdan verilir: hangi motorun
-kullanılacağı hattın kuralı değildir, ve ses bağımlılıkları ancak ses hattıyla gelir.
+hattını kurar (§5.2). Oturum cihaz başınadır: sesli oturum çekirdeğin kendi ses birimleriyle,
+yazılı oturum her bağlantıyla kurulur. Ses birimleri (girdi, STT, TTS, çıktı) dışarıdan
+verilir: hangi motorun kullanılacağı hattın kuralı değildir, ve ses bağımlılıkları ancak ses
+hattıyla gelir.
 """
 
 import importlib
@@ -22,6 +24,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.transports.base_transport import BaseTransport
 
 import mayen.skills
 from mayen.adapters.llamacpp.confirmation import LlamaCppAnswerResolver, LlamaCppQuestionWriter
@@ -29,22 +32,27 @@ from mayen.adapters.storage.sqlite import (
     Database,
     SqliteEventLog,
     SqliteNoteStore,
+    SqlitePersonStore,
     SqliteTimerStore,
 )
 from mayen.adapters.trigger.timer import TimerTrigger
 from mayen.app.config import Config, ConfigError
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.policy import ROLE_TABLE, PolicyTable, system_table
+from mayen.core.presence import Presence
+from mayen.core.profile import caller as caller_of
 from mayen.core.registry import ToolRegistry
 from mayen.core.timers import TimerDispatcher
 from mayen.pipeline.confirmation import ConfirmationGateProcessor, NoRecoveryWhileAwaiting
 from mayen.pipeline.events import EventObserver, SessionEvents
 from mayen.pipeline.llm import llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
+from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
 from mayen.ports.events import Clock
 from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
+from mayen.ports.people import DeviceId
 from mayen.ports.timers import TimerStore
 from mayen.ports.tools import Caller, ToolSpec, TurnFlags
 from mayen.ports.triggers import TriggerSource
@@ -119,7 +127,11 @@ class Core:
     def __init__(self, config: Config, db: Database) -> None:
         self.config = config
         self.recorder = Recorder(SqliteEventLog(db), SystemClock())
-        self.sessions = Sessions(config.turns(), config.triggers.voice_priority)
+        self.presence = Presence()
+        self.sessions = Sessions(
+            config.turns(), config.triggers.voice_priority, self._interacted
+        )
+        self.people = SqlitePersonStore(db)
         specs = discover_skills()
         self.registry = ToolRegistry(specs)
         self.defaults = skill_defaults(specs, config.skills)
@@ -134,16 +146,24 @@ class Core:
             for source in SYSTEM_SOURCES
         }
         dispatcher = TimerDispatcher(
-            self.timers, self.recorder.clock, self.sessions.submit, self._timer_target
+            self.timers, self.recorder.clock, self.sessions.submit, self.presence.target
         )
         # Döngüyü hattı kuran başlatır; oturumsuz bir süreçte bakacak bir hedef yoktur.
         self.timer_trigger = TimerTrigger(dispatcher.dispatch)
 
-    def _timer_target(self) -> str | None:
-        # Hedef, kişinin en son etkileşimde bulunduğu cihazdır (§12); kanal ve profil
-        # portları gelene kadar hattı kurulmuş ilk oturum.
-        names = self.sessions.names()
-        return names[0] if names else None
+    def _interacted(self, session: str, requester: Caller) -> None:
+        if requester.person_id is not None:
+            self.presence.interacted(requester.person_id, session)
+
+    def connect(self, session: str, device: DeviceId | None) -> Caller:
+        """Oturumun cihazını kaydeder; cihaz bir kişiye eşleşmişse o kişinin çağıranı döner."""
+        person = None if device is None else self.people.by_device(device)
+        self.presence.connected(session, device, None if person is None else person.id)
+        return caller_of(person)
+
+    async def disconnect(self, session: str) -> None:
+        self.presence.disconnected(session)
+        await self.sessions.detach(session)
 
     def table(self, session: str) -> PolicyTable:
         """Oturumun süren turuna göre yetki tablosu: `system`'in yetkisi kaynağa bağlıdır."""
@@ -169,6 +189,8 @@ class Voice:
     vad: VADAnalyzer
     # Konuşmacı tanıma gelene kadar sözün kime ait olduğunu hattı kuran söyler (§10.4).
     caller: CallerSource
+    # Ses birimlerinin cihazı; çekirdeğin kendi makinesindeyse `LOCAL_DEVICE` (§10.1).
+    device: DeviceId | None
 
 
 @dataclass
@@ -181,12 +203,24 @@ class Session:
     observers: Sequence[BaseObserver] = field(default_factory=list)
 
 
-def voice_session(core: Core, session: str, voice: Voice) -> Session:
+@dataclass
+class _Conversation:
+    """Oturumun girdiden bağımsız parçaları: kapı, onay, toplayıcılar, model."""
+
+    gate: TriggerGate
+    confirmation: ConfirmationGateProcessor
+    aggregators: LLMContextAggregatorPair
+    llm: FrameProcessor
+    events: SessionEvents
+
+
+def _conversation(
+    core: Core, session: str, speaker: CallerSource, vad: VADAnalyzer | None
+) -> _Conversation:
     config = core.config
     endpoint = config.models.endpoint(CONVERSATION_ROLE)
-    gate: TriggerGate | None = None
 
-    def turn_id() -> Any:  # noqa: ANN401  # TurnId | None; kapı aşağıda kurulur
+    def turn_id() -> Any:  # noqa: ANN401  # TurnId | None
         turn = core.sessions.running(session)
         return None if turn is None else turn.id
 
@@ -199,13 +233,13 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
         LlamaCppQuestionWriter(endpoint, config.output_language),
         LlamaCppAnswerResolver(endpoint),
         config.confirmation.timeout_s,
-        lambda frame: voice.caller(frame).person_id,
+        lambda frame: speaker(frame).person_id,
         events,
     )
     gate = TriggerGate(
         session,
         core.sessions,
-        voice.caller,
+        speaker,
         core.recorder,
         settle_s=config.triggers.settle_s,
         response_timeout_s=config.triggers.response_timeout_s,
@@ -225,32 +259,68 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
     aggregators = LLMContextAggregatorPair(
         LLMContext(tools=tools.schema()),
         user_params=LLMUserAggregatorParams(
-            vad_analyzer=voice.vad,
-            user_mute_strategies=[HeardOnly(gate)],
+            vad_analyzer=vad,
+            user_mute_strategies=[HeardOnly(gate)] if vad is not None else [],
             empty_user_turn=NoRecoveryWhileAwaiting(confirmation),
         ),
     )
     _bind_response(aggregators.assistant(), gate)
-    pipeline = Pipeline(
-        [
-            voice.input,
-            voice.stt,
-            gate,
-            confirmation,
-            aggregators.user(),
-            llm,
-            voice.tts,
-            voice.output,
-            aggregators.assistant(),
-        ]
-    )
-    observers: list[BaseObserver] = [EventObserver(events)]
+    return _Conversation(gate, confirmation, aggregators, llm, events)
+
+
+def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Session:
+    observers: list[BaseObserver] = [EventObserver(conversation.events)]
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         observers=observers,
     )
-    return Session(worker, gate, confirmation, observers)
+    return Session(worker, conversation.gate, conversation.confirmation, observers)
+
+
+def voice_session(core: Core, session: str, voice: Voice) -> Session:
+    core.connect(session, voice.device)
+    c = _conversation(core, session, voice.caller, voice.vad)
+    pipeline = Pipeline(
+        [
+            voice.input,
+            voice.stt,
+            c.gate,
+            c.confirmation,
+            c.aggregators.user(),
+            c.llm,
+            voice.tts,
+            voice.output,
+            c.aggregators.assistant(),
+        ]
+    )
+    return _session(core, c, pipeline)
+
+
+def text_session(
+    core: Core, session: str, transport: BaseTransport, device: DeviceId | None
+) -> Session:
+    """Bir yazılı bağlantının oturumu (§7). Yazının kime ait olduğunu cihaz söyler: kişisel
+    cihazdan gelen yazı o kişinindir, doğrulanmamış ya da ortak cihazdan gelen tanımsızdır."""
+    requester = core.connect(session, device)
+    c = _conversation(core, session, lambda _: requester, None)
+    text_input = TextInput(
+        session, core.sessions, requester, core.config.triggers.text_priority
+    )
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            text_input,
+            c.gate,
+            c.confirmation,
+            c.aggregators.user(),
+            c.llm,
+            TextOutput(),
+            transport.output(),
+            c.aggregators.assistant(),
+        ]
+    )
+    return _session(core, c, pipeline)
 
 
 def _bind_response(assistant: LLMAssistantAggregator, gate: TriggerGate) -> None:

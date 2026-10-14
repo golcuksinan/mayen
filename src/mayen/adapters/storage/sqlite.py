@@ -24,8 +24,9 @@ from uuid import UUID
 
 from mayen.ports.events import Event, EventId, EventKind, Header, parse_stamp, stamp
 from mayen.ports.notes import Note
+from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError, Person
 from mayen.ports.timers import Timer, TimerState
-from mayen.ports.tools import Sensitivity, Status
+from mayen.ports.tools import Role, Sensitivity, Status
 from mayen.ports.triggers import Priority, TurnId
 
 # Ayrı bir bağlantının (yedek gibi) tuttuğu yazma kilidi için beklenecek süre.
@@ -51,6 +52,7 @@ VOCABULARIES: Sequence[tuple[str, str, type[StrEnum]]] = (
     ("timers", "priority", Priority),
     ("timers", "sensitivity", Sensitivity),
     ("timers", "state", TimerState),
+    ("people", "role", Role),
 )
 
 # Sürüm = sıradaki yeri (1'den başlar). Uygulanmış bir migration değiştirilmez; düzeltme
@@ -99,6 +101,25 @@ MIGRATIONS: Sequence[Sequence[str]] = (
             state TEXT NOT NULL {check_in("state", TimerState)}
         ) STRICT""",
         "CREATE INDEX timers_state ON timers (state, due, id)",
+    ),
+    (
+        f"""CREATE TABLE people (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL {check_in("role", Role)},
+            language TEXT NOT NULL,
+            address_as TEXT
+        ) STRICT""",
+        # Tek sahip veritabanında da zorlanır: kurulum komutunun denetimi tek başına bir
+        # yarışı engellemez (§10.2).
+        "CREATE UNIQUE INDEX people_one_owner ON people (role)"
+        f" WHERE role = '{Role.OWNER.value}'",
+        # Cihaz birincil anahtar: bir cihaz en çok bir kişinin kişisel cihazıdır (§10.1).
+        """CREATE TABLE devices (
+            id TEXT PRIMARY KEY,
+            person_id INTEGER NOT NULL REFERENCES people (id) ON DELETE CASCADE
+        ) STRICT""",
+        "CREATE INDEX devices_person ON devices (person_id, id)",
     ),
 )
 
@@ -411,3 +432,70 @@ def _timer(row: tuple[Any, ...]) -> Timer:
         person_id=person_id,
         state=TimerState(state),
     )
+
+
+class SqlitePersonStore:
+    """Kişi profili deposu (§11.1)."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def create_owner(
+        self, name: str, language: str, address_as: str | None, devices: tuple[DeviceId, ...]
+    ) -> Person:
+        try:
+            with self._db.transaction() as conn:
+                cursor = conn.execute(
+                    "INSERT INTO people (name, role, language, address_as) VALUES (?, ?, ?, ?)",
+                    (name, Role.OWNER.value, language, address_as),
+                )
+                conn.executemany(
+                    "INSERT INTO devices (id, person_id) VALUES (?, ?)",
+                    [(device, cursor.lastrowid) for device in dict.fromkeys(devices)],
+                )
+        except sqlite3.IntegrityError as e:
+            # SQLite kısıtı adıyla değil sütunuyla bildirir.
+            if "people.role" in str(e):
+                raise OwnerExistsError("an owner is already set up") from e
+            if "devices.id" in str(e):
+                raise DevicePairedError("a device is already paired to someone") from e
+            raise
+        return Person(
+            str(cursor.lastrowid),
+            name,
+            Role.OWNER,
+            language,
+            address_as,
+            tuple(dict.fromkeys(devices)),
+        )
+
+    def owner(self) -> Person | None:
+        return self._one("role = ?", Role.OWNER.value)
+
+    def get(self, person_id: str) -> Person | None:
+        number = _number(person_id)
+        return None if number is None else self._one("id = ?", number)
+
+    def by_device(self, device: DeviceId) -> Person | None:
+        return self._one("id = (SELECT person_id FROM devices WHERE id = ?)", device)
+
+    def _one(self, condition: str, value: str | int) -> Person | None:
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                f"SELECT id, name, role, language, address_as FROM people WHERE {condition}",
+                (value,),
+            ).fetchone()
+            if row is None:
+                return None
+            devices = conn.execute(
+                "SELECT id FROM devices WHERE person_id = ? ORDER BY id", (row[0],)
+            ).fetchall()
+        id_, name, role, language, address_as = row
+        return Person(
+            str(id_),
+            name,
+            Role(role),
+            language,
+            address_as,
+            tuple(DeviceId(d) for (d,) in devices),
+        )

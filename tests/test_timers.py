@@ -58,15 +58,17 @@ class Submitted:
         self.triggers.append(trigger)
 
 
-def add(store: SqliteTimerStore, at: float, text: str, priority: Priority) -> str:
+def add(
+    store: SqliteTimerStore, at: float, text: str, priority: Priority, person: str = "p1"
+) -> str:
     due = T0 + timedelta(seconds=at)
-    return store.add(due, text, priority, 60.0, Sensitivity.PERSONAL, "p1").id
+    return store.add(due, text, priority, 60.0, Sensitivity.PERSONAL, person).id
 
 
 async def test_due_timer_becomes_a_system_trigger_once(store: SqliteTimerStore) -> None:
     clock, submitted = FakeClock(), Submitted()
     add(store, 10, "ilaç", Priority.HIGH)
-    dispatcher = TimerDispatcher(store, clock, submitted, lambda: "s1")
+    dispatcher = TimerDispatcher(store, clock, submitted, lambda *_: "s1")
     await dispatcher.dispatch()
     assert submitted.triggers == []
     clock.advance(10)
@@ -90,7 +92,7 @@ async def test_missed_timers_arrive_as_one_summary(store: SqliteTimerStore) -> N
     add(store, -3600, "uyan", Priority.NORMAL)
     add(store, -1800, "toplantı", Priority.URGENT)
     add(store, -30, "ilaç", Priority.NORMAL)
-    await TimerDispatcher(store, clock, submitted, lambda: "s1").dispatch()
+    await TimerDispatcher(store, clock, submitted, lambda *_: "s1").dispatch()
     fired, summary = submitted.triggers
     assert fired.content == "ilaç"
     assert (summary.content, summary.priority) == ("", Priority.URGENT)
@@ -103,7 +105,7 @@ async def test_without_a_session_timers_wait(store: SqliteTimerStore) -> None:
     clock, submitted = FakeClock(), Submitted()
     add(store, 0, "ilaç", Priority.NORMAL)
     target: list[str | None] = [None]
-    dispatcher = TimerDispatcher(store, clock, submitted, lambda: target[0])
+    dispatcher = TimerDispatcher(store, clock, submitted, lambda *_: target[0])
     await dispatcher.dispatch()
     assert submitted.triggers == [] and len(store.pending()) == 1
     clock.advance(61)
@@ -113,11 +115,38 @@ async def test_without_a_session_timers_wait(store: SqliteTimerStore) -> None:
     assert summary.details["missed"][0]["text"] == "ilaç"
 
 
+async def test_each_timer_goes_to_its_own_persons_session(store: SqliteTimerStore) -> None:
+    """Hedef kişiye ve hassasiyete göre (§12); kaçırılanlar her oturumda tek özet."""
+    clock, submitted = FakeClock(), Submitted()
+    add(store, 0, "ilaç", Priority.NORMAL, "p1")
+    add(store, 0, "ödev", Priority.NORMAL, "p2")
+    add(store, -3600, "uyan", Priority.NORMAL, "p1")
+    add(store, -3600, "koşu", Priority.NORMAL, "p2")
+    add(store, 0, "kimsesiz", Priority.NORMAL, "p3")
+    asked: list[tuple[str | None, Sensitivity]] = []
+
+    def target(person: str | None, sensitivity: Sensitivity) -> str | None:
+        asked.append((person, sensitivity))
+        return {"p1": "s1", "p2": "s2"}.get(person or "")
+
+    await TimerDispatcher(store, clock, submitted, target).dispatch()
+    assert {
+        (t.session, t.content or t.details["missed"][0]["text"]) for t in submitted.triggers
+    } == {
+        ("s1", "ilaç"),
+        ("s2", "ödev"),
+        ("s1", "uyan"),
+        ("s2", "koşu"),
+    }
+    assert {s for _, s in asked} == {Sensitivity.PERSONAL}
+    assert [t.text for t in store.pending()] == ["kimsesiz"]
+
+
 async def test_failed_submit_keeps_the_timer_pending(store: SqliteTimerStore) -> None:
     clock, submitted = FakeClock(), Submitted()
     add(store, 0, "ilaç", Priority.NORMAL)
     submitted.fail = True
-    dispatcher = TimerDispatcher(store, clock, submitted, lambda: "s1")
+    dispatcher = TimerDispatcher(store, clock, submitted, lambda *_: "s1")
     with pytest.raises(ValueError):
         await dispatcher.dispatch()
     assert len(store.pending()) == 1

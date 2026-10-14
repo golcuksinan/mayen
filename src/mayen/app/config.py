@@ -42,6 +42,7 @@ class PromptConfig(_Strict):
 
 class TriggerConfig(_Strict):
     voice_priority: Priority
+    text_priority: Priority
     max_running: int = Field(ge=1)
     settle_s: float = Field(gt=0)
     response_timeout_s: float = Field(gt=0)
@@ -52,12 +53,18 @@ class ConfirmationConfig(_Strict):
     timeout_s: float = Field(gt=0)
 
 
+class ChannelConfig(_Strict):
+    host: str
+    port: int = Field(ge=1, le=65535)
+
+
 class _File(_Strict):
     storage: StorageConfig
     prompts: PromptConfig
     output_language: str  # modelin kullanıcıya konuştuğu dil (§8.6)
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
+    channel: ChannelConfig
     # Kimse konuşmadan açılan turun yetkisi, turu açan kaynağa göre (§10.2).
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     # Skill varsayılanlarının üzerine yazılanlar (§9.1); doğrulaması skill'ler bulununca.
@@ -73,6 +80,7 @@ class Config:
     output_language: str
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
+    channel: ChannelConfig
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     skills: dict[str, dict[str, Any]]
 
@@ -104,6 +112,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             output_language=file.output_language,
             triggers=file.triggers,
             confirmation=file.confirmation,
+            channel=file.channel,
             system_role=file.system_role,
             skills=file.skills,
         )
@@ -124,5 +133,8 @@ def load_models(path: Path, env: Mapping[str, str]) -> ModelRegistry:
 
 
 def storage_path(path: Path) -> Path:
-    """YAML'ın `storage` bölümünden veritabanı dosyası (§11.6)."""
-    return _relative(path, StorageConfig.model_validate(_read(path).get("storage")).path)
+    """YAML'ın `storage` bölümünden veritabanı dosyası (§11.6); model gerekmez."""
+    try:
+        return _relative(path, StorageConfig.model_validate(_read(path).get("storage")).path)
+    except (OSError, yaml.YAMLError, ValidationError) as e:
+        raise ConfigError(str(e)) from e

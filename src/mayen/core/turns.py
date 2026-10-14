@@ -138,6 +138,12 @@ class Turns:
                 del self._running[session]
         return self._fill()
 
+    def drop(self, session: str) -> list[Action]:
+        """Oturum kapandı: süren ve bekleyen turları onunla gider, yeri başkasına geçer."""
+        self._running.pop(session, None)
+        self._waiting = [w for w in self._waiting if w.turn.trigger.session != session]
+        return self._fill()
+
     def _enqueue(self, turn: Turn, *, front: bool = False) -> None:
         # Öne alınan tur kendi önceliğindekilerin önüne geçer, daha yükseklerin değil.
         self._arrivals += 1
