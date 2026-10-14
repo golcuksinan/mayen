@@ -132,7 +132,7 @@ def test_the_same_body_field_from_two_sources_is_an_error() -> None:
 
 def test_pipecat_service_sends_the_role_settings(tmp_path: Path) -> None:
     endpoint = registry(tmp_path).endpoint(ModelRole.TALKER)
-    service = llm_service(endpoint, "You are Mayen.")
+    service = llm_service(endpoint, "You are Mayen.", lambda: "[context]")
     params = service.build_chat_completion_params(
         OpenAILLMInvocationParams(messages=[], tools=NOT_GIVEN, tool_choice=NOT_GIVEN)
     )

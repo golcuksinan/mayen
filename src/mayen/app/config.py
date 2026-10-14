@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from mayen.core.context import LANGUAGE_SLOT
 from mayen.core.models import ModelConfigError, ModelRegistry
 from mayen.core.turns import TurnConfigError, Turns
 from mayen.ports.models import ModelRecord
@@ -38,6 +39,7 @@ class StorageConfig(_Strict):
 
 class PromptConfig(_Strict):
     system: Path
+    language: Path  # bağlam bloğunun sonundaki dil kuralı, `{language}` yer tutucusuyla (§8.6)
 
 
 class TriggerConfig(_Strict):
@@ -61,7 +63,7 @@ class ChannelConfig(_Strict):
 class _File(_Strict):
     storage: StorageConfig
     prompts: PromptConfig
-    output_language: str  # modelin kullanıcıya konuştuğu dil (§8.6)
+    default_language: str  # tanınmayan kişiye konuşulan dil; tanınanınki profilinde (§8.6)
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
     channel: ChannelConfig
@@ -77,7 +79,8 @@ class Config:
     models: ModelRegistry
     storage_path: Path
     system_prompt: str
-    output_language: str
+    language_rule: str
+    default_language: str
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
     channel: ChannelConfig
@@ -99,6 +102,14 @@ def _relative(config: Path, path: Path) -> Path:
     return config.parent / path.expanduser()
 
 
+def _language_rule(path: Path) -> str:
+    rule = path.read_text(encoding="utf-8")
+    if LANGUAGE_SLOT not in rule:
+        # Yer tutucusuz kural her kişiye aynı dili söyler; profildeki tercih sessizce düşer.
+        raise ConfigError(f"{path}: the language rule has no {LANGUAGE_SLOT}")
+    return rule
+
+
 def load(path: Path, env: Mapping[str, str]) -> Config:
     """Bütün config; her hata `ConfigError` olarak, açılışta yükselir."""
     try:
@@ -109,7 +120,8 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             models=ModelRegistry(file.models, env[ACTIVE_MODEL_ENV], env),
             storage_path=_relative(path, file.storage.path),
             system_prompt=_relative(path, file.prompts.system).read_text(encoding="utf-8"),
-            output_language=file.output_language,
+            language_rule=_language_rule(_relative(path, file.prompts.language)),
+            default_language=file.default_language,
             triggers=file.triggers,
             confirmation=file.confirmation,
             channel=file.channel,

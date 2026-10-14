@@ -5,7 +5,7 @@ kalmaz. Modelin gördüğü her şey İngilizcedir (§8.6).
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from openai import AsyncOpenAI
 
@@ -57,10 +57,10 @@ def client(endpoint: Endpoint) -> AsyncOpenAI:
 
 
 class LlamaCppQuestionWriter:
-    def __init__(self, endpoint: Endpoint, language: str) -> None:
+    def __init__(self, endpoint: Endpoint, language: Callable[[], str]) -> None:
         self._endpoint = endpoint
         self._client = client(endpoint)
-        self._language = language
+        self._language = language  # sorunun yazıldığı an konuşanın dili
 
     async def write(self, calls: Sequence[PlannedCall]) -> str:
         plan = [
@@ -70,7 +70,7 @@ class LlamaCppQuestionWriter:
         response = await self._client.chat.completions.create(
             model=self._endpoint.model,
             messages=[
-                {"role": "system", "content": WRITER_SYSTEM.format(language=self._language)},
+                {"role": "system", "content": WRITER_SYSTEM.format(language=self._language())},
                 {"role": "user", "content": json.dumps(plan, ensure_ascii=False)},
             ],
             extra_body=dict(self._endpoint.body),

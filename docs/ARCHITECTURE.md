@@ -474,8 +474,11 @@ modelini kabul eder (§8.7). Katalog değiştirmez (§8.3).
 
 ### 8.6 Dil
 
-Çıkış dili kişi profilinde bir tercihtir. Dil kuralı değişken bir değer olduğu için bağlam
-bloğunun sonunda durur.
+Çıkış dili kişi profilinde bir tercihtir. Tanınmayan kişiye config'teki varsayılan dille
+konuşulur; kimsenin istemediği turda (zamanlayıcı) dinleyen, oturumun cihazının eşleştiği
+kişidir. Onay sorusu da turu isteyenin dilinde yazılır. Dil kuralı değişken bir değer olduğu
+için bağlam bloğunun sonunda durur; metni sahibin prompt dosyasındadır, dil yer tutucuyla
+girer.
 
 **Modele giden her metin İngilizcedir:** sistem promptu, tool adları, açıklamaları ve
 parametreleri, tool sonuçları, bağlam bloğu ve yardımcı çağrıların promptları. Kullanıcının
@@ -1212,11 +1215,10 @@ Cevaplanmadan uygulanmaz; yerine varsayım konmaz (§0). Numaralar sabittir.
 22. **Onay promptlarının dile bağlılığı** (§10.5, §8.6, §2.1). Bugünkü gerçekleme sahibin
     dilini kavrama gömüyor: çözümleyici promptu cevabın "genellikle Türkçe" geleceğini
     varsayıyor ve örnekleri yalnızca Türkçe ve İngilizce; soru yazıcısının dil etiketi örneği
-    tek bir dil çiftine (`<tr>`) bağlı; çıkış dili konuşanın profilinden değil config'teki
-    tek değerden okunuyor. Açık olan: başka dilde konuşan biri için çözümleyicinin nasıl
-    çalışacağı (örneksiz model Türkçe olumsuzluğu göremedi; örnekler kişinin dilinden mi
-    gelir, çok dilli mi olur) ve config'teki çıkış dilinin kalkıp kalkmayacağı. Değişiklik
-    yeniden ölçüm ister.
+    tek bir dil çiftine (`<tr>`) bağlı. Çıkış dilinin kaynağı kapandı (§8.6). Açık olan: başka
+    dilde konuşan biri için çözümleyicinin nasıl çalışacağı (örneksiz model Türkçe olumsuzluğu
+    göremedi; örnekler kişinin dilinden mi gelir, çok dilli mi olur) ve etiket örneğinin dil çiftine bağlanmadan nasıl yazılacağı.
+    Değişiklik yeniden ölçüm ister.
 
 ---
 

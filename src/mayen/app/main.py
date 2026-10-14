@@ -39,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("check", help="validate the configuration and exit")
     setup = commands.add_parser("setup", help="set up the owner (once, on this machine)")
     setup.add_argument("--name", required=True)
-    setup.add_argument("--language", required=True, help="output language, e.g. tr")
+    setup.add_argument("--language", required=True, help="output language, e.g. English")
     setup.add_argument("--address-as", help="how the assistant addresses the owner")
     setup.add_argument(
         "--device",

@@ -61,12 +61,15 @@ def config_dir(tmp_path: Path, text: str | None = None) -> Path:
     path.write_text(body if text is None else text, encoding="utf-8")
     (tmp_path / "prompts").mkdir()
     (tmp_path / "prompts" / "system.txt").write_text("You are Mayen.", encoding="utf-8")
+    rule = "Answer in {language}."
+    (tmp_path / "prompts" / "language.txt").write_text(rule, encoding="utf-8")
     return path
 
 
 def test_example_config_loads(tmp_path: Path) -> None:
     config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
     assert config.system_prompt == "You are Mayen."
+    assert config.language_rule == "Answer in {language}."
     assert config.storage_path == tmp_path / "data" / "mayen.db"
     assert config.triggers.fates[TriggerSource.TEXT] is Fate.RESTART
 
@@ -75,6 +78,7 @@ def test_home_in_storage_path_is_expanded(tmp_path: Path) -> None:
     shutil.copy(EXAMPLE, tmp_path / "mayen.yaml")
     (tmp_path / "prompts").mkdir()
     (tmp_path / "prompts" / "system.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "prompts" / "language.txt").write_text("{language}", encoding="utf-8")
     config = load(tmp_path / "mayen.yaml", {"MAYEN_MODEL": "local"})
     assert config.storage_path == Path.home() / ".local/share/mayen/mayen.db"
 
@@ -95,6 +99,13 @@ def test_bad_config_is_a_config_error(
     text = EXAMPLE.read_text(encoding="utf-8").replace(*change)
     with pytest.raises(ConfigError, match=match):
         load(config_dir(tmp_path, text), {"MAYEN_MODEL": "local"})
+
+
+def test_language_rule_without_the_slot_is_a_config_error(tmp_path: Path) -> None:
+    path = config_dir(tmp_path)
+    (tmp_path / "prompts" / "language.txt").write_text("Answer in English.", encoding="utf-8")
+    with pytest.raises(ConfigError, match="language"):
+        load(path, {"MAYEN_MODEL": "local"})
 
 
 def test_main_exits_with_the_config_code(

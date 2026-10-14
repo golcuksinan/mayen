@@ -37,6 +37,7 @@ from mayen.adapters.storage.sqlite import (
 )
 from mayen.adapters.trigger.timer import TimerTrigger
 from mayen.app.config import Config, ConfigError
+from mayen.core.context import ContextBlock
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.policy import ROLE_TABLE, PolicyTable, system_table
 from mayen.core.presence import Presence
@@ -132,6 +133,13 @@ class Core:
             config.turns(), config.triggers.voice_priority, self._interacted
         )
         self.people = SqlitePersonStore(db)
+        self.context_block = ContextBlock(
+            self.people,
+            self.presence,
+            self.recorder.clock,
+            config.language_rule,
+            config.default_language,
+        )
         specs = discover_skills()
         self.registry = ToolRegistry(specs)
         self.defaults = skill_defaults(specs, config.skills)
@@ -230,7 +238,10 @@ def _conversation(
 
     events = SessionEvents(core.recorder, session, turn_id)
     confirmation = ConfirmationGateProcessor(
-        LlamaCppQuestionWriter(endpoint, config.output_language),
+        # Onay sorusu, turu isteyenin dilinde (§8.6).
+        LlamaCppQuestionWriter(
+            endpoint, lambda: core.context_block.language(session, caller())
+        ),
         LlamaCppAnswerResolver(endpoint),
         config.confirmation.timeout_s,
         lambda frame: speaker(frame).person_id,
@@ -254,7 +265,11 @@ def _conversation(
         TurnFlags,
         events,
     )
-    llm = llm_service(endpoint, config.system_prompt)
+    llm = llm_service(
+        endpoint,
+        config.system_prompt,
+        lambda: core.context_block.render(session, caller()),
+    )
     tools.register(llm)
     aggregators = LLMContextAggregatorPair(
         LLMContext(tools=tools.schema()),

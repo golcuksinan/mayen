@@ -8,8 +8,9 @@ storage:
 
 prompts:
   system: prompts/system.txt   # rol metni (persona ve kurallar), modele giden dilde
+  language: prompts/language.txt  # dil kuralı; {language} yerine konuşanın dili gelir (§8.6)
 
-output_language: English       # modelin kullanıcıya konuştuğu dil (§8.6)
+default_language: English      # tanınmayan kişiye konuşulan dil; tanınanınki profilinde (§8.6)
 
 triggers:
   voice_priority: normal       # sesli tetikleyicinin önceliği (§5.1)
