@@ -1209,6 +1209,14 @@ Cevaplanmadan uygulanmaz; yerine varsayım konmaz (§0). Numaralar sabittir.
     girecek bir skill olacak mı. Gerçek bir ihtiyaçla karar verilir.
 20. **Tool sonucu boyut sınırının değeri** (§8.8): tool başına mı, tek değer mi.
 21. **Düşünmenin (reasoning) yönetimi:** hangi adımda açık olduğu, bütçesi, kimin karar verdiği. Modele özgü değil, genel bir politika olarak.
+22. **Onay promptlarının dile bağlılığı** (§10.5, §8.6, §2.1). Bugünkü gerçekleme sahibin
+    dilini kavrama gömüyor: çözümleyici promptu cevabın "genellikle Türkçe" geleceğini
+    varsayıyor ve örnekleri yalnızca Türkçe ve İngilizce; soru yazıcısının dil etiketi örneği
+    tek bir dil çiftine (`<tr>`) bağlı; çıkış dili konuşanın profilinden değil config'teki
+    tek değerden okunuyor. Açık olan: başka dilde konuşan biri için çözümleyicinin nasıl
+    çalışacağı (örneksiz model Türkçe olumsuzluğu göremedi; örnekler kişinin dilinden mi
+    gelir, çok dilli mi olur) ve config'teki çıkış dilinin kalkıp kalkmayacağı. Değişiklik
+    yeniden ölçüm ister.
 
 ---
 
