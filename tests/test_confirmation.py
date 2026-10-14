@@ -1,5 +1,6 @@
 """Onay kapısı (§10.5, §9.3): kurallar Pipecat'siz, kapı Pipecat'in test hattında."""
 
+import asyncio
 import json
 import logging
 from collections.abc import Sequence
@@ -300,6 +301,29 @@ async def test_timeout_rejects_silently() -> None:
     content, speak = closed(down)
     assert content["confirmation"] == "timed_out"
     assert not speak
+    assert executed.order == []
+
+
+async def test_plan_of_an_interrupted_turn_is_cancelled_silently() -> None:
+    g, executed = gate(Writer("Delete note 1?"), Resolver(Resolution.CONFIRM)), Executed()
+    await request(g, executed, 1)
+
+    async def interrupted() -> None:
+        await asyncio.sleep(0.1)
+        await g.drop()
+
+    dropping = asyncio.create_task(interrupted())
+    down, _ = await run_test(
+        g, frames_to_send=[started("a"), result("a"), SleepFrame(0.2), said("evet")]
+    )
+    await dropping
+
+    content, speak = closed(down)
+    assert content["confirmation"] == "cancelled"
+    assert content["reason"] == "turn interrupted"
+    assert not speak
+    assert not g.awaiting
+    # Sonradan gelen "evet" düşen planı onaylamaz.
     assert executed.order == []
 
 

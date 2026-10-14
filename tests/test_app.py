@@ -24,7 +24,7 @@ from mayen.adapters.storage.sqlite import (
 )
 from mayen.app.config import ConfigError, load
 from mayen.app.main import EXIT_CONFIG, EXIT_REFUSED, main
-from mayen.app.server import TEXT_PATH, text_app
+from mayen.app.server import TEXT_PATH, LoopbackIsLocal, text_app
 from mayen.app.wiring import (
     Core,
     ToolCtx,
@@ -145,6 +145,9 @@ async def test_note_skills_share_the_store(tmp_path: Path) -> None:
         found = await note_search.run(note_search.Args(query="DİŞÇİ"), ctx)
         assert [r.data for r in found.records] == [{"id": "1", "text": "Yarın saat üçte dişçi"}]
         assert found.records[0].sensitivity is Sensitivity.PERSONAL
+        assert found.data == {"found": 1}
+        missing = await note_search.run(note_search.Args(query="berber"), ctx)
+        assert missing.data == {"found": 0}
         assert (await note_delete.run(note_delete.Args(id="1"), ctx)).status is Status.OK
         assert (await note_delete.run(note_delete.Args(id="1"), ctx)).status is Status.ERROR
         assert (await time_skill.run(time_skill.NoArgs(), ctx)).status is Status.OK
@@ -351,3 +354,21 @@ async def test_each_connection_gets_a_session_from_its_device(tmp_path: Path) ->
         finally:
             server.should_exit = True
             await serving
+
+
+class NoIdentity:
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    async def device(self, address: str) -> DeviceId | None:
+        self.asked.append(address)
+        return None
+
+
+async def test_this_machine_is_the_local_device_and_the_rest_is_verified() -> None:
+    inner = NoIdentity()
+    identity = LoopbackIsLocal(inner)
+    assert await identity.device("127.0.0.1") == LOCAL_DEVICE
+    assert await identity.device("::1") == LOCAL_DEVICE
+    assert await identity.device("100.64.0.7") is None
+    assert inner.asked == ["100.64.0.7"]

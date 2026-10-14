@@ -14,7 +14,7 @@ yeniden söylenir. Susturma Pipecat'in kullanıcı susturma stratejisiyle yapıl
 import asyncio
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -135,6 +135,7 @@ class TriggerGate(FrameProcessor):
         settle_s: float,
         response_timeout_s: float,
         holds: Sequence[Callable[[], bool]] = (),
+        drops: Sequence[Callable[[], Awaitable[None]]] = (),
     ) -> None:
         super().__init__()
         self.session = session
@@ -145,6 +146,7 @@ class TriggerGate(FrameProcessor):
         self._settle_s = settle_s
         self._response_timeout_s = response_timeout_s
         self._holds = holds  # turu açık tutan başka durumlar; onay beklemek gibi (§5.4)
+        self._drops = drops  # kesilen turla düşen başka işler; bekleyen onay planı gibi (§5.3)
         self._turn: Turn | None = None
         self._identified = True
         self._user_speaking = False
@@ -228,6 +230,8 @@ class TriggerGate(FrameProcessor):
         self._responding = False
         self._awaiting_since = None
         self._open_calls.clear()
+        for drop in self._drops:
+            await drop()
         if not already_cut:
             await self.broadcast_frame(InterruptionFrame)
         if fate is Fate.CANCEL:

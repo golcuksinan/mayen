@@ -117,6 +117,7 @@ async def test_reply_and_spoken_question_reach_the_client_as_messages() -> None:
             LLMTextFrame("Mer"),
             LLMTextFrame("haba."),
             LLMFullResponseEndFrame(),
+            LLMFullResponseEndFrame(),  # yalnızca tool çağıran cevap: istemciye gitmez
             TTSSpeakFrame("Silinsin mi?"),
         ],
     )

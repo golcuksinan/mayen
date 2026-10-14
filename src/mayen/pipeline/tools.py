@@ -92,6 +92,7 @@ class AuthorizedTools:
         self._caller = caller
         self._flags = flags
         self._events = events
+        self._malformed: set[str] = set()  # argümanı doğrulanamayan çağrılar (§9.1)
 
     def schema(self) -> ToolsSchema:
         functions = []
@@ -113,17 +114,23 @@ class AuthorizedTools:
 
     def _handler(self, spec: ToolSpec[Any]) -> Callable[[FunctionCallParams], Awaitable[None]]:
         async def handle(params: FunctionCallParams) -> None:
-            result, properties = await self.call(spec, params.arguments)
+            result, properties = await self.call(spec, params.arguments, params.tool_call_id)
             await params.result_callback(result, properties=properties)
 
         return handle
 
+    def malformed(self, call_id: str) -> bool:
+        """Bu çağrının argümanları doğrulanamadı mı; düzeltmesi adım harcamaz (§9.1)."""
+        return call_id in self._malformed
+
     async def call(
-        self, spec: ToolSpec[Any], raw: Mapping[str, Any]
+        self, spec: ToolSpec[Any], raw: Mapping[str, Any], call_id: str | None = None
     ) -> tuple[dict[str, Any], FunctionCallResultProperties | None]:
         """Tek bir çağrı: doğrula, karar ver, uygula. Pipecat'siz test edilebilsin diye ayrı."""
         args = parse_args(spec, raw)
         if isinstance(args, str):
+            if call_id is not None:
+                self._malformed.add(call_id)
             return to_model(self._refused(spec, dict(raw), Status.ERROR, args)), None
 
         caller = self._caller()

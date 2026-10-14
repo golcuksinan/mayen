@@ -55,6 +55,13 @@ class ConfirmationConfig(_Strict):
     timeout_s: float = Field(gt=0)
 
 
+class LoopConfig(_Strict):
+    """Ajan döngüsünün dış sınırı (§8.8, §9.1)."""
+
+    max_steps: int = Field(ge=1)  # geçerli çağrı taşıyan cevap sayısı
+    max_corrections: int = Field(ge=0)  # bütün çağrıları bozuk cevap sayısı; adım harcamaz
+
+
 class ChannelConfig(_Strict):
     host: str
     port: int = Field(ge=1, le=65535)
@@ -66,6 +73,7 @@ class _File(_Strict):
     default_language: str  # tanınmayan kişiye konuşulan dil; tanınanınki profilinde (§8.6)
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
+    loop: LoopConfig
     channel: ChannelConfig
     # Kimse konuşmadan açılan turun yetkisi, turu açan kaynağa göre (§10.2).
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
@@ -83,6 +91,7 @@ class Config:
     default_language: str
     triggers: TriggerConfig
     confirmation: ConfirmationConfig
+    loop: LoopConfig
     channel: ChannelConfig
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     skills: dict[str, dict[str, Any]]
@@ -124,6 +133,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             default_language=file.default_language,
             triggers=file.triggers,
             confirmation=file.confirmation,
+            loop=file.loop,
             channel=file.channel,
             system_role=file.system_role,
             skills=file.skills,

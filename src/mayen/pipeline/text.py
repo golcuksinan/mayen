@@ -105,7 +105,12 @@ class TextOutput(FrameProcessor):
     """Modelin metnini ve okutulacak soruyu (onay, §10.5) istemciye mesaj olarak gönderir.
 
     Metin kareleri hatta da ilerler: asistan toplayıcısı cevabı geçmişe onlardan yazar.
+    Yalnızca tool çağıran bir model cevabı istemciye gitmez; boş bir cevap sonu da gitmez.
     """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._open = False  # son cevap sonundan beri istemciye metin gitti mi
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -117,8 +122,9 @@ class TextOutput(FrameProcessor):
             await self._send(MessageKind.RESPONSE_END)
         elif isinstance(frame, TextFrame) and frame.text:
             await self._send(MessageKind.TEXT, frame.text)
-        elif isinstance(frame, LLMFullResponseEndFrame):
+        elif isinstance(frame, LLMFullResponseEndFrame) and self._open:
             await self._send(MessageKind.RESPONSE_END)
 
     async def _send(self, kind: MessageKind, text: str = "") -> None:
+        self._open = kind is MessageKind.TEXT
         await self.push_frame(OutputTransportMessageFrame(message=WireMessage(kind, text)))

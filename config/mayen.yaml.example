@@ -27,6 +27,10 @@ triggers:
 confirmation:
   timeout_s: 20                # onay cevabı beklenen süre (§10.5)
 
+loop:                          # ajan döngüsünün dış sınırı (§8.8); aşılınca model tool'suz cevaplar
+  max_steps: 5                 # geçerli çağrı taşıyan cevap sayısı
+  max_corrections: 2           # bütün çağrıları bozuk cevap sayısı; adım harcamaz (§9.1)
+
 # Yazılı kanalın dinlediği adres (§7, §13). Erişim yalnızca özel ağdan: tailnet adresi ya da
 # yerel makine. Cihaz kimliği Tailscale'den okunur; Tailscale'den geçmeyen bağlantı ortak
 # cihazdır (§10.1).

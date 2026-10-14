@@ -139,6 +139,20 @@ class ConfirmationGateProcessor(FrameProcessor):
             return
         self.create_task(self._answer(self._plan, answer))
 
+    async def drop(self) -> None:
+        """Planın turu kesildi: plan iptal olur ve konuşulmaz (§5.3: iptalin kapsamı tur).
+
+        Söz kesme bu değildir: soru okunurken söze girilirse plan yaşar (§5.4).
+        """
+        async with self._lock:
+            asking = self._asking
+            if self._plan is not None:
+                await self._finish(
+                    self._plan, Outcome.CANCELLED, speak=False, reason="turn interrupted"
+                )
+            if asking is not None:
+                await self.cancel_task(asking)  # yazılmakta olan soru düşen plana aittir
+
     async def _ask(self, plan: Plan) -> None:
         if plan.kind is Confirmation.IDENTITY:
             # Kişisel cihaza giden kanal yok; kimlik onayı alınamıyorsa sonuç reddir (§10.3).

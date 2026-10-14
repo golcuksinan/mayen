@@ -21,7 +21,8 @@ async def run(args: Args, ctx: ToolContext) -> ToolResult:
     # Her not kendi hassasiyetini taşır; kimin okuyabileceğine yetki süzgeci karar verir.
     notes = ctx.notes.search(args.query)
     records = [Record(n.sensitivity, {"id": n.id, "text": n.text}) for n in notes]
-    return ToolResult(Status.OK, records=records)
+    # Sayı modele boş sonucu söyler: kayıtsız bir "ok", aramanın bulamadığını göstermez.
+    return ToolResult(Status.OK, {"found": len(records)}, records=records)
 
 
 SPEC = ToolSpec(

@@ -21,7 +21,7 @@ import uvicorn
 from mayen.adapters.channel.tailscale import TailscaleIdentity
 from mayen.adapters.storage.sqlite import Database, SqlitePersonStore, StorageError
 from mayen.app.config import Config, ConfigError, load, storage_path
-from mayen.app.server import text_app
+from mayen.app.server import LoopbackIsLocal, text_app
 from mayen.app.wiring import Core, SkillLoadError
 from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError
 
@@ -99,7 +99,7 @@ def _setup(path: Path, args: argparse.Namespace) -> int:
 async def _serve(core: Core, config: Config) -> None:
     server = uvicorn.Server(
         uvicorn.Config(
-            text_app(core, TailscaleIdentity()),
+            text_app(core, LoopbackIsLocal(TailscaleIdentity())),
             host=config.channel.host,
             port=config.channel.port,
             log_config=None,

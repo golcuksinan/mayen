@@ -5,6 +5,7 @@ okunur (§10.1); istemci kendisi hakkında hiçbir şey beyan etmez.
 """
 
 import asyncio
+import ipaddress
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -20,10 +21,30 @@ from pipecat.workers.runner import WorkerRunner
 from mayen.app.wiring import Core, text_session
 from mayen.pipeline.text import WireSerializer
 from mayen.ports.channels import DeviceIdentity
+from mayen.ports.people import LOCAL_DEVICE, DeviceId
 
 TEXT_PATH = "/text"
 
 log = logging.getLogger(__name__)
+
+
+class LoopbackIsLocal:
+    """Bu makineden gelen bağlantı, bu makinenin cihazıdır (`LOCAL_DEVICE`); gerisi `inner`.
+
+    Geliştirme istisnasıdır (sahip, 17. ve 19. oturum): mimaride bu makine ortak cihazdır
+    (§10.1). Tailnet'ten bağlanan kişisel bir istemci olunca kalkar.
+    """
+
+    def __init__(self, inner: DeviceIdentity) -> None:
+        self._inner = inner
+
+    async def device(self, address: str) -> DeviceId | None:
+        try:
+            if ipaddress.ip_address(address).is_loopback:
+                return LOCAL_DEVICE
+        except ValueError:
+            pass  # adres değil (örneğin bir soket yolu); doğrulamayı içteki yapar
+        return await self._inner.device(address)
 
 
 def text_app(core: Core, identity: DeviceIdentity) -> FastAPI:

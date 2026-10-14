@@ -46,7 +46,7 @@ from mayen.core.registry import ToolRegistry
 from mayen.core.timers import TimerDispatcher
 from mayen.pipeline.confirmation import ConfirmationGateProcessor, NoRecoveryWhileAwaiting
 from mayen.pipeline.events import EventObserver, SessionEvents
-from mayen.pipeline.llm import llm_service
+from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
@@ -255,6 +255,7 @@ def _conversation(
         settle_s=config.triggers.settle_s,
         response_timeout_s=config.triggers.response_timeout_s,
         holds=[lambda: confirmation.awaiting],
+        drops=[confirmation.drop],
     )
     tools = AuthorizedTools(
         core.registry,
@@ -269,6 +270,8 @@ def _conversation(
         endpoint,
         config.system_prompt,
         lambda: core.context_block.render(session, caller()),
+        StepCap(config.loop.max_steps, config.loop.max_corrections),
+        tools.malformed,
     )
     tools.register(llm)
     aggregators = LLMContextAggregatorPair(
@@ -289,6 +292,8 @@ def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Ses
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         observers=observers,
+        # İstemci RTVI konuşmaz; açık kalırsa yazılı kanalın her mesajını kendi biçimi sanır.
+        enable_rtvi=False,
     )
     return Session(worker, conversation.gate, conversation.confirmation, observers)
 

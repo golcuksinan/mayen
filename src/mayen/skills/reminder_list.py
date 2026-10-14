@@ -33,7 +33,8 @@ async def run(_: NoArgs, ctx: ToolContext) -> ToolResult:
         )
         for t in ctx.timers.pending()
     ]
-    return ToolResult(Status.OK, records=records)
+    # Sayı modele boş sonucu söyler: kayıtsız bir "ok", aramanın bulamadığını göstermez.
+    return ToolResult(Status.OK, {"found": len(records)}, records=records)
 
 
 SPEC = ToolSpec(
