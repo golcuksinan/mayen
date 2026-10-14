@@ -125,10 +125,19 @@ class ConfirmationGateProcessor(FrameProcessor):
         elif self._plan is not None and isinstance(frame, InterimTranscriptionFrame):
             return
         elif self._plan is not None and isinstance(frame, TranscriptionFrame):
-            answer = Answer(frame.text, self._speaker(frame))
-            self.create_task(self._answer(self._plan, answer))
+            self.answer(Answer(frame.text, self._speaker(frame)))
             return
         await self.push_frame(frame, direction)
+
+    def answer(self, answer: Answer) -> None:
+        """Onay beklenirken gelen tek segment; yalnızca çözümleyiciye gider (§5.4).
+
+        Sesli segment hattan gelir; yazılı kanalın mesajı tetikleyiciye dönüşmeden buraya.
+        """
+        if self._plan is None:
+            log.warning("answer without an awaiting plan dropped")
+            return
+        self.create_task(self._answer(self._plan, answer))
 
     async def _ask(self, plan: Plan) -> None:
         if plan.kind is Confirmation.IDENTITY:

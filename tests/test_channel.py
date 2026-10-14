@@ -2,10 +2,12 @@
 
 import json
 import stat
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from pipecat.frames.frames import (
+    Frame,
     InputTransportMessageFrame,
     LLMFullResponseEndFrame,
     LLMMessagesAppendFrame,
@@ -25,10 +27,20 @@ from mayen.core.turns import Turns
 from mayen.pipeline.session import Sessions, TriggerGate
 from mayen.pipeline.text import TextInput, TextOutput, WireSerializer
 from mayen.ports.channels import MessageKind, WireMessage
+from mayen.ports.confirmation import Answer
 from mayen.ports.tools import Caller, Role
 from mayen.ports.triggers import Fate, Priority, TriggerSource
 
 OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
+
+
+class Confirmations:
+    def __init__(self, awaiting: bool) -> None:
+        self.awaiting = awaiting
+        self.answers: list[Answer] = []
+
+    def answer(self, answer: Answer) -> None:
+        self.answers.append(answer)
 
 
 def test_message_round_trip_keeps_turkish_text() -> None:
@@ -57,8 +69,9 @@ async def test_serializer_speaks_only_wire_messages() -> None:
     assert await serializer.deserialize("bozuk") is None
 
 
-async def test_written_message_opens_a_text_turn_for_the_device_owner() -> None:
-    log = MemoryEventLog()
+async def written(
+    text: str, confirmations: Confirmations, log: MemoryEventLog
+) -> Sequence[Frame]:
     sessions = Sessions(Turns(dict.fromkeys(TriggerSource, Fate.CANCEL)), Priority.NORMAL)
     gate = TriggerGate(
         "s1",
@@ -68,17 +81,33 @@ async def test_written_message_opens_a_text_turn_for_the_device_owner() -> None:
         settle_s=0.1,
         response_timeout_s=0.3,
     )
-    text_input = TextInput("s1", sessions, OWNER, Priority.HIGH)
-    message = WireMessage(MessageKind.TEXT, "selam")
+    text_input = TextInput("s1", sessions, confirmations, OWNER, Priority.HIGH)
+    message = WireMessage(MessageKind.TEXT, text)
     down, _ = await run_test(
         Pipeline([text_input, gate]),
         frames_to_send=[InputTransportMessageFrame(message=message)],
     )
+    return down
+
+
+async def test_written_message_opens_a_text_turn_for_the_device_owner() -> None:
+    log = MemoryEventLog()
+    down = await written("selam", Confirmations(awaiting=False), log)
     [append] = [f for f in down if isinstance(f, LLMMessagesAppendFrame)]
     assert append.messages == [{"role": "user", "content": "selam"}]
     assert not any(isinstance(f, InputTransportMessageFrame) for f in down)
     [started] = [e for e in log.events if e.body.get("source") == "text"]
     assert started.body["priority"] == "high"
+
+
+async def test_written_message_while_awaiting_is_only_an_answer() -> None:
+    log = MemoryEventLog()
+    confirmations = Confirmations(awaiting=True)
+    down = await written("evet", confirmations, log)
+    assert confirmations.answers == [Answer("evet", "1")]
+    # Tur açılmaz, model çalışmaz (§5.4: kapalı durum).
+    assert not any(isinstance(f, LLMMessagesAppendFrame) for f in down)
+    assert not [e for e in log.events if e.body.get("source") == "text"]
 
 
 async def test_reply_and_spoken_question_reach_the_client_as_messages() -> None:

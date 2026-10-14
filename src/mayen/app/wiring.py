@@ -320,7 +320,7 @@ def text_session(
     requester = core.connect(session, device)
     c = _conversation(core, session, lambda _: requester, None)
     text_input = TextInput(
-        session, core.sessions, requester, core.config.triggers.text_priority
+        session, core.sessions, c.confirmation, requester, core.config.triggers.text_priority
     )
     pipeline = Pipeline(
         [

@@ -2,10 +2,12 @@
 
 Taşıma çerçevenindir (§13); bu modül yalnızca serileştiriciyi ve hattın iki ucunu verir.
 Gelen yazı `text` tetikleyicisiyle tur açar; yazılı mesaj tek parça gelir ve dinleme
-durumundan geçmez (§5.4). Cevabın metni istemciye parça parça gider.
+durumundan geçmez (§5.4). Onay beklenirken gelen yazı tur açmaz, cevaptır: yalnızca onay
+çözümleyicisine gider (§5.4, §10.5). Cevabın metni istemciye parça parça gider.
 """
 
 import logging
+from typing import Protocol
 
 from pipecat.frames.frames import (
     Frame,
@@ -20,6 +22,7 @@ from pipecat.serializers.base_serializer import FrameSerializer
 
 from mayen.pipeline.session import Sessions
 from mayen.ports.channels import MessageKind, WireMessage
+from mayen.ports.confirmation import Answer
 from mayen.ports.tools import Caller
 from mayen.ports.triggers import Priority, Trigger, TriggerSource
 
@@ -46,15 +49,30 @@ class WireSerializer(FrameSerializer):
         return InputTransportMessageFrame(message=message)
 
 
+class Confirmations(Protocol):
+    """Oturumun onay kapısından yazılı kanalın gördüğü kısım."""
+
+    @property
+    def awaiting(self) -> bool: ...
+
+    def answer(self, answer: Answer) -> None: ...
+
+
 class TextInput(FrameProcessor):
     """İstemcinin yazısını oturumun tetikleyicisine çevirir; taşımanın hemen arkasında durur."""
 
     def __init__(
-        self, session: str, sessions: Sessions, requester: Caller, priority: Priority
+        self,
+        session: str,
+        sessions: Sessions,
+        confirmations: Confirmations,
+        requester: Caller,
+        priority: Priority,
     ) -> None:
         super().__init__()
         self._session = session
         self._sessions = sessions
+        self._confirmations = confirmations
         self._requester = requester  # bağlantının cihazından; tur boyunca değişmez
         self._priority = priority
 
@@ -67,6 +85,10 @@ class TextInput(FrameProcessor):
                 direction is FrameDirection.DOWNSTREAM
                 and frame.message.kind is MessageKind.TEXT
             ):
+                if self._confirmations.awaiting:
+                    text, speaker = frame.message.text, self._requester.person_id
+                    self._confirmations.answer(Answer(text, speaker))
+                    return
                 trigger = Trigger(
                     self._session,
                     self._priority,
