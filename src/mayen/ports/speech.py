@@ -7,6 +7,12 @@ STT: `POST /transcribe?language=<kod>` gövdesi ham PCM (16 bit, tek kanal, `sam
 hızında); yanıt JSON: `text`, `language` ve Whisper'ın kendi kuralından geçen parçalar.
 Dil verilmezse model kendisi bulur.
 
+VAD: `WS /vad`. Servis bağlanınca bir JSON selam yollar (`schema_version`, `sample_rate`,
+`frame`); istemci ardından `frame` örneklik ham PCM parçaları gönderir, servis her parçaya
+sırasıyla bir konuşma olasılığıyla (4 bayt, float32, little-endian) cevap verir. Model durumu
+bağlantı başınadır: bir bağlantı tek bir ses akışıdır. Olasılığı söze çeviren kural (eşik,
+başlama ve bitiş süreleri) çekirdektedir; serviste yalnızca model durur.
+
 TTS: `POST /speak` gövdesi JSON: `voice` ve sırasıyla okunacak `parts`; her parçanın
 `language`'ı `null` ise sesin kendi dilidir, değilse parça o dilin okunuşuyla aynı sese
 verilir (§7). Yanıt `sample_rate` hızında ham PCM akışıdır; ilk ses üretilir üretilmez gelir.
@@ -23,6 +29,10 @@ SCHEMA_VERSION = 1
 HEALTH = "/health"
 TRANSCRIBE = "/transcribe"
 SPEAK = "/speak"
+VAD = "/vad"
+
+VAD_FRAME = 512
+"""VAD modelinin bir seferde baktığı örnek sayısı (16 kHz'de 32 ms): modelin özelliği."""
 
 
 class SpeechContractError(Exception):
@@ -88,6 +98,20 @@ def parse_transcription(body: Any) -> Transcription:  # noqa: ANN401
         )
     except (KeyError, TypeError, ValueError) as e:
         raise SpeechContractError(f"transcription: {e}") from e
+
+
+@dataclass(frozen=True)
+class VadHello:
+    sample_rate: int
+    frame: int
+
+
+def parse_vad_hello(body: Any) -> VadHello:  # noqa: ANN401
+    b = _versioned(body)
+    try:
+        return VadHello(int(b["sample_rate"]), int(b["frame"]))
+    except (KeyError, TypeError, ValueError) as e:
+        raise SpeechContractError(f"vad: {e}") from e
 
 
 def speak_request(voice: str, parts: list[Part]) -> dict[str, Any]:

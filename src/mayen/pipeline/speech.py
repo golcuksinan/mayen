@@ -4,16 +4,25 @@ Servisle konuşma `ports.speech` sözleşmesidir. Açılışta servis biçimini 
 biçim bekleneni tutmazsa birim kalıcı hatayla düşer (§14): sessiz bir uyuşmazlık "asistan
 ince sesle konuşuyor" diye duyulur.
 
+Sözün başı ve sonu olasılıktan Pipecat'in VAD kuralıyla çıkar (eşik, başlama ve bitiş süreleri);
+olasılığı veren model STT servisindedir (`ServiceVAD`).
+
 TTS'e giden metindeki dil işaretini (`<tr>…</tr>`) model koyar (§7); burada yalnızca okunur ve
 parçalara bölünür, dili yorumlanmaz (§2.1). Ses birimine çevirmek sesin işidir, servistedir.
 """
 
+import asyncio
+import json
+import logging
 import re
+import time
 from collections.abc import AsyncGenerator, Callable, Mapping
 from typing import Any
 
 import aiohttp
+import numpy as np
 from pipecat.audio.utils import create_stream_resampler
+from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
 from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
@@ -28,18 +37,25 @@ from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
 from pipecat.utils.time import time_now_iso8601
+from websockets.exceptions import WebSocketException
+from websockets.sync.client import ClientConnection, connect
 
 from mayen.ports.speech import (
     HEALTH,
     SPEAK,
     TRANSCRIBE,
+    VAD,
+    VAD_FRAME,
     Health,
     Part,
     SpeechContractError,
     parse_health,
     parse_transcription,
+    parse_vad_hello,
     speak_request,
 )
+
+log = logging.getLogger(__name__)
 
 TAG = re.compile(r"<(/?)([a-z]{2})>")
 
@@ -68,6 +84,68 @@ async def _health(http: aiohttp.ClientSession, url: str) -> Health:
     async with http.get(url + HEALTH) as r:
         r.raise_for_status()
         return parse_health(await r.json())
+
+
+class ServiceVAD(VADAnalyzer):
+    """Her parçanın konuşma olasılığını STT servisindeki modelden alır (§18: çekirdek model
+    yüklemez); olasılığı söze çeviren kural Pipecat'in `VADAnalyzer`'ındadır.
+
+    `voice_confidence` analizcinin kendi iş parçacığında çağrılır, bağlantı da orada yaşar.
+    Servise ulaşılamazsa parça sessiz sayılır ve hata loga yazılır; bağlantı en çok saniyede
+    bir yeniden denenir. Servisin kendisinin düşmesi STT'nin açılış kontrolünde de görünür.
+    """
+
+    def __init__(self, url: str, params: VADParams | None = None) -> None:
+        super().__init__(params=params)
+        self._url = "ws" + url.rstrip("/").removeprefix("http") + VAD
+        self._ws: ClientConnection | None = None
+        self._retry_at = 0.0
+
+    def num_frames_required(self) -> int:
+        return VAD_FRAME
+
+    def voice_confidence(self, buffer: bytes) -> float:
+        try:
+            ws = self._ws or self._connect()
+            if ws is None:
+                return 0.0
+            ws.send(buffer)
+            reply = ws.recv(timeout=1.0)
+            if not isinstance(reply, bytes) or len(reply) != 4:
+                raise SpeechContractError(f"vad: unexpected reply {reply!r:.40}")
+            return float(np.frombuffer(reply, "<f4")[0])
+        except (OSError, ValueError, WebSocketException, SpeechContractError) as e:
+            log.error("VAD service: %s", e)
+            self._drop()
+            return 0.0
+
+    def _connect(self) -> ClientConnection | None:
+        if time.monotonic() < self._retry_at:
+            return None
+        self._retry_at = time.monotonic() + 1.0
+        ws = connect(self._url, open_timeout=2.0, legacy=True)
+        try:
+            hello = parse_vad_hello(json.loads(ws.recv(timeout=2.0)))
+            if (hello.sample_rate, hello.frame) != (self.sample_rate, VAD_FRAME):
+                raise SpeechContractError(
+                    f"vad: service is {hello.sample_rate} Hz / {hello.frame} samples, "
+                    f"stream is {self.sample_rate} Hz / {VAD_FRAME}"
+                )
+        except BaseException:
+            ws.close()
+            raise
+        self._ws = ws
+        return ws
+
+    def _drop(self) -> None:
+        if self._ws is not None:
+            self._ws.close()
+            self._ws = None
+
+    async def cleanup(self) -> None:
+        # Bağlantı analizcinin iş parçacığında yaşar; kapanış el sıkışması döngüyü bekletmez.
+        await asyncio.get_running_loop().run_in_executor(self._executor, self._drop)
+        await super().cleanup()  # type: ignore[no-untyped-call]  # Pipecat'te tipsiz
 
 
 class ServiceSTT(SegmentedSTTService):

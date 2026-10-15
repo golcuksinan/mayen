@@ -1,11 +1,13 @@
 """STT ve TTS servis istemcileri (§3, §7, §14): sahte servislere karşı."""
 
+import asyncio
+import struct
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestServer
 from pipecat.frames.frames import (
     ErrorFrame,
@@ -18,8 +20,8 @@ from pipecat.frames.frames import (
 )
 from pipecat.tests.utils import SleepFrame, run_test
 
-from mayen.pipeline.speech import ServiceSTT, ServiceTTS, split_parts
-from mayen.ports.speech import SCHEMA_VERSION, Part, Transcription
+from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceVAD, split_parts
+from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Part, Transcription
 
 
 @dataclass
@@ -30,12 +32,15 @@ class Fake:
     voices: list[str] = field(default_factory=lambda: ["emma"])
     version: int = SCHEMA_VERSION
     requests: list[Any] = field(default_factory=list)
+    vad_frame: int = VAD_FRAME
+    vad_connections: int = 0
 
     def app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/health", self.health)
         app.router.add_post("/transcribe", self.transcribe)
         app.router.add_post("/speak", self.speak)
+        app.router.add_get("/vad", self.vad)
         return app
 
     async def health(self, _: web.Request) -> web.Response:
@@ -58,6 +63,24 @@ class Fake:
                 "segments": [{"text": " hello ", "no_speech_prob": 0.1, "avg_logprob": -0.2}],
             }
         )
+
+    async def vad(self, request: web.Request) -> web.WebSocketResponse:
+        """Olasılık, parçanın ilk örneğinin büyüklüğü: test sesi kendisi seçer."""
+        self.vad_connections += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json(
+            {
+                "schema_version": self.version,
+                "sample_rate": self.sample_rate,
+                "frame": self.vad_frame,
+            }
+        )
+        async for message in ws:
+            if message.type is WSMsgType.BINARY:
+                first = struct.unpack_from("<h", message.data)[0]
+                await ws.send_bytes(struct.pack("<f", first / 32767))
+        return ws
 
     async def speak(self, request: web.Request) -> web.StreamResponse:
         self.requests.append(await request.json())
@@ -157,3 +180,37 @@ async def test_tts_with_a_missing_voice_fails_at_start(fake: tuple[Fake, str]) -
     tts = ServiceTTS(url, {"English": "brian"}, lambda: "English", sample_rate=16000)
     _, up = await run_test(tts, frames_to_send=[SleepFrame(0.1)])
     assert any("brian" in f.error for f in up if isinstance(f, ErrorFrame))
+
+
+def _frame(level: int) -> bytes:
+    return struct.pack("<h", level) * VAD_FRAME
+
+
+async def test_vad_takes_the_confidence_from_the_service(fake: tuple[Fake, str]) -> None:
+    service, url = fake
+    vad = ServiceVAD(url)
+    vad.set_sample_rate(16000)
+    loud = await asyncio.to_thread(vad.voice_confidence, _frame(32767))
+    quiet = await asyncio.to_thread(vad.voice_confidence, _frame(0))
+    await vad.cleanup()
+    assert (loud, quiet) == (1.0, 0.0)
+    assert service.vad_connections == 1  # akış tek bağlantıda; model durumu ona ait
+
+
+async def test_vad_with_another_frame_size_hears_nothing_and_retries_slowly(
+    fake: tuple[Fake, str],
+) -> None:
+    service, url = fake
+    service.vad_frame = VAD_FRAME * 2
+    vad = ServiceVAD(url)
+    vad.set_sample_rate(16000)
+    for _ in range(3):
+        assert await asyncio.to_thread(vad.voice_confidence, _frame(32767)) == 0.0
+    await vad.cleanup()
+    assert service.vad_connections == 1  # her parçada yeniden bağlanmıyor
+
+
+async def test_vad_without_a_service_hears_nothing() -> None:
+    vad = ServiceVAD("http://127.0.0.1:9")
+    vad.set_sample_rate(16000)
+    assert await asyncio.to_thread(vad.voice_confidence, _frame(32767)) == 0.0

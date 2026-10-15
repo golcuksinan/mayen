@@ -7,7 +7,9 @@ başlatmaz, başka makineye taşımak bir adres değişikliğidir.
 Sözleşme çekirdeğin `ports/speech.py` modülündedir; bu servis onu import etmez, burada aynen
 kurar. Her yanıt `schema_version` taşır.
 
-Sözün başı ve sonu çekirdeğin işidir (VAD); buraya bitmiş bir söz gelir. Sessizlik elemesi
+VAD modeli (Silero, faster-whisper'ın içindeki) da burada yaşar: `/vad` akan sesin her parçasına
+bir konuşma olasılığı döner. Sözün başı ve sonu olasılıktan çekirdekte çıkar; `/transcribe`'a
+bitmiş bir söz gelir. Sessizlik elemesi
 Whisper'ın kendi kuralıdır (faster-whisper'ın varsayılanı: `no_speech_prob` 0.6'nın üstünde
 **ve** `avg_logprob` -1'in altında olan parça atılır); tek sinyalle eleme cümle başlarını
 yutar.
@@ -19,6 +21,7 @@ yutar.
 
 import asyncio
 import ctypes
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,7 +29,7 @@ from typing import Any
 import numpy as np
 import uvicorn
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict
 
 SCHEMA_VERSION = 1
@@ -34,6 +37,55 @@ SCHEMA_VERSION = 1
 SAMPLE_RATE = 16_000
 """Whisper'ın girdi hızı: modelin özelliği, ayar değil. `/health` bildirir; istemci sesi bu
 hıza kendisi çevirir."""
+
+VAD_FRAME = 512
+"""Silero'nun 16 kHz'de bir seferde baktığı örnek sayısı; bağlamı önceki parçanın son 64'ü."""
+VAD_CONTEXT = 64
+VAD_RESET_FRAMES = 5 * SAMPLE_RATE // VAD_FRAME
+"""Model durumu bu kadar parçada bir sıfırlanır (Pipecat'in Silero'suyla aynı, ~5 sn): durum
+uzun akışta sürüklenir, söz için birkaç saniyeden eskisi gerekmez."""
+
+
+class Silero:
+    """Tek bir ses akışının VAD durumu; parçaları sırayla alır."""
+
+    def __init__(self, session: Any) -> None:  # noqa: ANN401  # onnxruntime.InferenceSession
+        self._session = session
+        self._frames = 0
+        self._reset()
+
+    def _reset(self) -> None:
+        self._h = np.zeros((1, 1, 128), np.float32)
+        self._c = np.zeros((1, 1, 128), np.float32)
+        self._context = np.zeros((1, VAD_CONTEXT), np.float32)
+
+    def __call__(self, pcm: bytes) -> float:
+        chunk = (np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0)[None]
+        x = np.concatenate([self._context, chunk], 1)
+        out, self._h, self._c = self._session.run(
+            None, {"input": x, "h": self._h, "c": self._c}
+        )
+        self._context = x[:, -VAD_CONTEXT:]
+        self._frames += 1
+        if self._frames % VAD_RESET_FRAMES == 0:
+            self._reset()
+        return float(np.ravel(out)[0])
+
+
+def vad_session() -> Any:  # noqa: ANN401
+    import onnxruntime
+    from faster_whisper.utils import get_assets_path
+
+    options = onnxruntime.SessionOptions()
+    options.inter_op_num_threads = 1
+    options.intra_op_num_threads = 1
+    options.log_severity_level = 4
+    # Parça başına çalışan küçük bir model; CPU'da GPU'ya gidip gelmekten hızlı.
+    return onnxruntime.InferenceSession(
+        os.path.join(get_assets_path(), "silero_vad_v6.onnx"),
+        providers=["CPUExecutionProvider"],
+        sess_options=options,
+    )
 
 
 class Settings(BaseModel):
@@ -79,6 +131,8 @@ def build(settings: Settings) -> FastAPI:
     )
     # Model durumu eşzamanlı çağrılar için güvenli sayılmaz; sözler sırayla çözülür.
     lock = asyncio.Lock()
+    # Oturum durumsuzdur, bağlantılar paylaşır; durum her bağlantının `Silero`'sundadır.
+    vad = vad_session()
     app = FastAPI()
 
     @app.get("/health")
@@ -110,6 +164,24 @@ def build(settings: Settings) -> FastAPI:
         audio = np.frombuffer(body, np.int16).astype(np.float32) / 32768.0
         async with lock:
             return await asyncio.to_thread(transcribe_sync, audio, language)
+
+    @app.websocket("/vad")
+    async def voice_activity(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json(
+            {"schema_version": SCHEMA_VERSION, "sample_rate": SAMPLE_RATE, "frame": VAD_FRAME}
+        )
+        silero = Silero(vad)
+        try:
+            while True:
+                pcm = await websocket.receive_bytes()
+                if len(pcm) != VAD_FRAME * 2:
+                    await websocket.close(code=1003, reason=f"expected {VAD_FRAME} samples")
+                    return
+                # Model parça başına döngüyü bekletmeyecek kadar kısa sürer; iş parçacığına gerek yok.
+                await websocket.send_bytes(np.array(silero(pcm), "<f4").tobytes())
+        except WebSocketDisconnect:
+            pass
 
     return app
 

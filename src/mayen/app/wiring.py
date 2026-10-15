@@ -59,7 +59,7 @@ from mayen.pipeline.events import (
 )
 from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
-from mayen.pipeline.speech import ServiceSTT, ServiceTTS
+from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceVAD
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
 from mayen.ports.events import Clock
@@ -211,8 +211,8 @@ class Core:
             else caller_of(person)
         )
 
-    def speech(self) -> tuple[FrameProcessor, TtsFactory]:
-        """Config'teki STT ve TTS servislerinin istemcileri (§3)."""
+    def speech(self) -> tuple[FrameProcessor, TtsFactory, VADAnalyzer]:
+        """Config'teki STT ve TTS servislerinin istemcileri (§3); VAD modeli STT servisinde."""
         stt, tts = self.config.stt, self.config.tts
         if stt is None or tts is None:
             raise ConfigError("a voice session needs both stt and tts in the config")
@@ -220,7 +220,7 @@ class Core:
         def make_tts(language: Callable[[], str]) -> FrameProcessor:
             return ServiceTTS(tts.url, tts.voices, language)
 
-        return ServiceSTT(stt.url, stt.language), make_tts
+        return ServiceSTT(stt.url, stt.language), make_tts, ServiceVAD(stt.url)
 
     def context(self, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
         return ToolCtx(
