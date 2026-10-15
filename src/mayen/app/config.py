@@ -67,6 +67,14 @@ class ChannelConfig(_Strict):
     port: int = Field(ge=1, le=65535)
 
 
+class PanelConfig(_Strict):
+    """Panel (§14). Tarayıcıda açık her sayfa sahibin cihazından bağlanabilir; bu yüzden
+    yalnızca burada adı geçen adreslerden açılan panel bağlanır."""
+
+    origins: list[str] = []  # tarayıcının Origin başlığıyla birebir karşılaştırılır
+    dist: Path | None = None  # derlenmiş panel; verilirse çekirdek onu `/panel/` altında sunar
+
+
 class _File(_Strict):
     storage: StorageConfig
     prompts: PromptConfig
@@ -75,6 +83,7 @@ class _File(_Strict):
     confirmation: ConfirmationConfig
     loop: LoopConfig
     channel: ChannelConfig
+    panel: PanelConfig = PanelConfig()
     # Kimse konuşmadan açılan turun yetkisi, turu açan kaynağa göre (§10.2).
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     # Skill varsayılanlarının üzerine yazılanlar (§9.1); doğrulaması skill'ler bulununca.
@@ -93,6 +102,7 @@ class Config:
     confirmation: ConfirmationConfig
     loop: LoopConfig
     channel: ChannelConfig
+    panel: PanelConfig
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     skills: dict[str, dict[str, Any]]
 
@@ -119,6 +129,12 @@ def _language_rule(path: Path) -> str:
     return rule
 
 
+def _panel(config: Path, panel: PanelConfig) -> PanelConfig:
+    if panel.dist is None:
+        return panel
+    return panel.model_copy(update={"dist": _relative(config, panel.dist)})
+
+
 def load(path: Path, env: Mapping[str, str]) -> Config:
     """Bütün config; her hata `ConfigError` olarak, açılışta yükselir."""
     try:
@@ -135,6 +151,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             confirmation=file.confirmation,
             loop=file.loop,
             channel=file.channel,
+            panel=_panel(path, file.panel),
             system_role=file.system_role,
             skills=file.skills,
         )

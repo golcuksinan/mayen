@@ -8,11 +8,13 @@ girer (§11). Cevabın metni istemciye parça parça gider.
 """
 
 import logging
+from collections.abc import Callable
 from typing import Protocol
 
 from pipecat.frames.frames import (
     Frame,
     InputTransportMessageFrame,
+    InterruptionFrame,
     LLMAssistantPushAggregationFrame,
     LLMFullResponseEndFrame,
     OutputTransportMessageFrame,
@@ -118,15 +120,21 @@ class TextOutput(FrameProcessor):
     Yalnızca tool çağıran bir model cevabı istemciye gitmez; boş bir cevap sonu da gitmez.
     Okutulan soruyu seste geçmişe TTS servisi yazar; yazılı hatta TTS olmadığından aynı
     kareleri bu işlemci verir, yoksa soru ne geçmişe ne transkripte girerdi.
+
+    Yazılı hatta sesin başlayıp bitmesi yoktur; istemciye metin gitmeye başlayınca Mayen
+    konuşuyordur, cevap sonu ya da söz kesme gelince susmuştur (§5.4).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, speaking: Callable[[bool], None] = lambda _: None) -> None:
         super().__init__()
         self._open = False  # son cevap sonundan beri istemciye metin gitti mi
+        self._speaking = speaking
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         await self.push_frame(frame, direction)
+        if isinstance(frame, InterruptionFrame):
+            self._speaking(False)
         if direction is not FrameDirection.DOWNSTREAM:
             return
         if isinstance(frame, TTSSpeakFrame):
@@ -143,4 +151,5 @@ class TextOutput(FrameProcessor):
 
     async def _send(self, kind: MessageKind, text: str = "") -> None:
         self._open = kind is MessageKind.TEXT
+        self._speaking(self._open)
         await self.push_frame(OutputTransportMessageFrame(message=WireMessage(kind, text)))

@@ -110,7 +110,7 @@ doğrudan açılmaz.
 
 ```
           ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-          │ mikrofon     │  │ telefon      │  │ web / panel  │   istemciler
+          │ mikrofon     │  │ telefon      │  │ panel        │   istemciler
           │ istemcisi    │  │ (kanal)      │  │              │
           └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
                  │ taşıma          │ taşıma          │ taşıma
@@ -157,8 +157,8 @@ pipeline/      ödünç alınan çerçeveye bağlanan her şey: hattaki işlemci
                sarmalayıcısı, seslendirme ve ses birimi dönüşümü
 app/           giriş noktası: config'i okur, adaptörleri ve servisleri seçer, her şeyi bağlar
 replay/        tekrar oynatma ve mock tool adaptörleri
-clients/       mikrofon, klavye, telefon, web istemcileri
-panel/         gözlem ve yönetim arayüzü
+clients/       mikrofon, klavye, masaüstü, telefon istemcileri
+panel/         gözlem arayüzü; Python değil, depo kökünde ayrı bir web projesi (§14)
 config/        YAML + prompt dosyaları (kod değil)
 ```
 
@@ -178,7 +178,6 @@ Olağan çözüm, iç katmanda tanımlanan bir `Protocol` ve onu dışta gerçek
 | `app` | hepsi |
 | `replay` | `ports`, `core`, `pipeline`, `skills` |
 | `clients` | `ports` |
-| `panel` | `ports` |
 
 - **Ödünç alınan çerçeve yalnızca `pipeline` ve `app`'te import edilir.** Çerçevenin sürüm
   güncellemesinin dokunduğu yüzey tek katmanla sınırlı kalır, yetki ve onay kararları
@@ -192,7 +191,8 @@ Olağan çözüm, iç katmanda tanımlanan bir `Protocol` ve onu dışta gerçek
 - **`skills` ile `adapters` birbirini görmez.** Tool *ne* istendiğini bilir, *nasıl* yapıldığını
   port arkasındaki adaptör bilir (§9.5).
 - **İstemciler ve panel ayrı süreçlerdir**; çekirdeğe yalnızca taşımayla bağlanır (§13),
-  çekirdeğin koduna değil.
+  çekirdeğin koduna değil. Python'da yazılmayan bir istemci ya da panel, `ports`'taki
+  sözleşmeyi kendi dilinde aynen kurar ve sürümü tutmayan mesajı göstermez.
 
 **Mekanik olarak zorlanır:** bir test, kaynağın AST'sini gezer ve tabloda olmayan her
 import'ta kırılır. Test tablonun döngüsüz olduğunu da doğrular; döngü, iki katmanın aslında tek
@@ -259,6 +259,10 @@ sessizce çöpe atardı ve kimse fark etmezdi.
 
 Tur durumları: `LISTENING` → `THINKING` → `SPEAKING`, ayrıca `AWAITING_CONFIRMATION` ve
 `ENROLLING`. Turu olmayan oturum `IDLE` durumundadır. Durumlar oturum başınadır.
+
+**Durum her değiştiğinde `state.changed` olayıyla yayınlanır.** İstemci ve panel durumu olay
+sırasından kendisi çıkarmaz; aynı çıkarımı her istemci ayrıca yazsaydı istemciler zamanla
+ayrışırdı. Yazılı hatta ses olmadığından istemciye metin gitmesi konuşmak sayılır.
 
 **İlk üç durumu ödünç alınan çerçevenin kareleri yürütür; kapalı durumlar Mayen'indir.**
 Sözün başlaması, bitmesi, söz kesme ve asistanın konuşmaya başlayıp bitirmesi çerçevenin
@@ -1104,7 +1108,7 @@ kurallar:
 | **Yedek adaptör** | Adaptörler için config'te sıralı yedek listesi |
 | **Sağlık kontrolü** | Adaptörlerin durumunu izler, yedeğe geçişi besler. Çıkış biçimi sabit olan bir servis (TTS örnekleme hızı gibi) farklı biçim bildirirse sağlık kontrolü yüksek sesle başarısız olur: sessiz bir uyuşmazlık "asistan ince sesle konuşuyor" diye duyulur ve sebebi okunamaz |
 | **Gözlemlenebilirlik** | Her aşamanın başlangıç ve bitiş damgası, yapılandırılmış ve seviyeli log. Karar modeli için de veri kaynağı. **Loga içerik girmez:** log olay zarfının yalnızca başlığını yazar (§5.5); konuşma metni, tool argümanı ve tool sonucu yazılmaz. İçerik taşıyan log, unut ve silin ulaşmadığı bir depo olurdu |
-| **Panel** | Olayları, logları ve durumu gösteren arayüz. Teknolojisi **AÇIK** (§16.17) |
+| **Panel** | Olayları ve oturumların durumunu canlı gösteren, salt okunur bir web arayüzü (React, TypeScript): telefondan da açılır. Sohbet etmez; konuşmak istemcilerin işidir. Önce istenen andan bu yana kayıtları, sonra kayda girdikçe canlı kayıtları alır. **Yalnızca sahibin cihazından açılır:** panel herkesin konuşmasını gösterir; cihaz taşımadan okunur (§10.1). Tarayıcıda açık başka bir sayfa da sahibin cihazından bağlanabileceği için panelin açıldığı adres config'teki izin listesinde olmalıdır. Yavaş bir panel kaydı bekletmez; geride kalınca bağlantısı bir hatayla kapanır, olay sessizce atlanmaz |
 | **Config** | Tek YAML: adaptörler, skill'ler, yerleşim, model deposu (§8.9), skill varsayılanlarının üzerine yazmalar (§9.1), saklama süreleri, izin listeleri. Prompt/kişilik ayrı dosyadan. Gizli bilgiler ortam değişkenlerinde ya da `.env`'de; YAML'da yalnızca adı geçer ve kod içinde maskeli bir tipte taşınır |
 | **Çoklu istemci** | Birden fazla istemci aynı çekirdeğe taşıma üzerinden bağlanır; oturum ve bağlam istemci başına |
 | **İşletim** | Servisler işletim sisteminin servis yöneticisiyle çalışır; uygulama kendini yeniden başlatmaya çalışmaz. Kalıcı bir yapılandırma hatası, yeniden başlatma döngüsüne gömülmesin diye ayrı bir çıkış koduyla biter. Servisler arası bağımlılık zayıf kurulur: ölü bir TTS asistanı susturur ama öldürmez |
@@ -1204,12 +1208,20 @@ Cevaplanmadan uygulanmaz; yerine varsayım konmaz (§0). Numaralar sabittir.
 14. **Medya deposunun biçimi ve boyutu.**
 15. **Saklama süreleri:** depo başına değerler, tanımsız seslerin kayıtları dahil.
 16. **Yedekleme:** sıklık, sayı, konum.
-17. **Panel teknolojisi.**
+17. ✅ §14
 18. **İlk ses hedefi: kapsam gereği sayısız.** Sahibin kararı: bir eşik bir yükümlülük üretir.
     İlk ses süresi ölçülür ve raporlanır, ama ona bir hedef sayı önerilmez.
 19. **`bash`'in alanı dışında sistemi değiştiren işler** (ekran parlaklığı, çalışan bir
     programı kapatma, zamanlı kapatma gibi) tool'u yoksa nasıl yapılır; `DANGEROUS` sınıfına
     girecek bir skill olacak mı. Gerçek bir ihtiyaçla karar verilir.
+    Konuşulmuş yön (karar değil): eylemin hedefi oturumun cihazıdır ve cihazı taşıma zaten
+    bildirir (§10.1); tarayıcı sistemi değiştiremez, bu yüzden eylem cihazdaki yerel bir parçada
+    (telefon uygulaması, masaüstü ajanı) çalışır. Komut ya istemcinin açık bağlantısından gider
+    ya da cihazdaki bir servise ağ üzerinden. İstemci tipi yerine istemci bağlanırken
+    yeteneklerini bildirir: tipler her yeni cihazda çoğalır, yetenek cihazda olanı söyler; beyan
+    kimlik değildir, yalan bir yetenek yetki kazandırmaz. Katalog sabit kalır (§8.3, §9); yeteneği
+    olmayan cihazda çağrı, ret gibi tool sonucu olarak döner. Cihazın yetenekleri bağlam
+    bloğuna girebilir.
 20. **Tool sonucu boyut sınırının değeri** (§8.8): tool başına mı, tek değer mi.
 21. **Düşünmenin (reasoning) yönetimi:** hangi adımda açık olduğu, bütçesi, kimin karar verdiği. Modele özgü değil, genel bir politika olarak.
 22. **Onay promptlarının dile bağlılığı** (§10.5, §8.6, §2.1). Bugünkü gerçekleme sahibin

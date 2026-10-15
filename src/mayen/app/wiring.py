@@ -42,14 +42,21 @@ from mayen.adapters.trigger.timer import TimerTrigger
 from mayen.app.config import Config, ConfigError
 from mayen.core.context import ContextBlock
 from mayen.core.events import Recorder, SystemClock
+from mayen.core.feed import Feed
 from mayen.core.policy import ROLE_TABLE, PolicyTable, system_table
 from mayen.core.presence import Presence
 from mayen.core.profile import caller as caller_of
 from mayen.core.registry import ToolRegistry
+from mayen.core.state import StateTracker
 from mayen.core.timers import TimerDispatcher
 from mayen.core.transcript import Transcript
 from mayen.pipeline.confirmation import ConfirmationGateProcessor, NoRecoveryWhileAwaiting
-from mayen.pipeline.events import EventObserver, SessionEvents, SessionTranscript
+from mayen.pipeline.events import (
+    EventObserver,
+    SessionEvents,
+    SessionTranscript,
+    session_state,
+)
 from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
 from mayen.pipeline.text import TextInput, TextOutput
@@ -132,8 +139,12 @@ class Core:
 
     def __init__(self, config: Config, db: Database) -> None:
         self.config = config
-        self.recorder = Recorder(SqliteEventLog(db), SystemClock())
-        self.transcript = Transcript(SqliteTranscript(db), self.recorder.clock)
+        # Panel kayda girenleri buradan canlı izler (§5.5); geçmişi depolardan okur.
+        self.feed = Feed()
+        self.events = SqliteEventLog(db)
+        self.utterances = SqliteTranscript(db)
+        self.recorder = Recorder(self.events, SystemClock(), self.feed)
+        self.transcript = Transcript(self.utterances, self.recorder.clock, self.feed)
         self.presence = Presence()
         self.sessions = Sessions(
             config.turns(), config.triggers.voice_priority, self._interacted
@@ -235,6 +246,7 @@ class _Conversation:
     aggregators: LLMContextAggregatorPair
     llm: FrameProcessor
     events: SessionEvents
+    state: StateTracker
 
 
 def _conversation(
@@ -253,6 +265,7 @@ def _conversation(
 
     events = SessionEvents(core.recorder, session, turn_id)
     transcript = SessionTranscript(core.transcript, session, turn_id)
+    state = session_state(events)
     confirmation = ConfirmationGateProcessor(
         # Onay sorusu, turu isteyenin dilinde (§8.6).
         LlamaCppQuestionWriter(
@@ -262,6 +275,7 @@ def _conversation(
         config.confirmation.timeout_s,
         lambda frame: speaker(frame).person_id,
         events,
+        state.awaiting,
     )
     gate = TriggerGate(
         session,
@@ -274,6 +288,7 @@ def _conversation(
         holds=[lambda: confirmation.awaiting],
         drops=[confirmation.drop],
         device_person=lambda: core.presence.personal(session),
+        state=state,
     )
     tools = AuthorizedTools(
         core.registry,
@@ -301,7 +316,7 @@ def _conversation(
         ),
     )
     _bind_response(aggregators.assistant(), gate, transcript)
-    return _Conversation(gate, confirmation, aggregators, llm, events)
+    return _Conversation(gate, confirmation, aggregators, llm, events, state)
 
 
 def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Session:
@@ -358,7 +373,7 @@ def text_session(
             c.confirmation,
             c.aggregators.user(),
             c.llm,
-            TextOutput(),
+            TextOutput(c.state.speaking),
             transport.output(),
             c.aggregators.assistant(),
         ]

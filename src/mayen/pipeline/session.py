@@ -38,6 +38,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 
 from mayen.core.events import Recorder
+from mayen.core.state import StateTracker
 from mayen.core.turns import Interrupt, Start, Turn, Turns
 from mayen.pipeline.events import UTTERANCE, SessionTranscript
 from mayen.ports.events import EventKind, ref
@@ -149,6 +150,7 @@ class TriggerGate(FrameProcessor):
         holds: Sequence[Callable[[], bool]] = (),
         drops: Sequence[Callable[[], Awaitable[None]]] = (),
         device_person: Callable[[], str | None] = lambda: None,
+        state: StateTracker | None = None,
     ) -> None:
         super().__init__()
         self.session = session
@@ -163,6 +165,8 @@ class TriggerGate(FrameProcessor):
         self._drops = drops  # kesilen turla düşen başka işler; bekleyen onay planı gibi (§5.3)
         # Oturumun cihazı kimin kişisel cihazı; kimse istemeden açılan turu o dinler (§8.6).
         self._device_person = device_person
+        # Oturumun durumu (§5.4): kapı turu, sözü ve sesi bildirir.
+        self._state = state or StateTracker(lambda _, __: None)
         self._turn: Turn | None = None
         self._identified = True
         self._user_speaking = False
@@ -216,6 +220,7 @@ class TriggerGate(FrameProcessor):
             },
             related=turn.trigger.records,
         )
+        self._state.turn(source)
         if source is TriggerSource.VOICE:
             if fresh:
                 return  # söz zaten hatta; cevabı Pipecat tetikler
@@ -252,6 +257,7 @@ class TriggerGate(FrameProcessor):
             status=Status.CANCELLED,
         )
         self._turn = None
+        self._state.turn(None)
         self._responding = False
         self._awaiting_since = None
         self._open_calls.clear()
@@ -273,6 +279,7 @@ class TriggerGate(FrameProcessor):
         await super().process_frame(frame, direction)
         if isinstance(frame, UserStartedSpeakingFrame):
             self._user_speaking = True
+            self._state.listening(True)
             self._answered = False
             self._quiet_since = None
             voice_turn = (
@@ -291,6 +298,7 @@ class TriggerGate(FrameProcessor):
             if self._user_speaking and not self._answered:
                 self._awaiting_since = time.monotonic()
             self._user_speaking = False
+            self._state.listening(False)
         elif isinstance(frame, TranscriptionFrame):
             self._heard(frame)
             if not self._identified:
@@ -298,8 +306,10 @@ class TriggerGate(FrameProcessor):
                 self._sessions.identify(self.session, self._caller(frame))
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
+            self._state.speaking(True)
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_speaking = False
+            self._state.speaking(False)
         elif isinstance(frame, FunctionCallsStartedFrame):
             self._open_calls |= {c.tool_call_id for c in frame.function_calls}
         elif isinstance(frame, FunctionCallResultFrame | FunctionCallCancelFrame):
@@ -394,6 +404,7 @@ class TriggerGate(FrameProcessor):
                     status=Status.OK,
                 )
                 self._turn = None
+                self._state.turn(None)
                 self._quiet_since = None
                 await self._sessions.finished(turn.id)
 

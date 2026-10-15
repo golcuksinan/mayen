@@ -174,6 +174,7 @@ MIGRATIONS: Sequence[Sequence[str]] = (
         "CREATE INDEX utterances_turn ON utterances (turn_id, time, seq)",
     ),
     rebuild_events(),  # tool.requested
+    rebuild_events(),  # state.changed
 )
 
 

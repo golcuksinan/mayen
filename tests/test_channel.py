@@ -148,8 +148,9 @@ async def test_written_message_while_awaiting_is_only_an_answer() -> None:
 
 
 async def test_reply_and_spoken_question_reach_the_client_as_messages() -> None:
+    speaking: list[bool] = []
     down, _ = await run_test(
-        TextOutput(),
+        TextOutput(speaking.append),
         frames_to_send=[
             LLMTextFrame("Mer"),
             LLMTextFrame("haba."),
@@ -168,6 +169,8 @@ async def test_reply_and_spoken_question_reach_the_client_as_messages() -> None:
     ]
     # Metin hatta da ilerler: asistan toplayıcısı geçmişi onlardan yazar.
     assert [f.text for f in down if isinstance(f, LLMTextFrame)] == ["Mer", "haba."]
+    # Metin gitmeye başlayınca konuşuyor, cevap sonunda susmuş (§5.4).
+    assert speaking == [True, True, False, True, False]
 
 
 def fake_tailscale(tmp_path: Path, body: str) -> str:

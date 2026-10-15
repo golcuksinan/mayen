@@ -2,6 +2,7 @@
 
 import uuid
 
+from mayen.core.feed import Feed
 from mayen.ports.events import Clock
 from mayen.ports.tools import Caller
 from mayen.ports.transcript import Party, TranscriptStore, Utterance, UtteranceId
@@ -11,9 +12,10 @@ from mayen.ports.triggers import TurnId
 class Transcript:
     """Sözleri transkripte yazar. Loga hiçbir şey yazmaz: metin içeriktir (§14)."""
 
-    def __init__(self, store: TranscriptStore, clock: Clock) -> None:
+    def __init__(self, store: TranscriptStore, clock: Clock, feed: Feed | None = None) -> None:
         self._store = store
         self._clock = clock
+        self._feed = feed
 
     def heard(
         self, session: str, turn_id: TurnId | None, speaker: Caller, text: str
@@ -48,4 +50,6 @@ class Transcript:
             interrupted=interrupted,
         )
         self._store.append(utterance)
+        if self._feed is not None:
+            self._feed.publish(utterance)
         return utterance

@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from mayen.core.feed import Feed
 from mayen.ports.events import Clock, Event, EventId, EventKind, EventLog, Header, stamp
 from mayen.ports.tools import Status
 from mayen.ports.triggers import TurnId
@@ -48,9 +49,10 @@ def describe(header: Header) -> str:
 class Recorder:
     """Olayları zarflayıp kaydeder ve başlığını loga yazar."""
 
-    def __init__(self, events: EventLog, clock: Clock) -> None:
+    def __init__(self, events: EventLog, clock: Clock, feed: Feed | None = None) -> None:
         self._events = events
         self.clock = clock
+        self._feed = feed
 
     def emit(
         self,
@@ -79,4 +81,6 @@ class Recorder:
         # Kayıt önce: yazılamayan olay yükselir ve logda yazılmış gibi görünmez.
         self._events.append(event)
         log.info("event %s", describe(header))
+        if self._feed is not None:
+            self._feed.publish(event)
         return event

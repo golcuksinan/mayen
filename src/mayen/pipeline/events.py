@@ -14,8 +14,9 @@ from pipecat.metrics.metrics import LLMUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 
 from mayen.core.events import Recorder
+from mayen.core.state import StateTracker
 from mayen.core.transcript import Transcript
-from mayen.ports.events import Event, EventKind
+from mayen.ports.events import Event, EventKind, SessionState
 from mayen.ports.tools import Caller, Status
 from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
@@ -57,6 +58,20 @@ class SessionEvents:
             status=status,
             related=related,
         )
+
+
+def session_state(events: SessionEvents) -> StateTracker:
+    """Oturumun durumu; her değişim bir `state.changed` olayıdır (§5.4, §5.5)."""
+
+    def changed(previous: SessionState, current: SessionState) -> None:
+        events.emit(
+            EventKind.STATE_CHANGED,
+            __name__,
+            {"state": current.value, "previous": previous.value},
+            status=Status.OK,
+        )
+
+    return StateTracker(changed)
 
 
 class SessionTranscript:

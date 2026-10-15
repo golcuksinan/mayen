@@ -13,5 +13,6 @@
 !/config/
 /config/*
 !/config/mayen.yaml.example
+!/panel/
 
 __pycache__/

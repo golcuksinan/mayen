@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import pytest
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     DataFrame,
     Frame,
     FunctionCallFromLLM,
@@ -24,9 +26,10 @@ from pipecat.tests.utils import SleepFrame, run_test
 
 from fakes import MemoryEventLog, MemoryTranscript, session_transcript
 from mayen.core.events import Recorder, SystemClock
+from mayen.core.state import StateTracker
 from mayen.core.turns import Turns
 from mayen.pipeline.session import HeardOnly, Sessions, TriggerGate
-from mayen.ports.events import EventKind
+from mayen.ports.events import EventKind, SessionState
 from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource
 
@@ -60,6 +63,7 @@ def make(
     holds: Sequence[Callable[[], bool]] = (),
     log: MemoryEventLog | None = None,
     store: MemoryTranscript | None = None,
+    state: StateTracker | None = None,
 ) -> tuple[Sessions, TriggerGate]:
     turns = Turns(fates or dict.fromkeys(TriggerSource, Fate.CANCEL))
     sessions = Sessions(turns, Priority.NORMAL)
@@ -75,6 +79,7 @@ def make(
         settle_s=SETTLE_S,
         response_timeout_s=TIMEOUT_S,
         holds=holds,
+        state=state,
     )
     return sessions, gate
 
@@ -420,3 +425,35 @@ async def test_turn_start_names_its_owner_and_links_the_triggers_records() -> No
     assert started.body["requester"] == {"role": "system", "person_id": "p1"}
     # İçerik kopyalanmaz; tur zamanlayıcı kaydına kimliğiyle bağlanır.
     assert started.header.related == ("timer:4",)
+
+
+async def test_gate_reports_the_sessions_state() -> None:
+    seen: list[SessionState] = []
+    sessions, gate = make(state=StateTracker(lambda _, current: seen.append(current)))
+    frames: list[Frame] = [
+        UserStartedSpeakingFrame(),
+        UserStoppedSpeakingFrame(),
+        BotStartedSpeakingFrame(),
+        BotStoppedSpeakingFrame(),
+        Call(gate.response_started),
+        Call(gate.response_stopped),
+        SleepFrame(SETTLE_S * 3),
+        Call(lambda: sessions.submit(trig(Priority.LOW, content="chat"))),
+        Call(lambda: sessions.submit(trig(Priority.URGENT, content="alarm"))),
+        Call(gate.response_started),
+        Call(gate.response_stopped),
+        SleepFrame(SETTLE_S * 3),
+    ]
+    await run(gate, frames)
+    s = SessionState
+    assert seen == [
+        s.LISTENING,  # söz sesli turu açtı
+        s.THINKING,
+        s.SPEAKING,
+        s.THINKING,
+        s.IDLE,
+        s.THINKING,  # hatırlatma
+        s.IDLE,  # acil tur onu kesti
+        s.THINKING,
+        s.IDLE,
+    ]

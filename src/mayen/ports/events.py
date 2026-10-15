@@ -52,6 +52,17 @@ class EventKind(StrEnum):
     CONFIRMATION_CLOSED = "confirmation.closed"
     STT_SEGMENT = "stt.segment"
     LLM_USAGE = "llm.usage"
+    STATE_CHANGED = "state.changed"
+
+
+class SessionState(StrEnum):
+    """Oturumun durumu (§5.4); `state.changed` gövdesinde. Turu olmayan oturum `idle`dır."""
+
+    IDLE = "idle"
+    LISTENING = "listening"
+    THINKING = "thinking"
+    SPEAKING = "speaking"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
 
 
 def ref(store: str, record_id: object) -> str:

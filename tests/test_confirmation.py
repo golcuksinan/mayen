@@ -152,9 +152,13 @@ def gate(
     resolver: Resolver,
     timeout_s: float = 5,
     log: MemoryEventLog | None = None,
+    awaiting: list[bool] | None = None,
 ) -> ConfirmationGateProcessor:
     events = SessionEvents(Recorder(log or MemoryEventLog(), FakeClock()), "s1", lambda: None)
-    return ConfirmationGateProcessor(writer, resolver, timeout_s, lambda f: f.user_id, events)
+    reported = awaiting if awaiting is not None else []
+    return ConfirmationGateProcessor(
+        writer, resolver, timeout_s, lambda f: f.user_id, events, reported.append
+    )
 
 
 async def request(
@@ -293,8 +297,12 @@ async def test_question_without_the_values_is_never_read() -> None:
 
 
 async def test_timeout_rejects_silently() -> None:
-    g, executed = gate(Writer("Delete note 1?"), Resolver(), timeout_s=0.05), Executed()
+    awaiting: list[bool] = []
+    g = gate(Writer("Delete note 1?"), Resolver(), timeout_s=0.05, awaiting=awaiting)
+    executed = Executed()
     await request(g, executed, 1)
+    # Önce durum, sonra cümle (§5.4): plan açılır açılmaz onay beklenir.
+    assert awaiting == [True]
 
     down, _ = await run_test(g, frames_to_send=[started("a"), result("a"), SleepFrame(0.2)])
 
@@ -302,6 +310,7 @@ async def test_timeout_rejects_silently() -> None:
     assert content["confirmation"] == "timed_out"
     assert not speak
     assert executed.order == []
+    assert awaiting == [True, False]
 
 
 async def test_plan_of_an_interrupted_turn_is_cancelled_silently() -> None:

@@ -38,6 +38,14 @@ channel:
   host: 127.0.0.1
   port: 8765
 
+# Panel (§14): olayları ve durumu gösteren salt okunur web arayüzü. Yalnızca sahibin
+# cihazından ve aşağıdaki adreslerden açılan panel bağlanır (tarayıcının Origin başlığı).
+panel:
+  origins:
+    - http://127.0.0.1:8765      # çekirdeğin sunduğu derlenmiş panel
+    - http://localhost:5173      # geliştirme sunucusu (npm run dev)
+  # dist: ../panel/dist          # derlenmiş panel (npm run build); verilirse /panel/ altında sunulur
+
 # Kimse konuşmadan açılan turun (system rolü) yetkisi, turu açan kaynağa göre (§10.2).
 # Etki sınıfı başına okunabilen/yazılabilen hassasiyetler; yazılmayan hücre kapalıdır.
 system_role:

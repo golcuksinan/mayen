@@ -73,6 +73,7 @@ class ConfirmationGateProcessor(FrameProcessor):
         timeout_s: float,
         speaker: SpeakerSource,
         events: SessionEvents,
+        awaiting: Callable[[bool], None] = lambda _: None,
     ) -> None:
         super().__init__()
         self._writer = writer
@@ -80,6 +81,7 @@ class ConfirmationGateProcessor(FrameProcessor):
         self._timeout_s = timeout_s
         self._speaker = speaker
         self._events = events
+        self._awaiting = awaiting  # oturumun durumuna bildirilir (§5.4)
         self._opened_at: float | None = None
         self._plan: Plan | None = None
         self._open_calls: set[str] = set()
@@ -111,6 +113,7 @@ class ConfirmationGateProcessor(FrameProcessor):
             # Önce durum, sonra cümle (§5.4).
             self._plan = Plan(requester)
             self._opened_at = self._events.monotonic()
+            self._awaiting(True)
         self._plan.entries.append(Entry(call, kind, execute))
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -236,6 +239,7 @@ class ConfirmationGateProcessor(FrameProcessor):
         self._timer = None
         self._asking = None
         self._plan = None
+        self._awaiting(False)
         opened, self._opened_at = self._opened_at, None
         duration_s = None if opened is None else self._events.monotonic() - opened
         await self._report(

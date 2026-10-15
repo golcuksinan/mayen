@@ -1,4 +1,6 @@
-"""Yazılı kanalın sunucusu (§7, §13): her bağlantı kendi oturumunu alır (§5.2).
+"""Çekirdeğin sunucusu (§7, §13, §14): yazılı kanal ve panelin ucu.
+
+Yazılı kanalda her bağlantı kendi oturumunu alır (§5.2).
 
 Taşıma çerçevenin çok istemcili WebSocket taşımasıdır. Bağlanan cihazın kimliği taşımadan
 okunur (§10.1); istemci kendisi hakkında hiçbir şey beyan etmez.
@@ -18,6 +20,7 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.workers.runner import WorkerRunner
 
+from mayen.app.panel import add_panel
 from mayen.app.wiring import Core, text_session
 from mayen.pipeline.text import WireSerializer
 from mayen.ports.channels import DeviceIdentity
@@ -58,6 +61,7 @@ def text_app(core: Core, identity: DeviceIdentity) -> FastAPI:
             timers.cancel()
 
     app = FastAPI(lifespan=lifespan)
+    add_panel(app, core, identity)
 
     @app.websocket(TEXT_PATH)
     async def text(websocket: WebSocket) -> None:
