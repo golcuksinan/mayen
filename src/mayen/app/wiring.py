@@ -273,6 +273,7 @@ def _conversation(
         transcript=transcript,
         holds=[lambda: confirmation.awaiting],
         drops=[confirmation.drop],
+        device_person=lambda: core.presence.personal(session),
     )
     tools = AuthorizedTools(
         core.registry,

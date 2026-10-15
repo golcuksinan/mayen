@@ -148,6 +148,7 @@ class TriggerGate(FrameProcessor):
         response_timeout_s: float,
         holds: Sequence[Callable[[], bool]] = (),
         drops: Sequence[Callable[[], Awaitable[None]]] = (),
+        device_person: Callable[[], str | None] = lambda: None,
     ) -> None:
         super().__init__()
         self.session = session
@@ -160,6 +161,8 @@ class TriggerGate(FrameProcessor):
         self._response_timeout_s = response_timeout_s
         self._holds = holds  # turu açık tutan başka durumlar; onay beklemek gibi (§5.4)
         self._drops = drops  # kesilen turla düşen başka işler; bekleyen onay planı gibi (§5.3)
+        # Oturumun cihazı kimin kişisel cihazı; kimse istemeden açılan turu o dinler (§8.6).
+        self._device_person = device_person
         self._turn: Turn | None = None
         self._identified = True
         self._user_speaking = False
@@ -209,6 +212,7 @@ class TriggerGate(FrameProcessor):
                 "fresh": fresh,
                 # Sesli turun sahibi ilk segmentte tanınır; o segmentin konuşmacısıdır.
                 "requester": {"role": requester.role.value, "person_id": requester.person_id},
+                "device_person": self._device_person(),
             },
             related=turn.trigger.records,
         )

@@ -9,8 +9,9 @@ Geçmişe giren her şey kayıtlardan kurulur, ayrıca saklanmaz:
 - Tool çağrısı ve sonucu olaylardan. Sonuç, modelin gördüğü gibi yetki süzgecinden geçer;
   onay bekleyen çağrının sonucu "onay bekleniyor"dur, asıl sonuç onay mesajıyla gelir.
 
-Bilinen farklar: bir cevaptaki birden çok çağrı ayrı cevaplar olarak kurulur; baştan başlayan
-yazılı turun yinelenen mesajı kurulmaz. Unut (§11.4) geldiğinde unutulan kayıt burada düşer.
+Baştan başlayan yazılı tur, kesilen turun mesajını geçmişe yeniden ekler; burada da öyle.
+Bilinen fark: bir cevaptaki birden çok çağrı ayrı cevaplar olarak kurulur. Unut (§11.4)
+geldiğinde unutulan kayıt burada düşer.
 """
 
 import json
@@ -43,6 +44,7 @@ class TurnInfo:
     source: TriggerSource
     priority: Priority
     requester: Caller
+    device_person: str | None  # oturumun cihazının kişisi; kimse istemediyse dinleyen
 
 
 def utterance_ref(utterance: Utterance) -> str:
@@ -110,6 +112,7 @@ class Records:
                 source,
                 Priority(e.body["priority"]),
                 caller_of(role, person),
+                e.body.get("device_person"),
             )
 
     def history(self, table: TableOf, until: datetime | None = None) -> list[Message]:
@@ -123,6 +126,7 @@ class Records:
             and utterance_ref(u) not in self._answers
         }
         verdicts: dict[str | None, str | None] = {}
+        restarted: Utterance | None = None  # baştan başlayacak yazılı turun mesajı
         out: list[Message] = []
         for time, item in self._timeline():
             if until is not None and time >= until:
@@ -135,11 +139,16 @@ class Records:
             match h.kind:
                 case EventKind.TURN_STARTED if turn is not None:
                     if turn.source is TriggerSource.TEXT:
-                        if (text := texts.get(turn.id)) is not None:
+                        # Yeni kimlikle baştan başlayan turun kendi sözü yoktur (§5.3).
+                        text = texts.get(turn.id) or restarted
+                        restarted = None
+                        if text is not None:
                             out.append({"role": "user", "content": text.text})
                     elif turn.source is not TriggerSource.VOICE:
                         out.append({"role": "developer", "content": self._trigger(item, turn)})
                 case EventKind.TURN_INTERRUPTED if turn is not None:
+                    if body.get("fate") == "restart" and turn.source is TriggerSource.TEXT:
+                        restarted = texts.get(turn.id) or restarted
                     if body.get("fate") == "cancel":
                         note = json.dumps({"interrupted": turn.source.value})
                         out.append({"role": "developer", "content": note})

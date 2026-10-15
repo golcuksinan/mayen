@@ -134,7 +134,13 @@ def recorded() -> Log:
         EventKind.TURN_STARTED,
         10,
         TIMER_TURN,
-        {"source": "timer", "priority": "high", "fresh": True, "requester": system},
+        {
+            "source": "timer",
+            "priority": "high",
+            "fresh": True,
+            "requester": system,
+            "device_person": "1",
+        },
         ["timer:7"],
     )
     log.said(Party.ASSISTANT, 11, TIMER_TURN, "Time to drink water.")
@@ -297,6 +303,8 @@ async def test_timer_turn_gets_its_trigger_and_mocks_and_unknown_calls() -> None
     replay = await player(recorded(), model).replay(TIMER_TURN, mocks)
     first, _ = model.requests[0]
     assert json.loads(first[-1]["content"])["content"] == "su iç"
+    # Kimse istemeden açılan turu oturumun cihazının kişisi dinler; dili onun (§8.6).
+    assert "Answer in British English." in first[-2]["content"]
     assert [s.result for s in replay.replayed if isinstance(s, Called)] == [
         {"status": "ok", "found": 0},
         {"status": "ok", "found": 0},
@@ -323,3 +331,20 @@ async def test_turns_are_listed_and_found_by_prefix() -> None:
     assert [t.id for t in p.turns()] == [TEXT_TURN, TIMER_TURN]
     assert p.find(str(TIMER_TURN)[:8]).id == TIMER_TURN
     assert p.find(str(TEXT_TURN)).requester.role is Role.OWNER
+
+
+def test_restarted_text_turn_brings_its_message_again() -> None:
+    log = Log()
+    first, again = TurnId(uuid.uuid4()), TurnId(uuid.uuid4())
+    owner = {"role": "owner", "person_id": "1"}
+    started = {"source": "text", "priority": "normal", "requester": owner}
+    log.said(Party.PERSON, 0, first, "berber notunu sil")
+    log.event(EventKind.TURN_STARTED, 0.01, first, {**started, "fresh": True})
+    log.event(EventKind.TURN_INTERRUPTED, 1, first, {"fate": "restart"})
+    log.event(EventKind.TURN_STARTED, 2, again, {**started, "fresh": False})
+    records = Records(log.events.events, log.transcript.utterances, Timers(), caller)  # type: ignore[arg-type]
+    # Hat baştan başlayan turda mesajı yeniden ekler; geçmiş o gün nasılsa öyle kurulur.
+    assert records.history(lambda source: TABLE) == [
+        {"role": "user", "content": "berber notunu sil"},
+        {"role": "user", "content": "berber notunu sil"},
+    ]

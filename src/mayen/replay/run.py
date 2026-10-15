@@ -21,7 +21,7 @@ from mayen.pipeline.llm import StepCap, count_steps, with_block
 from mayen.pipeline.tools import AWAITING_CONFIRMATION, openai_tools, to_model
 from mayen.ports.events import EventKind, EventLog
 from mayen.ports.models import ChatModel
-from mayen.ports.people import PersonStore
+from mayen.ports.people import DeviceId, PersonStore
 from mayen.ports.timers import TimerStore
 from mayen.ports.tools import Status, ToolResult, TurnFlags, Verdict
 from mayen.ports.transcript import Party, TranscriptStore
@@ -150,8 +150,11 @@ class Replayer:
         mocks: Mapping[str, Mapping[str, Any]],
         records: Records,
     ) -> None:
+        presence = Presence()
+        if turn.device_person is not None:
+            presence.connected(session, DeviceId("replay"), turn.device_person)
         block = ContextBlock(
-            self._people, Presence(), FixedClock(turn.time), self._rule, self._default
+            self._people, presence, FixedClock(turn.time), self._rule, self._default
         ).render(session, turn.requester)
         tools = openai_tools(self._registry)
         malformed: set[str] = set()
