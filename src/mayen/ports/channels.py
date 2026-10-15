@@ -1,4 +1,9 @@
-"""Yazılı kanalın sözleşmesi (§7, §13): istemciyle çekirdeğin mesajları ve cihaz kimliği.
+"""Kanalların sözleşmesi (§7, §13): istemciyle çekirdeğin mesajları ve cihaz kimliği.
+
+Sesli kanal: çekirdek bağlantı açılınca bir JSON selam (`VoiceHello`) yollar; ardından iki
+yönde de ikili mesajlar ham PCM'dir (16 bit, tek kanal, little-endian): istemciden
+`input_sample_rate`, çekirdekten `output_sample_rate` hızında. Çekirdek sesi çalınma hızında
+gönderir; istemci geldikçe çalar. Ses sürekli akar (§6, sürekli STT).
 
 İstemciler ayrı süreçlerdir ve yalnızca `ports`'u görür (§4); mesaj biçimi bu yüzden burada
 durur, çekirdeğin serileştiricisi de istemci de aynı tanımı kullanır.
@@ -7,7 +12,7 @@ durur, çekirdeğin serileştiricisi de istemci de aynı tanımı kullanır.
 import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from mayen.ports.people import DeviceId
 
@@ -33,6 +38,38 @@ class WireMessage:
             return cls(MessageKind(data["type"]), str(data.get("text", "")))
         except (TypeError, KeyError, json.JSONDecodeError) as e:
             raise ValueError(f"malformed message: {e}") from e
+
+
+VOICE_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class VoiceHello:
+    input_sample_rate: int
+    output_sample_rate: int
+
+    def encode(self) -> str:
+        return json.dumps(
+            {
+                "schema_version": VOICE_SCHEMA_VERSION,
+                "input_sample_rate": self.input_sample_rate,
+                "output_sample_rate": self.output_sample_rate,
+            }
+        )
+
+    @classmethod
+    def decode(cls, raw: str | bytes) -> "VoiceHello":
+        """Başka bir sürüm ya da bozuk selam `ValueError`'dur: istemci çalışmaya başlamaz."""
+        try:
+            data: Any = json.loads(raw)
+            if data["schema_version"] != VOICE_SCHEMA_VERSION:
+                raise ValueError(
+                    f"schema_version {data['schema_version']!r}, "
+                    f"expected {VOICE_SCHEMA_VERSION}"
+                )
+            return cls(int(data["input_sample_rate"]), int(data["output_sample_rate"]))
+        except (TypeError, KeyError, json.JSONDecodeError) as e:
+            raise ValueError(f"malformed hello: {e}") from e
 
 
 class DeviceIdentity(Protocol):

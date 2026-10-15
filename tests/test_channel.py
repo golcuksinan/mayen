@@ -1,4 +1,4 @@
-"""Yazılı kanal (§7, §13): mesaj biçimi, serileştirici, hattın iki ucu, cihaz kimliği."""
+"""Kanallar (§7, §13): mesaj biçimi, serileştiriciler, yazılı hattın iki ucu, cihaz kimliği."""
 
 import json
 import stat
@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 from pipecat.frames.frames import (
     Frame,
+    InputAudioRawFrame,
     InputTransportMessageFrame,
     LLMFullResponseEndFrame,
     LLMMessagesAppendFrame,
     LLMTextFrame,
+    OutputAudioRawFrame,
     OutputTransportMessageFrame,
     TextFrame,
     TTSSpeakFrame,
@@ -26,7 +28,8 @@ from mayen.core.events import Recorder, SystemClock
 from mayen.core.turns import Turns
 from mayen.pipeline.session import Sessions, TriggerGate
 from mayen.pipeline.text import TextInput, TextOutput, WireSerializer
-from mayen.ports.channels import MessageKind, WireMessage
+from mayen.pipeline.voice import VoiceSerializer
+from mayen.ports.channels import VOICE_SCHEMA_VERSION, MessageKind, VoiceHello, WireMessage
 from mayen.ports.confirmation import Answer
 from mayen.ports.events import EventKind
 from mayen.ports.tools import Caller, Role
@@ -69,6 +72,33 @@ async def test_serializer_speaks_only_wire_messages() -> None:
     assert isinstance(frame, InputTransportMessageFrame)
     assert frame.message == WireMessage(MessageKind.TEXT, "selam")
     assert await serializer.deserialize("bozuk") is None
+
+
+def test_voice_hello_round_trip_and_other_versions_are_refused() -> None:
+    hello = VoiceHello(16000, 24000)
+    assert VoiceHello.decode(hello.encode()) == hello
+    other = json.dumps(
+        {
+            "schema_version": VOICE_SCHEMA_VERSION + 1,
+            "input_sample_rate": 1,
+            "output_sample_rate": 1,
+        }
+    )
+    for raw in (other, "not json", "{}"):
+        with pytest.raises(ValueError):
+            VoiceHello.decode(raw)
+
+
+async def test_voice_serializer_carries_only_pcm() -> None:
+    serializer = VoiceSerializer(16000)
+    out = OutputAudioRawFrame(audio=b"\x01\x02", sample_rate=24000, num_channels=1)
+    assert await serializer.serialize(out) == b"\x01\x02"
+    assert await serializer.serialize(TextFrame("a")) is None
+    frame = await serializer.deserialize(b"\x00\x00" * 160)
+    assert isinstance(frame, InputAudioRawFrame) and frame.sample_rate == 16000
+    # Yarım örnek ve metin bağlantıyı kapatmaz, atılır (§13).
+    assert await serializer.deserialize(b"\x00") is None
+    assert await serializer.deserialize("text") is None
 
 
 async def written(

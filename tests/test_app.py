@@ -15,7 +15,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidStatus
 from websockets.typing import Origin
 
-from fakes import FakeClock
+from fakes import FakeClock, speech_service
 from mayen.adapters.storage.sqlite import (
     Database,
     SqliteNoteStore,
@@ -24,7 +24,7 @@ from mayen.adapters.storage.sqlite import (
 )
 from mayen.app.config import ConfigError, load
 from mayen.app.main import EXIT_CONFIG, EXIT_REFUSED, main
-from mayen.app.server import TEXT_PATH, LoopbackIsLocal, text_app
+from mayen.app.server import TEXT_PATH, VOICE_PATH, LoopbackIsLocal, core_app
 from mayen.app.wiring import (
     Core,
     ToolCtx,
@@ -34,6 +34,7 @@ from mayen.app.wiring import (
     voice_session,
 )
 from mayen.core.policy import ROLE_TABLE
+from mayen.ports.channels import VoiceHello
 from mayen.ports.people import LOCAL_DEVICE, DeviceId
 from mayen.ports.tools import Caller, Effect, Role, Sensitivity, Status
 from mayen.ports.triggers import Fate, Priority, TriggerSource
@@ -334,7 +335,7 @@ async def test_each_connection_gets_a_session_from_its_device(tmp_path: Path) ->
         owner = core.people.create_owner("Sinan", "tr", None, (DeviceId("nPhone"),))
         identity = FixedIdentity()
         server = uvicorn.Server(
-            uvicorn.Config(text_app(core, identity), host="127.0.0.1", port=0, log_config=None)
+            uvicorn.Config(core_app(core, identity), host="127.0.0.1", port=0, log_config=None)
         )
         serving = asyncio.create_task(server.serve())
         await until(lambda: server.started)
@@ -362,6 +363,67 @@ async def test_each_connection_gets_a_session_from_its_device(tmp_path: Path) ->
         finally:
             server.should_exit = True
             await serving
+
+
+def _voice_config(tmp_path: Path, url: str | None) -> Path:
+    path = config_dir(tmp_path)
+    body = path.read_text(encoding="utf-8")
+    if url is None:
+        body = body[: body.index("stt:")] + body[body.index("system_role:") :]
+    else:
+        body = body.replace("http://127.0.0.1:8770", url).replace("http://127.0.0.1:8771", url)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+async def test_voice_connection_gets_a_session_from_its_device(tmp_path: Path) -> None:
+    async with speech_service() as (service, url):
+        service.voices = ["default"]  # örnek config'in sesi
+        config = load(_voice_config(tmp_path, url), {"MAYEN_MODEL": "local"})
+        config.storage_path.parent.mkdir(parents=True)
+        with Database(config.storage_path) as db:
+            core = Core(config, db)
+            owner = core.people.create_owner("Sinan", "tr", None, (DeviceId("nLaptop"),))
+            identity = FixedIdentity()
+            identity.next = DeviceId("nLaptop")
+            server = uvicorn.Server(
+                uvicorn.Config(
+                    core_app(core, identity), host="127.0.0.1", port=0, log_config=None
+                )
+            )
+            serving = asyncio.create_task(server.serve())
+            await until(lambda: server.started)
+            port = server.servers[0].sockets[0].getsockname()[1]
+            url = f"ws://127.0.0.1:{port}{VOICE_PATH}"
+            try:
+                with pytest.raises(InvalidStatus):
+                    async with connect(url, origin=Origin("http://example.com")):
+                        pass
+                async with connect(url) as ws:
+                    hello = VoiceHello.decode(await ws.recv())
+                    assert hello.input_sample_rate == 16000
+                    await until(lambda: len(core.sessions.names()) == 1)
+                    [laptop] = core.sessions.names()
+                    assert laptop.startswith("voice-")
+                    assert core.presence.personal(laptop) == owner.id
+                    # Ses akar; sessizlik bir tur açmaz, bağlantı ayakta kalır.
+                    for _ in range(10):
+                        await ws.send(b"\x00\x00" * 320)
+                    await asyncio.sleep(0.2)
+                    assert core.sessions.running(laptop) is None
+                await until(lambda: core.sessions.names() == [])
+            finally:
+                server.should_exit = True
+                await serving
+
+
+async def test_without_speech_services_there_is_no_voice_channel(tmp_path: Path) -> None:
+    config = load(_voice_config(tmp_path, None), {"MAYEN_MODEL": "local"})
+    config.storage_path.parent.mkdir(parents=True)
+    with Database(config.storage_path) as db:
+        app = core_app(Core(config, db), FixedIdentity())
+    assert VOICE_PATH not in {getattr(r, "path", None) for r in app.routes}
+    assert TEXT_PATH in {getattr(r, "path", None) for r in app.routes}
 
 
 class NoIdentity:

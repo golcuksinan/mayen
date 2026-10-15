@@ -1,12 +1,21 @@
-"""Testlerin ortak sahteleri: saat, bellekte olay kaydı ve transkript."""
+"""Testlerin ortak sahteleri: saat, bellekte olay kaydı, transkript ve ses servisleri."""
 
+import struct
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from aiohttp import WSMsgType, web
+from aiohttp.test_utils import TestServer
 
 from mayen.core.events import Recorder
 from mayen.core.transcript import Transcript
 from mayen.pipeline.events import SessionTranscript
 from mayen.pipeline.session import Sessions
 from mayen.ports.events import Event, EventKind
+from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME
 from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
 
@@ -92,3 +101,84 @@ def session_transcript(
         return None if turn is None else turn.id
 
     return SessionTranscript(writer, session, turn_id), store
+
+
+@dataclass
+class FakeSpeech:
+    """STT ve TTS sözleşmesini konuşan sahte servis (§3); aldığı istekleri tutar."""
+
+    sample_rate: int = 16000
+    voices: list[str] = field(default_factory=lambda: ["emma"])
+    version: int = SCHEMA_VERSION
+    requests: list[Any] = field(default_factory=list)
+    vad_frame: int = VAD_FRAME
+    vad_connections: int = 0
+
+    def app(self) -> web.Application:
+        app = web.Application()
+        app.router.add_get("/health", self.health)
+        app.router.add_post("/transcribe", self.transcribe)
+        app.router.add_post("/speak", self.speak)
+        app.router.add_get("/vad", self.vad)
+        return app
+
+    async def health(self, _: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "schema_version": self.version,
+                "sample_rate": self.sample_rate,
+                "voices": self.voices,
+            }
+        )
+
+    async def transcribe(self, request: web.Request) -> web.Response:
+        body = await request.read()
+        self.requests.append((dict(request.query), len(body)))
+        return web.json_response(
+            {
+                "schema_version": self.version,
+                "text": " hello ",
+                "language": "en",
+                "segments": [{"text": " hello ", "no_speech_prob": 0.1, "avg_logprob": -0.2}],
+            }
+        )
+
+    async def vad(self, request: web.Request) -> web.WebSocketResponse:
+        """Olasılık, parçanın ilk örneğinin büyüklüğü: test sesi kendisi seçer."""
+        self.vad_connections += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json(
+            {
+                "schema_version": self.version,
+                "sample_rate": self.sample_rate,
+                "frame": self.vad_frame,
+            }
+        )
+        async for message in ws:
+            if message.type is WSMsgType.BINARY:
+                first = struct.unpack_from("<h", message.data)[0]
+                await ws.send_bytes(struct.pack("<f", first / 32767))
+        return ws
+
+    async def speak(self, request: web.Request) -> web.StreamResponse:
+        self.requests.append(await request.json())
+        response = web.StreamResponse()
+        await response.prepare(request)
+        # Tek sayıda bayt: örnek ortadan bölünür, istemci yarımı sonrakine taşımalı.
+        await response.write(b"\x01" * 3201)
+        await response.write(b"\x01" * 3199)
+        await response.write_eof()
+        return response
+
+
+@asynccontextmanager
+async def speech_service() -> AsyncIterator[tuple[FakeSpeech, str]]:
+    """Ayakta bir sahte ses servisi ve adresi."""
+    service = FakeSpeech()
+    server = TestServer(service.app())
+    await server.start_server()
+    try:
+        yield service, str(server.make_url("")).rstrip("/")
+    finally:
+        await server.close()

@@ -178,7 +178,7 @@ def build(settings: Settings) -> FastAPI:
                 if len(pcm) != VAD_FRAME * 2:
                     await websocket.close(code=1003, reason=f"expected {VAD_FRAME} samples")
                     return
-                # Model parça başına döngüyü bekletmeyecek kadar kısa sürer; iş parçacığına gerek yok.
+                # Parça başına model döngüyü bekletmeyecek kadar kısa sürer.
                 await websocket.send_bytes(np.array(silero(pcm), "<f4").tobytes())
         except WebSocketDisconnect:
             pass

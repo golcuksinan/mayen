@@ -237,8 +237,9 @@ class Voice:
     tts: TtsFactory
     output: FrameProcessor
     vad: VADAnalyzer
-    # Konuşmacı tanıma gelene kadar sözün kime ait olduğunu hattı kuran söyler (§10.4).
-    caller: CallerSource
+    # Konuşmacı tanıma gelene kadar sözün kime ait olduğunu hattı kuran söyler (§10.4);
+    # `None` sözü cihazın kişisine verir, yazılı kanaldaki gibi (kişisel değilse tanımsız).
+    caller: CallerSource | None
     # Ses birimlerinin cihazı; çekirdeğin kendi makinesindeyse `LOCAL_DEVICE` (§10.1).
     device: DeviceId | None
 
@@ -350,8 +351,9 @@ def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Ses
 
 
 def voice_session(core: Core, session: str, voice: Voice) -> Session:
-    core.connect(session, voice.device)
-    c = _conversation(core, session, voice.caller, voice.vad)
+    requester = core.connect(session, voice.device)
+    speaker = voice.caller or (lambda _: requester)
+    c = _conversation(core, session, speaker, voice.vad)
     pipeline = Pipeline(
         [
             voice.input,

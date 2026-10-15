@@ -3,12 +3,9 @@
 import asyncio
 import struct
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from aiohttp import WSMsgType, web
-from aiohttp.test_utils import TestServer
 from pipecat.frames.frames import (
     ErrorFrame,
     InputAudioRawFrame,
@@ -20,88 +17,15 @@ from pipecat.frames.frames import (
 )
 from pipecat.tests.utils import SleepFrame, run_test
 
+from fakes import FakeSpeech, speech_service
 from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceVAD, split_parts
 from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Part, Transcription
 
 
-@dataclass
-class Fake:
-    """Sözleşmeyi konuşan sahte servis; aldığı istekleri tutar."""
-
-    sample_rate: int = 16000
-    voices: list[str] = field(default_factory=lambda: ["emma"])
-    version: int = SCHEMA_VERSION
-    requests: list[Any] = field(default_factory=list)
-    vad_frame: int = VAD_FRAME
-    vad_connections: int = 0
-
-    def app(self) -> web.Application:
-        app = web.Application()
-        app.router.add_get("/health", self.health)
-        app.router.add_post("/transcribe", self.transcribe)
-        app.router.add_post("/speak", self.speak)
-        app.router.add_get("/vad", self.vad)
-        return app
-
-    async def health(self, _: web.Request) -> web.Response:
-        return web.json_response(
-            {
-                "schema_version": self.version,
-                "sample_rate": self.sample_rate,
-                "voices": self.voices,
-            }
-        )
-
-    async def transcribe(self, request: web.Request) -> web.Response:
-        body = await request.read()
-        self.requests.append((dict(request.query), len(body)))
-        return web.json_response(
-            {
-                "schema_version": self.version,
-                "text": " hello ",
-                "language": "en",
-                "segments": [{"text": " hello ", "no_speech_prob": 0.1, "avg_logprob": -0.2}],
-            }
-        )
-
-    async def vad(self, request: web.Request) -> web.WebSocketResponse:
-        """Olasılık, parçanın ilk örneğinin büyüklüğü: test sesi kendisi seçer."""
-        self.vad_connections += 1
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        await ws.send_json(
-            {
-                "schema_version": self.version,
-                "sample_rate": self.sample_rate,
-                "frame": self.vad_frame,
-            }
-        )
-        async for message in ws:
-            if message.type is WSMsgType.BINARY:
-                first = struct.unpack_from("<h", message.data)[0]
-                await ws.send_bytes(struct.pack("<f", first / 32767))
-        return ws
-
-    async def speak(self, request: web.Request) -> web.StreamResponse:
-        self.requests.append(await request.json())
-        response = web.StreamResponse()
-        await response.prepare(request)
-        # Tek sayıda bayt: örnek ortadan bölünür, istemci yarımı sonrakine taşımalı.
-        await response.write(b"\x01" * 3201)
-        await response.write(b"\x01" * 3199)
-        await response.write_eof()
-        return response
-
-
 @pytest.fixture
-async def fake() -> AsyncIterator[tuple[Fake, str]]:
-    service = Fake()
-    server = TestServer(service.app())
-    await server.start_server()
-    try:
-        yield service, str(server.make_url("")).rstrip("/")
-    finally:
-        await server.close()
+async def fake() -> AsyncIterator[tuple[FakeSpeech, str]]:
+    async with speech_service() as running:
+        yield running
 
 
 def test_split_parts_carries_an_open_tag() -> None:
@@ -122,7 +46,7 @@ def _speech() -> list[Any]:
     return [VADUserStartedSpeakingFrame(), audio, audio, VADUserStoppedSpeakingFrame()]
 
 
-async def test_stt_turns_a_segment_into_text(fake: tuple[Fake, str]) -> None:
+async def test_stt_turns_a_segment_into_text(fake: tuple[FakeSpeech, str]) -> None:
     service, url = fake
     down, _ = await run_test(
         ServiceSTT(url, "en"), frames_to_send=[*_speech(), SleepFrame(0.3)]
@@ -135,7 +59,7 @@ async def test_stt_turns_a_segment_into_text(fake: tuple[Fake, str]) -> None:
 
 
 async def test_stt_with_another_contract_version_fails_loudly(
-    fake: tuple[Fake, str],
+    fake: tuple[FakeSpeech, str],
 ) -> None:
     service, url = fake
     service.version = SCHEMA_VERSION + 1
@@ -144,7 +68,7 @@ async def test_stt_with_another_contract_version_fails_loudly(
     assert errors and "schema_version" in errors[0].error
 
 
-async def test_tts_streams_audio_in_the_language_voice(fake: tuple[Fake, str]) -> None:
+async def test_tts_streams_audio_in_the_language_voice(fake: tuple[FakeSpeech, str]) -> None:
     service, url = fake
     tts = ServiceTTS(url, {"English": "emma"}, lambda: "English", sample_rate=16000)
     down, _ = await run_test(
@@ -166,7 +90,7 @@ async def test_tts_streams_audio_in_the_language_voice(fake: tuple[Fake, str]) -
 
 
 async def test_tts_without_a_voice_for_the_language_is_an_error(
-    fake: tuple[Fake, str],
+    fake: tuple[FakeSpeech, str],
 ) -> None:
     service, url = fake
     tts = ServiceTTS(url, {"English": "emma"}, lambda: "Türkçe", sample_rate=16000)
@@ -175,7 +99,7 @@ async def test_tts_without_a_voice_for_the_language_is_an_error(
     assert service.requests == []
 
 
-async def test_tts_with_a_missing_voice_fails_at_start(fake: tuple[Fake, str]) -> None:
+async def test_tts_with_a_missing_voice_fails_at_start(fake: tuple[FakeSpeech, str]) -> None:
     _, url = fake
     tts = ServiceTTS(url, {"English": "brian"}, lambda: "English", sample_rate=16000)
     _, up = await run_test(tts, frames_to_send=[SleepFrame(0.1)])
@@ -186,7 +110,7 @@ def _frame(level: int) -> bytes:
     return struct.pack("<h", level) * VAD_FRAME
 
 
-async def test_vad_takes_the_confidence_from_the_service(fake: tuple[Fake, str]) -> None:
+async def test_vad_takes_the_confidence_from_the_service(fake: tuple[FakeSpeech, str]) -> None:
     service, url = fake
     vad = ServiceVAD(url)
     vad.set_sample_rate(16000)
@@ -198,7 +122,7 @@ async def test_vad_takes_the_confidence_from_the_service(fake: tuple[Fake, str])
 
 
 async def test_vad_with_another_frame_size_hears_nothing_and_retries_slowly(
-    fake: tuple[Fake, str],
+    fake: tuple[FakeSpeech, str],
 ) -> None:
     service, url = fake
     service.vad_frame = VAD_FRAME * 2

@@ -5,8 +5,8 @@ yeniden başlatma döngüsüne sokmaz. Alt komutlar:
 
 - `check` (varsayılan): açılışı doğrular ve çıkar.
 - `setup`: sahibi kurar (§10.2). Makinenin başında çalıştırılır; sahip varsa reddeder.
-- `serve`: yazılı kanalı (§7) ve hatırlatmaları çalıştırır. Ses hattını şimdilik deneydeki
-  senaryo kurar.
+- `serve`: yazılı ve sesli kanalı (§7, §13) ve hatırlatmaları çalıştırır. Sesli kanal,
+  config'te STT ve TTS servisleri varsa açılır.
 - `replay`: kayıttaki turları listeler; bir tur verilirse onu bugünkü prompt ve modelle
   yeniden oynatır (§14). Veritabanının tek sahibi olduğundan `serve` açıkken çalışmaz.
 """
@@ -24,7 +24,7 @@ import yaml
 from mayen.adapters.channel.tailscale import TailscaleIdentity
 from mayen.adapters.storage.sqlite import Database, SqlitePersonStore, StorageError
 from mayen.app.config import Config, ConfigError, load, storage_path
-from mayen.app.server import LoopbackIsLocal, text_app
+from mayen.app.server import LoopbackIsLocal, core_app
 from mayen.app.wiring import Core, SkillLoadError, replayer
 from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError
 from mayen.replay.run import render
@@ -52,7 +52,7 @@ def _parser() -> argparse.ArgumentParser:
         # `local` geliştirme istisnasıdır: mimaride bu makinenin ses birimleri ortaktır.
         help="personal device: a Tailscale node StableID, or 'local' (development only)",
     )
-    commands.add_parser("serve", help="run the text channel and reminders")
+    commands.add_parser("serve", help="run the text and voice channels and reminders")
     replay = commands.add_parser("replay", help="list recorded turns, or replay one")
     replay.add_argument("turn", nargs="?", help="turn id or a unique prefix of it")
     replay.add_argument(
@@ -129,7 +129,7 @@ async def _replay(core: Core, db: Database, args: argparse.Namespace) -> int:
 async def _serve(core: Core, config: Config) -> None:
     server = uvicorn.Server(
         uvicorn.Config(
-            text_app(core, LoopbackIsLocal(TailscaleIdentity())),
+            core_app(core, LoopbackIsLocal(TailscaleIdentity())),
             host=config.channel.host,
             port=config.channel.port,
             log_config=None,

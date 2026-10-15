@@ -17,7 +17,7 @@ from websockets.typing import Origin
 from mayen.adapters.storage.sqlite import Database
 from mayen.app.config import ConfigError, load
 from mayen.app.panel import EVENTS_PATH
-from mayen.app.server import text_app
+from mayen.app.server import core_app
 from mayen.app.wiring import Core
 from mayen.core.feed import Feed
 from mayen.ports.events import EventKind, stamp
@@ -38,7 +38,7 @@ async def serving(tmp_path: Path) -> AsyncIterator[tuple[Core, FixedIdentity, st
         core.people.create_owner("Sinan", "tr", None, (DeviceId("nPhone"),))
         identity = FixedIdentity()
         server = uvicorn.Server(
-            uvicorn.Config(text_app(core, identity), host="127.0.0.1", port=0, log_config=None)
+            uvicorn.Config(core_app(core, identity), host="127.0.0.1", port=0, log_config=None)
         )
         task = asyncio.create_task(server.serve())
         await until(lambda: server.started)
@@ -142,7 +142,7 @@ def test_missing_panel_build_is_a_config_error(tmp_path: Path) -> None:
     config = load(path, {"MAYEN_MODEL": "local"})
     config.storage_path.parent.mkdir(parents=True)
     with Database(config.storage_path) as db, pytest.raises(ConfigError, match="nowhere"):
-        text_app(Core(config, db), FixedIdentity())
+        core_app(Core(config, db), FixedIdentity())
 
 
 async def test_slow_subscriber_is_dropped_and_sees_it() -> None:
