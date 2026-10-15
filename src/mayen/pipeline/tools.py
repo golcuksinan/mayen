@@ -106,6 +106,7 @@ class AuthorizedTools:
         caller: Callable[[], Caller],
         flags: Callable[[], TurnFlags],
         events: SessionEvents,
+        ran: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._registry = registry
         # Tablo, bağlam, çağıran ve işaretler çağrı anında oturum durumundan okunur (§8.1):
@@ -116,6 +117,8 @@ class AuthorizedTools:
         self._caller = caller
         self._flags = flags
         self._events = events
+        # Gövde çalışınca (sonucu ne olursa olsun) çağrılır: sesli oturumda sözsüz ses (§8.8).
+        self._ran = ran
         self._malformed: set[str] = set()  # argümanı doğrulanamayan çağrılar (§9.1)
 
     def schema(self) -> ToolsSchema:
@@ -216,6 +219,8 @@ class AuthorizedTools:
             duration_s=self._events.monotonic() - started,
             status=result.status,
         )
+        if self._ran is not None:
+            await self._ran()
         return filter_records(result, caller, table)
 
     def _refused(

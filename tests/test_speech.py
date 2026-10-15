@@ -9,6 +9,7 @@ import pytest
 from pipecat.frames.frames import (
     ErrorFrame,
     InputAudioRawFrame,
+    OutputAudioRawFrame,
     TranscriptionFrame,
     TTSAudioRawFrame,
     TTSSpeakFrame,
@@ -18,6 +19,7 @@ from pipecat.frames.frames import (
 from pipecat.tests.utils import SleepFrame, run_test
 
 from fakes import FakeSpeech, speech_service
+from mayen.pipeline.sounds import ToolSound
 from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceVAD, split_parts
 from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Part, Transcription
 
@@ -138,3 +140,18 @@ async def test_vad_without_a_service_hears_nothing() -> None:
     vad = ServiceVAD("http://127.0.0.1:9")
     vad.set_sample_rate(16000)
     assert await asyncio.to_thread(vad.voice_confidence, _frame(32767)) == 0.0
+
+
+async def test_tool_sound_is_short_and_at_the_output_rate() -> None:
+    sound = ToolSound()
+
+    async def blip_after_start() -> None:
+        await asyncio.sleep(0.05)
+        await sound.play()
+
+    task = asyncio.create_task(blip_after_start())
+    down, _ = await run_test(sound, frames_to_send=[SleepFrame(0.2)])
+    await task
+    [blip] = [f for f in down if isinstance(f, OutputAudioRawFrame)]
+    assert blip.sample_rate == 24000  # run_test'in çıkış hızı
+    assert len(blip.audio) == 2 * int(24000 * 0.13)

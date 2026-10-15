@@ -59,6 +59,7 @@ from mayen.pipeline.events import (
 )
 from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
+from mayen.pipeline.sounds import ToolSound
 from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceVAD
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
@@ -268,7 +269,11 @@ class _Conversation:
 
 
 def _conversation(
-    core: Core, session: str, speaker: CallerSource, vad: VADAnalyzer | None
+    core: Core,
+    session: str,
+    speaker: CallerSource,
+    vad: VADAnalyzer | None,
+    sound: ToolSound | None = None,
 ) -> _Conversation:
     config = core.config
     endpoint = config.models.endpoint(CONVERSATION_ROLE)
@@ -317,6 +322,7 @@ def _conversation(
         caller,
         TurnFlags,
         events,
+        None if sound is None else sound.play,
     )
     llm = llm_service(
         endpoint,
@@ -353,7 +359,9 @@ def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Ses
 def voice_session(core: Core, session: str, voice: Voice) -> Session:
     requester = core.connect(session, voice.device)
     speaker = voice.caller or (lambda _: requester)
-    c = _conversation(core, session, speaker, voice.vad)
+    # Tool bitince sözsüz ses (§8.8); yazılı oturumda ses yok.
+    sound = ToolSound()
+    c = _conversation(core, session, speaker, voice.vad, sound)
     pipeline = Pipeline(
         [
             voice.input,
@@ -363,6 +371,7 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
             c.aggregators.user(),
             c.llm,
             voice.tts(c.language),
+            sound,
             voice.output,
             c.aggregators.assistant(),
         ]

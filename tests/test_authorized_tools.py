@@ -109,7 +109,9 @@ class Gate:
 
 
 def tools(
-    caller: Caller = OWNER, log: MemoryEventLog | None = None
+    caller: Caller = OWNER,
+    log: MemoryEventLog | None = None,
+    ran: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[AuthorizedTools, Ctx, Gate]:
     ctx, gate = Ctx(), Gate()
 
@@ -121,7 +123,7 @@ def tools(
     events = SessionEvents(Recorder(log or MemoryEventLog(), FakeClock()), "s1", lambda: None)
     return (
         AuthorizedTools(
-            registry, lambda: ROLE_TABLE, context, gate, lambda: caller, TurnFlags, events
+            registry, lambda: ROLE_TABLE, context, gate, lambda: caller, TurnFlags, events, ran
         ),
         ctx,
         gate,
@@ -134,6 +136,26 @@ async def test_allowed_call_runs() -> None:
     assert result["status"] == "ok"
     assert len(result["records"]) == 2
     assert props is None
+
+
+async def test_the_sound_follows_the_body_not_the_request() -> None:
+    # Ses tool'un çalıştığını gösterir (§8.8): reddedilen ya da onay bekleyen çağrıda yok,
+    # onaylanıp çalışan çağrıda var.
+    played: list[str] = []
+
+    async def ran() -> None:
+        played.append("blip")
+
+    t, _, gate = tools(GUEST, ran=ran)
+    await t.call(SEARCH, {})
+    await t.call(DELETE, {"id": 1})
+    assert played == ["blip"]
+    t, _, gate = tools(ran=ran)
+    await t.call(DELETE, {"id": 2})
+    assert played == ["blip"]
+    assert gate.execute is not None
+    await gate.execute()
+    assert played == ["blip", "blip"]
 
 
 async def test_the_body_sees_its_caller() -> None:
