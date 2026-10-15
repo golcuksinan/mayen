@@ -1,6 +1,6 @@
 """Tetikleyici ve turun sözlüğü (§5.1–§5.3)."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, NewType
@@ -56,3 +56,6 @@ class Trigger:
     # Kaynağın modele verdiği yapılandırılmış ayrıntı (hatırlatmanın vadesi gibi); JSON'a
     # çevrilebilir. Sistem cümle kurmaz, olayı etiketli veri olarak verir (§2.1).
     details: Mapping[str, Any] = field(default_factory=dict)
+    # Tetikleyicinin dayandığı kayıtlar (`ref`, çalan zamanlayıcı gibi); turun başlangıç
+    # olayı onlara bağlanır, içerikleri kopyalanmaz.
+    records: Sequence[str] = ()

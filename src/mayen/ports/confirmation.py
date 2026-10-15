@@ -38,11 +38,14 @@ class Answer:
     """Onay beklenirken gelen tek segment.
 
     `speaker`, segmenti söyleyen kişinin kimliğidir; bilinmiyorsa `None`. Kimin doldurduğu
-    kapının işi değildir: eşleşme kuralı (§10.5 adım 4) yalnızca bu alana bakar.
+    kapının işi değildir: eşleşme kuralı (§10.5 adım 4) yalnızca bu alana bakar. `record`,
+    sözün transkriptteki kaydıdır (`ref`); planın kapanış olayı ona bağlanır, çünkü bu söz
+    modele değil çözümleyiciye gitmiştir.
     """
 
     text: str
     speaker: str | None
+    record: str | None = None
 
 
 class QuestionWriter(Protocol):

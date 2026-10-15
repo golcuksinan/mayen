@@ -36,6 +36,7 @@ def bound(store_and_writer: tuple[Transcript, MemoryTranscript]) -> LLMAssistant
         sessions,
         lambda _: UNIDENTIFIED,
         Recorder(MemoryEventLog(), SystemClock()),
+        SessionTranscript(writer, "s1", lambda: TURN),
         settle_s=0.1,
         response_timeout_s=0.3,
     )

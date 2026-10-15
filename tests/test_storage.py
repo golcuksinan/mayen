@@ -303,3 +303,34 @@ def test_utterance_role_follows_its_party(
     broken = dataclasses.replace(utterance(0, party), role=role)
     with pytest.raises(sqlite3.IntegrityError):
         SqliteTranscript(db).append(broken)
+
+
+def test_growing_event_vocabulary_keeps_rows_and_their_links(tmp_path: Path) -> None:
+    """Olay tablosu yeni kısıtla yeniden kurulur; satırlar, bağlar ve silme zinciri kalır."""
+    path = tmp_path / "m.db"
+    old = event(related=("timer:1",))
+    # tool.requested'dan önceki şema: olay tablosu dördüncü migration'daki hâliyle.
+    with Database(path, MIGRATIONS[:4]) as db, db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO events (id, kind, source, time, session, turn_id, duration_s,"
+            " status, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(old.header.id),
+                "turn.started",
+                "test",
+                "2026-10-13T12:00:00.000000Z",
+                "s1",
+                None,
+                0.5,
+                "ok",
+                '{"n": 0}',
+            ),
+        )
+        conn.execute("INSERT INTO event_related VALUES (1, 'timer:1')")
+    with Database(path) as db:
+        log = SqliteEventLog(db)
+        assert log.read() == [old]
+        log.append(event(EventKind.TOOL_REQUESTED, at=1))
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM events")
+            assert conn.execute("SELECT count(*) FROM event_related").fetchone() == (0,)

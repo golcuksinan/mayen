@@ -22,7 +22,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.tests.utils import SleepFrame, run_test
 
-from fakes import MemoryEventLog
+from fakes import MemoryEventLog, MemoryTranscript, session_transcript
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.turns import Turns
 from mayen.pipeline.session import HeardOnly, Sessions, TriggerGate
@@ -59,14 +59,19 @@ def make(
     fates: dict[TriggerSource, Fate] | None = None,
     holds: Sequence[Callable[[], bool]] = (),
     log: MemoryEventLog | None = None,
+    store: MemoryTranscript | None = None,
 ) -> tuple[Sessions, TriggerGate]:
     turns = Turns(fates or dict.fromkeys(TriggerSource, Fate.CANCEL))
     sessions = Sessions(turns, Priority.NORMAL)
+    heard, memory = session_transcript(sessions)
+    if store is not None:
+        memory.utterances = store.utterances
     gate = TriggerGate(
         "s1",
         sessions,
         lambda _: OWNER,
         Recorder(log or MemoryEventLog(), SystemClock()),
+        heard,
         settle_s=SETTLE_S,
         response_timeout_s=TIMEOUT_S,
         holds=holds,
@@ -358,6 +363,7 @@ async def test_turn_owner_is_reported_as_seen_and_detach_frees_the_session() -> 
         sessions,
         lambda _: OWNER,
         Recorder(MemoryEventLog(), SystemClock()),
+        session_transcript(sessions)[0],
         settle_s=SETTLE_S,
         response_timeout_s=TIMEOUT_S,
     )
@@ -367,3 +373,50 @@ async def test_turn_owner_is_reported_as_seen_and_detach_frees_the_session() -> 
     assert sessions.names() == [] and sessions.running("s1") is None
     with pytest.raises(ValueError):
         await sessions.submit(trig(Priority.NORMAL))
+
+
+async def test_heard_segment_is_written_and_tied_to_its_turn() -> None:
+    log, store = MemoryEventLog(), MemoryTranscript()
+    _, gate = make(log=log, store=store)
+    segment = TranscriptionFrame("dişçi notunu sil", "p1", "")
+    down, _ = await run(gate, [UserStartedSpeakingFrame(), segment])
+    [started] = log.of(EventKind.TURN_STARTED)
+    [utterance] = store.utterances
+    assert (utterance.text, utterance.role) == ("dişçi notunu sil", Role.OWNER)
+    assert utterance.turn_id == started.header.turn_id
+    [stt] = log.of(EventKind.STT_SEGMENT)
+    record = f"utterance:{utterance.id}"
+    assert stt.header.related == (record,)
+    assert stt.body["muted"] is False
+    assert "dişçi" not in json.dumps(stt.body)  # metin yalnızca transkriptte (§11)
+    # Kayıt kare üstünde aşağı gider: onay kapısı cevabı ona bağlar.
+    [passed] = [f for f in down if isinstance(f, TranscriptionFrame)]
+    assert passed.metadata["mayen.utterance"] == record
+
+
+async def test_segment_that_is_not_heard_is_written_as_muted() -> None:
+    log, store = MemoryEventLog(), MemoryTranscript()
+    sessions, gate = make(log=log, store=store)
+    # Süren hatırlatma turunu aynı öncelikteki söz kesemez; söz duyulmaz ama yazılır (§6).
+    frames: list[Frame] = [
+        Call(lambda: sessions.submit(trig(Priority.NORMAL))),
+        SleepFrame(0.05),  # adımlar kapıdan sonra çalışır; söz tur başladıktan sonra gelsin
+        TranscriptionFrame("bir şey", "p1", ""),
+    ]
+    await run(gate, frames)
+    [stt] = log.of(EventKind.STT_SEGMENT)
+    assert stt.body["muted"] is True
+    assert [u.text for u in store.utterances] == ["bir şey"]
+
+
+async def test_turn_start_names_its_owner_and_links_the_triggers_records() -> None:
+    log = MemoryEventLog()
+    sessions, gate = make(log=log)
+    trigger = Trigger(
+        "s1", Priority.NORMAL, TriggerSource.TIMER, "su iç", SYSTEM, records=("timer:4",)
+    )
+    await run(gate, [Call(lambda: sessions.submit(trigger))])
+    [started] = log.of(EventKind.TURN_STARTED)
+    assert started.body["requester"] == {"role": "system", "person_id": "p1"}
+    # İçerik kopyalanmaz; tur zamanlayıcı kaydına kimliğiyle bağlanır.
+    assert started.header.related == ("timer:4",)

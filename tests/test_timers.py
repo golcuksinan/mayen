@@ -67,7 +67,7 @@ def add(
 
 async def test_due_timer_becomes_a_system_trigger_once(store: SqliteTimerStore) -> None:
     clock, submitted = FakeClock(), Submitted()
-    add(store, 10, "ilaç", Priority.HIGH)
+    timer_id = add(store, 10, "ilaç", Priority.HIGH)
     dispatcher = TimerDispatcher(store, clock, submitted, lambda *_: "s1")
     await dispatcher.dispatch()
     assert submitted.triggers == []
@@ -82,6 +82,7 @@ async def test_due_timer_becomes_a_system_trigger_once(store: SqliteTimerStore) 
         "ilaç",
         SYSTEM,
         {"due": local(T0 + timedelta(seconds=10))},
+        (f"timer:{timer_id}",),
     )
     assert store.pending() == []
 
@@ -89,14 +90,15 @@ async def test_due_timer_becomes_a_system_trigger_once(store: SqliteTimerStore) 
 async def test_missed_timers_arrive_as_one_summary(store: SqliteTimerStore) -> None:
     """Uzun bir kapanıştan sonra: toleransı içindeki çalar, aşanlar tek özette (§12)."""
     clock, submitted = FakeClock(), Submitted()
-    add(store, -3600, "uyan", Priority.NORMAL)
-    add(store, -1800, "toplantı", Priority.URGENT)
+    woke = add(store, -3600, "uyan", Priority.NORMAL)
+    meeting = add(store, -1800, "toplantı", Priority.URGENT)
     add(store, -30, "ilaç", Priority.NORMAL)
     await TimerDispatcher(store, clock, submitted, lambda *_: "s1").dispatch()
     fired, summary = submitted.triggers
     assert fired.content == "ilaç"
     assert (summary.content, summary.priority) == ("", Priority.URGENT)
     assert [m["text"] for m in summary.details["missed"]] == ["uyan", "toplantı"]
+    assert summary.records == (f"timer:{woke}", f"timer:{meeting}")
     assert store.pending() == []
 
 

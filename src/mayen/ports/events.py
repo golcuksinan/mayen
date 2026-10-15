@@ -46,11 +46,17 @@ class EventKind(StrEnum):
     TURN_STARTED = "turn.started"
     TURN_INTERRUPTED = "turn.interrupted"
     TURN_FINISHED = "turn.finished"
+    TOOL_REQUESTED = "tool.requested"  # model çağrıyı istedi; gövde çalışmayabilir
     TOOL_STARTED = "tool.started"
     TOOL_FINISHED = "tool.finished"
     CONFIRMATION_CLOSED = "confirmation.closed"
     STT_SEGMENT = "stt.segment"
     LLM_USAGE = "llm.usage"
+
+
+def ref(store: str, record_id: object) -> str:
+    """Başka bir depodaki kaydın olaydan gösterilişi (`Header.related`): `depo:kimlik`."""
+    return f"{store}:{record_id}"
 
 
 @dataclass(frozen=True)

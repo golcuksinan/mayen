@@ -224,10 +224,18 @@ def test_schema_lists_every_tool() -> None:
 async def test_run_is_recorded_with_the_skills_own_result() -> None:
     log = MemoryEventLog()
     t, _, _ = tools(GUEST, log)
-    await t.call(SEARCH, {})
-    started, finished = log.events
+    await t.call(SEARCH, {}, "c1")
+    requested, started, finished = log.events
+    assert requested.header.kind is EventKind.TOOL_REQUESTED
+    assert requested.body == {
+        "tool": "note_search",
+        "arguments": {},
+        "call_id": "c1",
+        "verdict": "allow",
+    }
     assert started.header.kind is EventKind.TOOL_STARTED
-    assert started.body == {"tool": "note_search", "arguments": {}}
+    assert started.body == {"tool": "note_search", "arguments": {}, "call_id": "c1"}
+    assert finished.body["call_id"] == "c1"
     assert finished.header.kind is EventKind.TOOL_FINISHED
     assert finished.header.status is Status.OK
     assert finished.header.duration_s is not None
@@ -241,15 +249,34 @@ async def test_refused_calls_are_recorded_without_a_start() -> None:
     t, _, _ = tools(GUEST, log)
     await t.call(DELETE, {"id": 1})
     await t.call(DELETE, {"id": "first"})
-    assert log.kinds() == [EventKind.TOOL_FINISHED, EventKind.TOOL_FINISHED]
-    assert [e.header.status for e in log.events] == [Status.DENIED, Status.ERROR]
+    assert log.kinds() == [
+        EventKind.TOOL_REQUESTED,
+        EventKind.TOOL_FINISHED,
+        EventKind.TOOL_REQUESTED,
+        EventKind.TOOL_FINISHED,
+    ]
+    denied, malformed = log.of(EventKind.TOOL_REQUESTED)
+    assert denied.body["verdict"] == "deny"
+    # Doğrulanamayan çağrıda karar yok; istendiği gibi, ham argümanlarıyla kayıtta.
+    assert malformed.body["verdict"] is None
+    assert malformed.body["arguments"] == {"id": "first"}
+    finished = log.of(EventKind.TOOL_FINISHED)
+    assert [e.header.status for e in finished] == [Status.DENIED, Status.ERROR]
 
 
 async def test_confirmed_body_is_recorded_when_it_runs() -> None:
     log = MemoryEventLog()
     t, _, gate = tools(log=log)
-    await t.call(DELETE, {"id": 2})
-    assert log.events == []
+    await t.call(DELETE, {"id": 2}, "c1")
+    # Onay bekleyen çağrı da istendiği an kayıtta; gövdesi henüz çalışmadı.
+    [requested] = log.events
+    assert requested.header.kind is EventKind.TOOL_REQUESTED
+    assert requested.body["verdict"] == "confirm"
     assert gate.execute is not None
     await gate.execute()
-    assert log.kinds() == [EventKind.TOOL_STARTED, EventKind.TOOL_FINISHED]
+    assert log.kinds() == [
+        EventKind.TOOL_REQUESTED,
+        EventKind.TOOL_STARTED,
+        EventKind.TOOL_FINISHED,
+    ]
+    assert {e.body["call_id"] for e in log.events} == {"c1"}

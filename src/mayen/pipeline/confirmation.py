@@ -12,7 +12,7 @@ Bir cevaptaki onaylı çağrılar tek planda toplanır (§9.3). Pipecat önce ce
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from pipecat.frames.frames import (
@@ -37,7 +37,7 @@ from mayen.core.confirmation import (
     next_step,
     resolve_answer,
 )
-from mayen.pipeline.events import SessionEvents
+from mayen.pipeline.events import UTTERANCE, SessionEvents
 from mayen.pipeline.tools import to_model
 from mayen.ports.confirmation import (
     Answer,
@@ -125,7 +125,7 @@ class ConfirmationGateProcessor(FrameProcessor):
         elif self._plan is not None and isinstance(frame, InterimTranscriptionFrame):
             return
         elif self._plan is not None and isinstance(frame, TranscriptionFrame):
-            self.answer(Answer(frame.text, self._speaker(frame)))
+            self.answer(Answer(frame.text, self._speaker(frame), frame.metadata.get(UTTERANCE)))
             return
         await self.push_frame(frame, direction)
 
@@ -137,6 +137,8 @@ class ConfirmationGateProcessor(FrameProcessor):
         if self._plan is None:
             log.warning("answer without an awaiting plan dropped")
             return
+        if answer.record is not None:
+            self._plan.answers.append(answer.record)
         self.create_task(self._answer(self._plan, answer))
 
     async def drop(self) -> None:
@@ -237,7 +239,13 @@ class ConfirmationGateProcessor(FrameProcessor):
         opened, self._opened_at = self._opened_at, None
         duration_s = None if opened is None else self._events.monotonic() - opened
         await self._report(
-            plan.calls, outcome, results=results, speak=speak, duration_s=duration_s, **detail
+            plan.calls,
+            outcome,
+            results=results,
+            speak=speak,
+            duration_s=duration_s,
+            answers=plan.answers,
+            **detail,
         )
 
     async def _report(
@@ -248,10 +256,12 @@ class ConfirmationGateProcessor(FrameProcessor):
         results: list[dict[str, Any]] | None = None,
         speak: bool = True,
         duration_s: float | None = None,
+        answers: Sequence[str] = (),
         **detail: str,
     ) -> None:
         """Planın sonucu modele bir geliştirici mesajı olarak eklenir; çağrının sonucu
-        zaten "onay bekleniyor" diye dönmüştü."""
+        zaten "onay bekleniyor" diye dönmüştü. Olay cevap olan sözlere bağlanır: onlar
+        modele gitmedi."""
         listed = [{"tool": c.name, "arguments": dict(c.arguments)} for c in calls]
         if results is not None:
             for item, result in zip(listed, results, strict=True):
@@ -263,6 +273,7 @@ class ConfirmationGateProcessor(FrameProcessor):
             report,
             duration_s=duration_s,
             status=OUTCOME_STATUS[outcome],
+            related=answers,
         )
         content = json.dumps(report, ensure_ascii=False)
         await self.push_frame(

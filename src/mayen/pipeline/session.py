@@ -39,7 +39,8 @@ from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 
 from mayen.core.events import Recorder
 from mayen.core.turns import Interrupt, Start, Turn, Turns
-from mayen.ports.events import EventKind
+from mayen.pipeline.events import UTTERANCE, SessionTranscript
+from mayen.ports.events import EventKind, ref
 from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource, TurnId
 
@@ -97,7 +98,7 @@ class Sessions:
         self._seen(session, requester)
 
     async def submit(
-        self, trigger: Trigger, received: Callable[[TurnId], None] = lambda turn_id: None
+        self, trigger: Trigger, received: Callable[[TurnId], object] = lambda turn_id: None
     ) -> None:
         """`received`, tetikleyicinin turu (başlamış ya da sırada) belli olunca ve tur hatta
         yürümeden önce çağrılır: turu açan söz transkripte cevabından önce girer (§11)."""
@@ -130,6 +131,9 @@ class TriggerGate(FrameProcessor):
     Tur, oturum `settle_s` boyunca sessiz kalınca biter: kimse konuşmuyor, model cevap
     yazmıyor, açık tool çağrısı yok, onay beklenmiyor ve beklenen bir cevap yok. Beklenen
     cevap `response_timeout_s` içinde başlamazsa tur sessizce kapanır (§5.4).
+
+    Duyulan her segment transkripte buradan girer (§6: transkript her zaman kaydedilir);
+    duyulmaması gereken an söylenen de, ama olayında `muted` ile: o söz modele gitmedi.
     """
 
     def __init__(
@@ -138,6 +142,7 @@ class TriggerGate(FrameProcessor):
         sessions: Sessions,
         caller: CallerSource,
         recorder: Recorder,
+        transcript: SessionTranscript,
         *,
         settle_s: float,
         response_timeout_s: float,
@@ -149,6 +154,7 @@ class TriggerGate(FrameProcessor):
         self._sessions = sessions
         self._caller = caller
         self._recorder = recorder
+        self._transcript = transcript
         self._started_at = 0.0
         self._settle_s = settle_s
         self._response_timeout_s = response_timeout_s
@@ -193,10 +199,18 @@ class TriggerGate(FrameProcessor):
         source = turn.trigger.source
         self._identified = source is not TriggerSource.VOICE or not fresh
         self._started_at = self._recorder.clock.monotonic()
+        requester = turn.trigger.requester
         self._emit(
             EventKind.TURN_STARTED,
             turn,
-            {"source": source.value, "priority": turn.trigger.priority.value, "fresh": fresh},
+            {
+                "source": source.value,
+                "priority": turn.trigger.priority.value,
+                "fresh": fresh,
+                # Sesli turun sahibi ilk segmentte tanınır; o segmentin konuşmacısıdır.
+                "requester": {"role": requester.role.value, "person_id": requester.person_id},
+            },
+            related=turn.trigger.records,
         )
         if source is TriggerSource.VOICE:
             if fresh:
@@ -273,9 +287,11 @@ class TriggerGate(FrameProcessor):
             if self._user_speaking and not self._answered:
                 self._awaiting_since = time.monotonic()
             self._user_speaking = False
-        elif isinstance(frame, TranscriptionFrame) and not self._identified:
-            self._identified = True
-            self._sessions.identify(self.session, self._caller(frame))
+        elif isinstance(frame, TranscriptionFrame):
+            self._heard(frame)
+            if not self._identified:
+                self._identified = True
+                self._sessions.identify(self.session, self._caller(frame))
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
         elif isinstance(frame, BotStoppedSpeakingFrame):
@@ -291,6 +307,24 @@ class TriggerGate(FrameProcessor):
             await self.cancel_task(self._ticker)
             self._ticker = None
 
+    def _heard(self, frame: TranscriptionFrame) -> None:
+        utterance = self._transcript.heard(self._caller(frame), frame.text)
+        record = ref("utterance", utterance.id)
+        frame.metadata[UTTERANCE] = record
+        self._recorder.emit(
+            EventKind.STT_SEGMENT,
+            __name__,
+            {
+                "language": None if frame.language is None else str(frame.language),
+                "finalized": frame.finalized,
+                "muted": not self.hears(),
+            },
+            session=self.session,
+            turn_id=None if self._turn is None else self._turn.id,
+            status=Status.OK,
+            related=[record],
+        )
+
     def _elapsed(self, turn: Turn) -> float | None:
         # Kapı yalnızca kendi yürüttüğü turun başlangıcını bilir.
         if self._turn is None or self._turn.id != turn.id:
@@ -305,6 +339,7 @@ class TriggerGate(FrameProcessor):
         *,
         duration_s: float | None = None,
         status: Status | None = None,
+        related: Sequence[str] = (),
     ) -> None:
         self._recorder.emit(
             kind,
@@ -314,6 +349,7 @@ class TriggerGate(FrameProcessor):
             turn_id=turn.id,
             duration_s=duration_s,
             status=status,
+            related=related,
         )
 
     async def _push_run(self, frame: Frame) -> None:

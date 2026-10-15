@@ -23,6 +23,7 @@ class Plan:
     entries: list[Entry] = field(default_factory=list)
     question: str = ""
     asked_again: bool = False
+    answers: list[str] = field(default_factory=list)  # cevap olan sözlerin kayıtları
 
     @property
     def calls(self) -> list[PlannedCall]:

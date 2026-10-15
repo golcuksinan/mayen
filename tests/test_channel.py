@@ -20,7 +20,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.tests.utils import SleepFrame, run_test
 
 import mayen.adapters.channel.tailscale as tailscale
-from fakes import MemoryEventLog, MemoryTranscript, transcript
+from fakes import MemoryEventLog, MemoryTranscript, session_transcript, transcript
 from mayen.adapters.channel.tailscale import TailscaleIdentity
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.turns import Turns
@@ -83,6 +83,7 @@ async def written(
         sessions,
         lambda _: OWNER,
         Recorder(log, SystemClock()),
+        session_transcript(sessions)[0],
         settle_s=0.1,
         response_timeout_s=0.3,
     )
@@ -137,7 +138,8 @@ async def test_written_message_while_awaiting_is_only_an_answer() -> None:
     store = MemoryTranscript()
     confirmations = Confirmations(awaiting=True)
     down = await written(["evet"], confirmations, log, store)
-    assert confirmations.answers == [Answer("evet", "1")]
+    [utterance] = store.utterances
+    assert confirmations.answers == [Answer("evet", "1", f"utterance:{utterance.id}")]
     # Tur açılmaz, model çalışmaz (§5.4: kapalı durum).
     assert not any(isinstance(f, LLMMessagesAppendFrame) for f in down)
     assert not [e for e in log.events if e.body.get("source") == "text"]

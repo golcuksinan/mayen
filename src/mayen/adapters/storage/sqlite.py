@@ -58,11 +58,11 @@ VOCABULARIES: Sequence[tuple[str, str, type[StrEnum]]] = (
     ("utterances", "role", Role),
 )
 
-# Sürüm = sıradaki yeri (1'den başlar). Uygulanmış bir migration değiştirilmez; düzeltme
-# yeni bir migration'dır.
-MIGRATIONS: Sequence[Sequence[str]] = (
-    (
-        f"""CREATE TABLE events (
+
+def _events_tables(events: str, related: str) -> list[str]:
+    """Olay kaydının iki tablosu, verilen adlarla; sözlük güncel `EventKind`'den."""
+    return [
+        f"""CREATE TABLE {events} (
             seq INTEGER PRIMARY KEY,
             id TEXT NOT NULL UNIQUE,
             kind TEXT NOT NULL {check_in("kind", EventKind)},
@@ -75,16 +75,46 @@ MIGRATIONS: Sequence[Sequence[str]] = (
             body TEXT NOT NULL
         ) STRICT""",
         # İlgili kayıtlar ayrı tabloda: sil, bir kaydın kopyalarını dizinle bulur (§11.4).
-        """CREATE TABLE event_related (
-            event_seq INTEGER NOT NULL REFERENCES events (seq) ON DELETE CASCADE,
+        f"""CREATE TABLE {related} (
+            event_seq INTEGER NOT NULL REFERENCES {events} (seq) ON DELETE CASCADE,
             record_id TEXT NOT NULL,
             PRIMARY KEY (event_seq, record_id)
         ) STRICT""",
-        "CREATE INDEX events_time ON events (time, seq)",
-        "CREATE INDEX events_session ON events (session, time, seq)",
-        "CREATE INDEX events_turn ON events (turn_id, time, seq)",
-        "CREATE INDEX event_related_record ON event_related (record_id)",
-    ),
+    ]
+
+
+_EVENTS_INDEXES = (
+    "CREATE INDEX events_time ON events (time, seq)",
+    "CREATE INDEX events_session ON events (session, time, seq)",
+    "CREATE INDEX events_turn ON events (turn_id, time, seq)",
+    "CREATE INDEX event_related_record ON event_related (record_id)",
+)
+
+
+def rebuild_events() -> list[str]:
+    """`EventKind` büyüyünce olay tablolarını yeni kısıtla yeniden kurar; satırlar korunur.
+
+    SQLite bir kısıtı yerinde değiştiremez. Bağlı tablo önce yenisine taşınır ve eskisi
+    düşürülür; eski olay tablosu ancak ondan sonra düşer, yoksa yabancı anahtarın silme
+    zinciri ilgili kayıtları silerdi. Ad değişince SQLite, yeni bağlı tablonun anahtarını da
+    yeni ada çevirir.
+    """
+    return [
+        *_events_tables("events_new", "event_related_new"),
+        "INSERT INTO events_new SELECT * FROM events",
+        "INSERT INTO event_related_new SELECT * FROM event_related",
+        "DROP TABLE event_related",
+        "DROP TABLE events",
+        "ALTER TABLE events_new RENAME TO events",
+        "ALTER TABLE event_related_new RENAME TO event_related",
+        *_EVENTS_INDEXES,
+    ]
+
+
+# Sürüm = sıradaki yeri (1'den başlar). Uygulanmış bir migration değiştirilmez; düzeltme
+# yeni bir migration'dır.
+MIGRATIONS: Sequence[Sequence[str]] = (
+    (*_events_tables("events", "event_related"), *_EVENTS_INDEXES),
     (
         # AUTOINCREMENT: silinmiş bir kaydın numarası yeniden verilmez; verilseydi eski
         # numarayla yapılan bir silme yeni kaydı silerdi.
@@ -143,6 +173,7 @@ MIGRATIONS: Sequence[Sequence[str]] = (
         "CREATE INDEX utterances_session ON utterances (session, time, seq)",
         "CREATE INDEX utterances_turn ON utterances (turn_id, time, seq)",
     ),
+    rebuild_events(),  # tool.requested
 )
 
 

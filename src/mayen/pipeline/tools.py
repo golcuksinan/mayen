@@ -126,27 +126,33 @@ class AuthorizedTools:
     async def call(
         self, spec: ToolSpec[Any], raw: Mapping[str, Any], call_id: str | None = None
     ) -> tuple[dict[str, Any], FunctionCallResultProperties | None]:
-        """Tek bir çağrı: doğrula, karar ver, uygula. Pipecat'siz test edilebilsin diye ayrı."""
+        """Tek bir çağrı: doğrula, karar ver, uygula. Pipecat'siz test edilebilsin diye ayrı.
+
+        Modelin istediği her çağrı, gövdesi çalışsın ya da çalışmasın, istendiği anda kayda
+        girer (§5.5): onay bekleyen çağrı da modelin o an yaptığı bir şeydir.
+        """
         args = parse_args(spec, raw)
         if isinstance(args, str):
             if call_id is not None:
                 self._malformed.add(call_id)
-            return to_model(self._refused(spec, dict(raw), Status.ERROR, args)), None
+            self._requested(spec, dict(raw), call_id, None)
+            return to_model(self._refused(spec, dict(raw), call_id, Status.ERROR, args)), None
 
+        arguments = args.model_dump(mode="json")
         caller = self._caller()
         table = self._table()
         decision = decide(spec, caller, table, self._flags())
+        self._requested(spec, arguments, call_id, decision.verdict)
         if decision.verdict is Verdict.DENY:
-            arguments = args.model_dump(mode="json")
             return to_model(
-                self._refused(spec, arguments, Status.DENIED, decision.reason)
+                self._refused(spec, arguments, call_id, Status.DENIED, decision.reason)
             ), None
 
         if decision.verdict is Verdict.CONFIRM:
             assert decision.confirmation is not None
 
             async def run_confirmed() -> ToolResult:
-                return await self._run(spec, args, caller, table)
+                return await self._run(spec, args, call_id, caller, table)
 
             await self._gate.request(spec, args, decision.confirmation, run_confirmed, caller)
             # Model burada konuşmaz; soruyu kapı plandan yazdırıp okutur (§10.5).
@@ -154,13 +160,37 @@ class AuthorizedTools:
                 run_llm=False
             )
 
-        return to_model(await self._run(spec, args, caller, table)), None
+        return to_model(await self._run(spec, args, call_id, caller, table)), None
+
+    def _requested(
+        self,
+        spec: ToolSpec[Any],
+        arguments: dict[str, Any],
+        call_id: str | None,
+        verdict: Verdict | None,  # argümanı doğrulanamayan çağrıda karar yok
+    ) -> None:
+        body = {
+            "tool": spec.name,
+            "arguments": arguments,
+            "call_id": call_id,
+            "verdict": None if verdict is None else verdict.value,
+        }
+        self._events.emit(EventKind.TOOL_REQUESTED, __name__, body)
 
     async def _run(
-        self, spec: ToolSpec[Any], args: BaseModel, caller: Caller, table: PolicyTable
+        self,
+        spec: ToolSpec[Any],
+        args: BaseModel,
+        call_id: str | None,
+        caller: Caller,
+        table: PolicyTable,
     ) -> ToolResult:
         """Gövdenin çalışması olay kaydına girer; eylem geçmişi bu olaylardır (§11)."""
-        body = {"tool": spec.name, "arguments": args.model_dump(mode="json")}
+        body = {
+            "tool": spec.name,
+            "arguments": args.model_dump(mode="json"),
+            "call_id": call_id,
+        }
         self._events.emit(EventKind.TOOL_STARTED, __name__, body)
         started = self._events.monotonic()
         result = await execute(spec, args, self._context(spec, caller))
@@ -175,10 +205,20 @@ class AuthorizedTools:
         return filter_records(result, caller, table)
 
     def _refused(
-        self, spec: ToolSpec[Any], arguments: dict[str, Any], status: Status, error: str
+        self,
+        spec: ToolSpec[Any],
+        arguments: dict[str, Any],
+        call_id: str | None,
+        status: Status,
+        error: str,
     ) -> ToolResult:
         """Gövdesi hiç çalışmayan çağrı da eylem geçmişindedir."""
         result = ToolResult(status, error=error)
-        body = {"tool": spec.name, "arguments": arguments, "result": dataclasses.asdict(result)}
+        body = {
+            "tool": spec.name,
+            "arguments": arguments,
+            "call_id": call_id,
+            "result": dataclasses.asdict(result),
+        }
         self._events.emit(EventKind.TOOL_FINISHED, __name__, body, status=status)
         return result

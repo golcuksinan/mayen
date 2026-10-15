@@ -30,7 +30,7 @@ from mayen.core.confirmation import (
 )
 from mayen.core.events import Recorder
 from mayen.pipeline.confirmation import ConfirmationGateProcessor
-from mayen.pipeline.events import SessionEvents
+from mayen.pipeline.events import UTTERANCE, SessionEvents
 from mayen.ports.confirmation import Answer, PlannedCall, Resolution
 from mayen.ports.events import EventKind
 from mayen.ports.tools import (
@@ -369,12 +369,16 @@ async def test_closing_is_an_event_and_the_log_carries_no_content(
     )
     await request(g, executed, 1)
 
+    answer = said("hayır silme")
+    answer.metadata[UTTERANCE] = "utterance:u1"
     await run_test(
         g,
-        frames_to_send=[started("a"), result("a"), SleepFrame(0.05), said("hayır silme")],
+        frames_to_send=[started("a"), result("a"), SleepFrame(0.05), answer],
     )
 
     [event] = log.of(EventKind.CONFIRMATION_CLOSED)
+    # Cevap olan söz modele gitmedi; olay ona bağlanır.
+    assert event.header.related == ("utterance:u1",)
     assert event.header.status is Status.DENIED
     assert event.header.duration_s is not None
     assert event.body["calls"] == [{"tool": "note_delete", "arguments": {"id": 1}}]

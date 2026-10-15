@@ -27,7 +27,9 @@ from mayen.core.transcript import Transcript
 from mayen.pipeline.session import Sessions
 from mayen.ports.channels import MessageKind, WireMessage
 from mayen.ports.confirmation import Answer
+from mayen.ports.events import ref
 from mayen.ports.tools import Caller
+from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import Priority, Trigger, TriggerSource, TurnId
 
 log = logging.getLogger(__name__)
@@ -94,8 +96,9 @@ class TextInput(FrameProcessor):
                 text = frame.message.text
                 if self._confirmations.awaiting:
                     turn = self._sessions.running(self._session)
-                    self._heard(None if turn is None else turn.id, text)
-                    self._confirmations.answer(Answer(text, self._requester.person_id))
+                    heard = self._heard(None if turn is None else turn.id, text)
+                    record = ref("utterance", heard.id)
+                    self._confirmations.answer(Answer(text, self._requester.person_id, record))
                     return
                 trigger = Trigger(
                     self._session, self._priority, TriggerSource.TEXT, text, self._requester
@@ -104,8 +107,8 @@ class TextInput(FrameProcessor):
             return  # mesaj tetikleyici oldu; kare hatta ilerlemez
         await self.push_frame(frame, direction)
 
-    def _heard(self, turn_id: TurnId | None, text: str) -> None:
-        self._transcript.heard(self._session, turn_id, self._requester, text)
+    def _heard(self, turn_id: TurnId | None, text: str) -> Utterance:
+        return self._transcript.heard(self._session, turn_id, self._requester, text)
 
 
 class TextOutput(FrameProcessor):

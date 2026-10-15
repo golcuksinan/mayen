@@ -1,25 +1,22 @@
-"""Gözlemciden olay üretimi (§5.5): her kare bir kez, söz yalnızca transkriptte (§11)."""
+"""Gözlemciden olay üretimi (§5.5): her kare bir kez, gövde yalnızca olay kaydında."""
 
 import logging
 import uuid
 
 import pytest
-from pipecat.frames.frames import Frame, MetricsFrame, TranscriptionFrame
+from pipecat.frames.frames import Frame, MetricsFrame
 from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.tests.utils import run_test
 
-from fakes import FakeClock, MemoryEventLog, transcript
+from fakes import FakeClock, MemoryEventLog
 from mayen.core.events import Recorder
-from mayen.pipeline.events import EventObserver, SessionEvents, SessionTranscript
+from mayen.pipeline.events import EventObserver, SessionEvents
 from mayen.ports.events import EventKind
-from mayen.ports.tools import Caller, Role
-from mayen.ports.transcript import Party
 from mayen.ports.triggers import TurnId
 
 TURN = TurnId(uuid.uuid4())
-OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
 
 
 class Passing(FrameProcessor):
@@ -28,14 +25,10 @@ class Passing(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-async def test_segments_and_token_counts_become_events_once(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_token_counts_become_events_once(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
     log = MemoryEventLog()
     events = SessionEvents(Recorder(log, FakeClock()), "s1", lambda: TURN)
-    writer, store = transcript()
-    heard = SessionTranscript(writer, "s1", lambda: TURN)
     usage = LLMUsageMetricsData(
         processor="llm",
         model="m",
@@ -44,22 +37,12 @@ async def test_segments_and_token_counts_become_events_once(
     # Birkaç işlemciden geçen kare yine tek olaydır.
     await run_test(
         Pipeline([Passing(), Passing(), Passing()]),
-        frames_to_send=[TranscriptionFrame("yarın sabah", "p1", ""), MetricsFrame([usage])],
-        observers=[EventObserver(events, heard, lambda _: OWNER)],
+        frames_to_send=[MetricsFrame([usage])],
+        observers=[EventObserver(events)],
     )
 
-    assert log.kinds() == [EventKind.STT_SEGMENT, EventKind.LLM_USAGE]
-    segment, tokens = log.events
-    [utterance] = store.utterances
-    assert (utterance.text, utterance.party, utterance.role) == (
-        "yarın sabah",
-        Party.PERSON,
-        Role.OWNER,
-    )
-    assert (utterance.session, utterance.turn_id, utterance.person_id) == ("s1", TURN, "1")
-    # Olay söze kimliğiyle bağlanır; metin iki yerde tutulmaz (§11).
-    assert segment.header.related == (str(utterance.id),)
-    assert "yarın sabah" not in str(segment.body)
+    [tokens] = log.events
+    assert tokens.header.kind is EventKind.LLM_USAGE
     assert tokens.body["completion_tokens"] == 8
-    assert {e.header.turn_id for e in log.events} == {TURN}
-    assert "yarın sabah" not in caplog.text
+    assert tokens.header.turn_id == TURN
+    assert "completion_tokens" not in caplog.text

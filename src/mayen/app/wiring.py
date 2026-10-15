@@ -224,8 +224,6 @@ class _Conversation:
     aggregators: LLMContextAggregatorPair
     llm: FrameProcessor
     events: SessionEvents
-    transcript: SessionTranscript
-    speaker: CallerSource
 
 
 def _conversation(
@@ -261,6 +259,7 @@ def _conversation(
         core.recorder,
         settle_s=config.triggers.settle_s,
         response_timeout_s=config.triggers.response_timeout_s,
+        transcript=transcript,
         holds=[lambda: confirmation.awaiting],
         drops=[confirmation.drop],
     )
@@ -290,13 +289,11 @@ def _conversation(
         ),
     )
     _bind_response(aggregators.assistant(), gate, transcript)
-    return _Conversation(gate, confirmation, aggregators, llm, events, transcript, speaker)
+    return _Conversation(gate, confirmation, aggregators, llm, events)
 
 
 def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Session:
-    observers: list[BaseObserver] = [
-        EventObserver(conversation.events, conversation.transcript, conversation.speaker)
-    ]
+    observers: list[BaseObserver] = [EventObserver(conversation.events)]
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),

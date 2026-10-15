@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 from mayen.core.events import Recorder
 from mayen.core.transcript import Transcript
+from mayen.pipeline.events import SessionTranscript
+from mayen.pipeline.session import Sessions
 from mayen.ports.events import Event, EventKind
 from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
@@ -77,3 +79,16 @@ class MemoryTranscript:
 def transcript() -> tuple[Transcript, MemoryTranscript]:
     store = MemoryTranscript()
     return Transcript(store, FakeClock()), store
+
+
+def session_transcript(
+    sessions: Sessions, session: str = "s1"
+) -> tuple[SessionTranscript, MemoryTranscript]:
+    """Oturumun transkripti; tur kimliği, wiring'deki gibi oturumun süren turundan."""
+    writer, store = transcript()
+
+    def turn_id() -> TurnId | None:
+        turn = sessions.running(session)
+        return None if turn is None else turn.id
+
+    return SessionTranscript(writer, session, turn_id), store

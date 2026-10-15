@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from mayen.ports.events import Clock
+from mayen.ports.events import Clock, ref
 from mayen.ports.timers import Timer, TimerState, TimerStore
 from mayen.ports.tools import Caller, Role, Sensitivity
 from mayen.ports.triggers import Trigger, TriggerSource
@@ -81,6 +81,7 @@ class TimerDispatcher:
                     timer.text,
                     SYSTEM,
                     {"due": local(timer.due)},
+                    (ref("timer", timer.id),),
                 )
             )
             self._store.close(timer.id, TimerState.FIRED)
@@ -97,7 +98,15 @@ class TimerDispatcher:
             ]
             priority = max((t.priority for t in timers), key=lambda p: p.rank)
             await self._submit(
-                Trigger(session, priority, TriggerSource.TIMER, "", SYSTEM, {"missed": summary})
+                Trigger(
+                    session,
+                    priority,
+                    TriggerSource.TIMER,
+                    "",
+                    SYSTEM,
+                    {"missed": summary},
+                    tuple(ref("timer", t.id) for t in timers),
+                )
             )
             for timer in timers:
                 self._store.close(timer.id, TimerState.MISSED)
