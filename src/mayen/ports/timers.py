@@ -41,6 +41,10 @@ class TimerStore(Protocol):
         person_id: str | None,
     ) -> Timer: ...
 
+    def get(self, timer_id: str) -> Timer | None:
+        """Akıbeti ne olursa olsun; silinmişse `None`."""
+        ...
+
     def pending(self) -> list[Timer]:
         """Bekleyen zamanlayıcılar, vade sırasıyla."""
         ...

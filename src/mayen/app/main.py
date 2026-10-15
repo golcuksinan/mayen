@@ -7,6 +7,8 @@ yeniden başlatma döngüsüne sokmaz. Alt komutlar:
 - `setup`: sahibi kurar (§10.2). Makinenin başında çalıştırılır; sahip varsa reddeder.
 - `serve`: yazılı kanalı (§7) ve hatırlatmaları çalıştırır. Ses hattını şimdilik deneydeki
   senaryo kurar.
+- `replay`: kayıttaki turları listeler; bir tur verilirse onu bugünkü prompt ve modelle
+  yeniden oynatır (§14). Veritabanının tek sahibi olduğundan `serve` açıkken çalışmaz.
 """
 
 import argparse
@@ -17,13 +19,15 @@ import sys
 from pathlib import Path
 
 import uvicorn
+import yaml
 
 from mayen.adapters.channel.tailscale import TailscaleIdentity
 from mayen.adapters.storage.sqlite import Database, SqlitePersonStore, StorageError
 from mayen.app.config import Config, ConfigError, load, storage_path
 from mayen.app.server import LoopbackIsLocal, text_app
-from mayen.app.wiring import Core, SkillLoadError
+from mayen.app.wiring import Core, SkillLoadError, replayer
 from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError
+from mayen.replay.run import render
 
 CONFIG_ENV = "MAYEN_CONFIG"
 EXIT_CONFIG = 78  # sysexits.h EX_CONFIG
@@ -49,6 +53,11 @@ def _parser() -> argparse.ArgumentParser:
         help="personal device: a Tailscale node StableID, or 'local' (development only)",
     )
     commands.add_parser("serve", help="run the text channel and reminders")
+    replay = commands.add_parser("replay", help="list recorded turns, or replay one")
+    replay.add_argument("turn", nargs="?", help="turn id or a unique prefix of it")
+    replay.add_argument(
+        "--mocks", type=Path, help="YAML: tool name -> the result the model sees"
+    )
     return parser
 
 
@@ -74,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.command == "serve":
                 asyncio.run(_serve(core, config))
+            elif args.command == "replay":
+                return asyncio.run(_replay(core, db, args))
     except (ConfigError, StorageError, SkillLoadError) as e:
         log.error("configuration error: %s", e)
         return EXIT_CONFIG
@@ -93,6 +104,25 @@ def _setup(path: Path, args: argparse.Namespace) -> int:
             log.error("setup refused: %s", e)
             return EXIT_REFUSED
     log.info("owner set up: id=%s devices=%s", owner.id, ",".join(owner.devices) or "-")
+    return 0
+
+
+async def _replay(core: Core, db: Database, args: argparse.Namespace) -> int:
+    player = replayer(core, db)
+    if args.turn is None:
+        for turn in player.turns():
+            print(
+                f"{turn.id}  {turn.time.astimezone():%Y-%m-%d %H:%M:%S}"
+                f"  {turn.source.value:6} {turn.session}"
+            )
+        return 0
+    try:
+        turn = player.find(args.turn)
+    except LookupError as e:
+        log.error("replay refused: %s", e)
+        return EXIT_REFUSED
+    mocks = {} if args.mocks is None else yaml.safe_load(args.mocks.read_text(encoding="utf-8"))
+    print(render(await player.replay(turn.id, mocks or {})))
     return 0
 
 

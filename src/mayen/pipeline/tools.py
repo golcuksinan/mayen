@@ -70,6 +70,30 @@ async def execute(spec: ToolSpec[Any], args: BaseModel, ctx: ToolContext) -> Too
         return ToolResult(Status.ERROR, error=str(e))
 
 
+def tools_schema(registry: ToolRegistry) -> ToolsSchema:
+    """Modele giden tool şeması; hat da replay de bunu gönderir (§14)."""
+    functions = []
+    for spec in registry.specs():
+        params = spec.args.model_json_schema()
+        functions.append(
+            FunctionSchema(
+                name=spec.name,
+                description=spec.description,
+                properties=params.get("properties", {}),
+                required=params.get("required", []),
+            )
+        )
+    return ToolsSchema(standard_tools=functions)
+
+
+def openai_tools(registry: ToolRegistry) -> list[dict[str, Any]]:
+    """Aynı şema, hattın dışından gönderilen istek için OpenAI biçiminde."""
+    return [
+        {"type": "function", "function": f.to_default_dict()}
+        for f in tools_schema(registry).standard_tools
+    ]
+
+
 class AuthorizedTools:
     """Kayıt defterindeki tool'ları yetki kararının arkasında Pipecat'e bağlar."""
 
@@ -95,18 +119,7 @@ class AuthorizedTools:
         self._malformed: set[str] = set()  # argümanı doğrulanamayan çağrılar (§9.1)
 
     def schema(self) -> ToolsSchema:
-        functions = []
-        for spec in self._registry.specs():
-            params = spec.args.model_json_schema()
-            functions.append(
-                FunctionSchema(
-                    name=spec.name,
-                    description=spec.description,
-                    properties=params.get("properties", {}),
-                    required=params.get("required", []),
-                )
-            )
-        return ToolsSchema(standard_tools=functions)
+        return tools_schema(self._registry)
 
     def register(self, llm: LLMService[Any]) -> None:
         for spec in self._registry.specs():
@@ -142,7 +155,7 @@ class AuthorizedTools:
         caller = self._caller()
         table = self._table()
         decision = decide(spec, caller, table, self._flags())
-        self._requested(spec, arguments, call_id, decision.verdict)
+        self._requested(spec, dict(raw), call_id, decision.verdict)
         if decision.verdict is Verdict.DENY:
             return to_model(
                 self._refused(spec, arguments, call_id, Status.DENIED, decision.reason)
@@ -169,6 +182,7 @@ class AuthorizedTools:
         call_id: str | None,
         verdict: Verdict | None,  # argümanı doğrulanamayan çağrıda karar yok
     ) -> None:
+        """Argümanlar modelin yazdığı gibidir: geçmişte de o hâliyle durur (replay, §14)."""
         body = {
             "tool": spec.name,
             "arguments": arguments,

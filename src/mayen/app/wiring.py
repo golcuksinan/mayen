@@ -28,6 +28,7 @@ from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.base_transport import BaseTransport
 
 import mayen.skills
+from mayen.adapters.llamacpp.chat import LlamaCppChat
 from mayen.adapters.llamacpp.confirmation import LlamaCppAnswerResolver, LlamaCppQuestionWriter
 from mayen.adapters.storage.sqlite import (
     Database,
@@ -58,8 +59,9 @@ from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
 from mayen.ports.people import DeviceId
 from mayen.ports.timers import TimerStore
-from mayen.ports.tools import Caller, ToolSpec, TurnFlags
+from mayen.ports.tools import Caller, Role, ToolSpec, TurnFlags
 from mayen.ports.triggers import TriggerSource
+from mayen.replay.run import Replayer
 
 # Tek kip (§8.10): bir rol hem tool kararını hem cevabı yazar; onay soruları da bu rolde.
 CONVERSATION_ROLE = ModelRole.TALKER
@@ -183,6 +185,15 @@ class Core:
         if turn is None:
             return ROLE_TABLE
         return self.tables.get(turn.trigger.source, ROLE_TABLE)
+
+    def caller(self, role: Role, person_id: str | None) -> Caller:
+        """Kayıttaki rol ve kimlikten çağıran; kişisel cihazı profilden (replay, §14)."""
+        person = None if person_id is None else self.people.get(person_id)
+        return (
+            Caller(role, person_id, has_personal_device=False)
+            if person is None
+            else caller_of(person)
+        )
 
     def context(self, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
         return ToolCtx(
@@ -373,3 +384,22 @@ def _bind_response(
 
     assistant.add_event_handler("on_assistant_turn_started", started)
     assistant.add_event_handler("on_assistant_turn_stopped", stopped)
+
+
+def replayer(core: Core, db: Database) -> Replayer:
+    """Kayıtlı turları bugünkü config'le oynatan (§14); hattı kurmaz, modele doğrudan gider."""
+    config = core.config
+    return Replayer(
+        SqliteEventLog(db),
+        SqliteTranscript(db),
+        core.timers,
+        core.people,
+        core.registry,
+        core.caller,
+        lambda source: core.tables.get(source, ROLE_TABLE),
+        LlamaCppChat(config.models.endpoint(CONVERSATION_ROLE)),
+        config.system_prompt,
+        config.language_rule,
+        config.default_language,
+        StepCap(config.loop.max_steps, config.loop.max_corrections),
+    )

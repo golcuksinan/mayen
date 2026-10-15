@@ -512,6 +512,13 @@ class SqliteTimerStore:
             ).fetchone()
         return _timer(row)
 
+    def get(self, timer_id: str) -> Timer | None:
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                f"SELECT {_TIMER_COLUMNS} FROM timers WHERE id = ?", (_number(timer_id),)
+            ).fetchone()
+        return None if row is None else _timer(row)
+
     def pending(self) -> list[Timer]:
         with self._db.transaction() as conn:
             rows = conn.execute(

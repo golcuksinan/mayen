@@ -1,9 +1,9 @@
 """Model deposunun sözlüğü (§8.9) ve rolleri (§8.10)."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
@@ -63,3 +63,30 @@ class Endpoint:
     developer_role: bool
     body: Mapping[str, Any] = field(default_factory=dict)  # örnekleme, düşünme, yuva
     api_key: SecretStr | None = None
+
+
+@dataclass(frozen=True)
+class ModelCall:
+    """Modelin istediği tek tool çağrısı; argümanlar modelin yazdığı ham metindir."""
+
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class ModelReply:
+    text: str
+    calls: Sequence[ModelCall] = ()
+
+
+class ChatModel(Protocol):
+    """Hattın dışından tek bir model isteği (replay, §14). Mesajlar OpenAI biçimindedir;
+    sistem promptu ve bağlam bloğu mesajların içindedir."""
+
+    async def complete(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]],
+        tool_choice: str,
+    ) -> ModelReply: ...
