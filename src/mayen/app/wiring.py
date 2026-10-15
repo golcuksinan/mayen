@@ -19,6 +19,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
+    AssistantTurnStoppedMessage,
     LLMAssistantAggregator,
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
@@ -34,6 +35,7 @@ from mayen.adapters.storage.sqlite import (
     SqliteNoteStore,
     SqlitePersonStore,
     SqliteTimerStore,
+    SqliteTranscript,
 )
 from mayen.adapters.trigger.timer import TimerTrigger
 from mayen.app.config import Config, ConfigError
@@ -44,8 +46,9 @@ from mayen.core.presence import Presence
 from mayen.core.profile import caller as caller_of
 from mayen.core.registry import ToolRegistry
 from mayen.core.timers import TimerDispatcher
+from mayen.core.transcript import Transcript
 from mayen.pipeline.confirmation import ConfirmationGateProcessor, NoRecoveryWhileAwaiting
-from mayen.pipeline.events import EventObserver, SessionEvents
+from mayen.pipeline.events import EventObserver, SessionEvents, SessionTranscript
 from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
 from mayen.pipeline.text import TextInput, TextOutput
@@ -128,6 +131,7 @@ class Core:
     def __init__(self, config: Config, db: Database) -> None:
         self.config = config
         self.recorder = Recorder(SqliteEventLog(db), SystemClock())
+        self.transcript = Transcript(SqliteTranscript(db), self.recorder.clock)
         self.presence = Presence()
         self.sessions = Sessions(
             config.turns(), config.triggers.voice_priority, self._interacted
@@ -220,6 +224,8 @@ class _Conversation:
     aggregators: LLMContextAggregatorPair
     llm: FrameProcessor
     events: SessionEvents
+    transcript: SessionTranscript
+    speaker: CallerSource
 
 
 def _conversation(
@@ -237,6 +243,7 @@ def _conversation(
         return UNIDENTIFIED if turn is None else turn.trigger.requester
 
     events = SessionEvents(core.recorder, session, turn_id)
+    transcript = SessionTranscript(core.transcript, session, turn_id)
     confirmation = ConfirmationGateProcessor(
         # Onay sorusu, turu isteyenin dilinde (§8.6).
         LlamaCppQuestionWriter(
@@ -282,12 +289,14 @@ def _conversation(
             empty_user_turn=NoRecoveryWhileAwaiting(confirmation),
         ),
     )
-    _bind_response(aggregators.assistant(), gate)
-    return _Conversation(gate, confirmation, aggregators, llm, events)
+    _bind_response(aggregators.assistant(), gate, transcript)
+    return _Conversation(gate, confirmation, aggregators, llm, events, transcript, speaker)
 
 
 def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Session:
-    observers: list[BaseObserver] = [EventObserver(conversation.events)]
+    observers: list[BaseObserver] = [
+        EventObserver(conversation.events, conversation.transcript, conversation.speaker)
+    ]
     worker = PipelineWorker(
         pipeline,
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
@@ -325,7 +334,12 @@ def text_session(
     requester = core.connect(session, device)
     c = _conversation(core, session, lambda _: requester, None)
     text_input = TextInput(
-        session, core.sessions, c.confirmation, requester, core.config.triggers.text_priority
+        session,
+        core.sessions,
+        c.confirmation,
+        requester,
+        core.config.triggers.text_priority,
+        core.transcript,
     )
     pipeline = Pipeline(
         [
@@ -343,14 +357,22 @@ def text_session(
     return _session(core, c, pipeline)
 
 
-def _bind_response(assistant: LLMAssistantAggregator, gate: TriggerGate) -> None:
-    """Model cevabının başı ve sonu turun bitişine girer (§5.4)."""
+def _bind_response(
+    assistant: LLMAssistantAggregator, gate: TriggerGate, transcript: SessionTranscript
+) -> None:
+    """Model cevabının başı ve sonu turun bitişine girer (§5.4); söylenen transkripte (§11).
+
+    Toplayıcının metni söylenendir: kesilen cevapta söylenen kadarı. Yalnızca tool çağıran
+    bir cevapta söz yoktur.
+    """
 
     async def started(_: LLMAssistantAggregator) -> None:
         gate.response_started()
 
-    async def stopped(_: LLMAssistantAggregator, __: object) -> None:
+    async def stopped(_: LLMAssistantAggregator, message: AssistantTurnStoppedMessage) -> None:
         gate.response_stopped()
+        if message.content.strip():
+            transcript.said(message.content, interrupted=message.interrupted)
 
     assistant.add_event_handler("on_assistant_turn_started", started)
     assistant.add_event_handler("on_assistant_turn_stopped", stopped)

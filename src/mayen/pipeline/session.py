@@ -96,11 +96,18 @@ class Sessions:
         self._turns.identify(session, requester)
         self._seen(session, requester)
 
-    async def submit(self, trigger: Trigger) -> None:
+    async def submit(
+        self, trigger: Trigger, received: Callable[[TurnId], None] = lambda turn_id: None
+    ) -> None:
+        """`received`, tetikleyicinin turu (başlamış ya da sırada) belli olunca ve tur hatta
+        yürümeden önce çağrılır: turu açan söz transkripte cevabından önce girer (§11)."""
         if trigger.session not in self._gates:
             # Hedef cihazın seçimi (§12) bu katmanın işi değil; hatsız oturum bir hatadır.
             raise ValueError(f"no gate for session {trigger.session!r}")
-        await self._apply(self._turns.submit(trigger), trigger)
+        actions = self._turns.submit(trigger)
+        turns = [a.turn for a in actions] + self._turns.waiting(trigger.session)
+        received(next(t for t in turns if t.trigger is trigger).id)
+        await self._apply(actions, trigger)
 
     async def finished(self, turn_id: TurnId) -> None:
         await self._apply(self._turns.finished(turn_id), None)

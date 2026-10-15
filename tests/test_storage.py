@@ -18,13 +18,15 @@ from mayen.adapters.storage.sqlite import (
     SqliteEventLog,
     SqliteNoteStore,
     SqliteTimerStore,
+    SqliteTranscript,
     StorageError,
     check_in,
 )
 from mayen.app.config import storage_path
 from mayen.ports.events import Event, EventId, EventKind, Header
 from mayen.ports.timers import TimerState
-from mayen.ports.tools import Sensitivity, Status
+from mayen.ports.tools import Role, Sensitivity, Status
+from mayen.ports.transcript import Party, Utterance, UtteranceId
 from mayen.ports.triggers import Priority, TurnId
 
 T0 = datetime(2026, 10, 13, 12, 0, 0, tzinfo=UTC)
@@ -252,3 +254,52 @@ def test_pending_timer_is_deleted(db: Database) -> None:
     timer = add_timer(timers, 0)
     assert timers.delete(timer)
     assert timers.pending() == []
+
+
+def utterance(
+    at: float,
+    party: Party = Party.PERSON,
+    *,
+    session: str = "s1",
+    turn_id: TurnId | None = None,
+) -> Utterance:
+    person = party is Party.PERSON
+    return Utterance(
+        id=UtteranceId(uuid.uuid4()),
+        time=T0 + timedelta(seconds=at),
+        session=session,
+        turn_id=turn_id,
+        party=party,
+        role=Role.OWNER if person else None,
+        person_id="1" if person else None,
+        text="dişçiyi sil" if person else "<tr>dişçi</tr> silindi",
+        interrupted=not person,
+    )
+
+
+def test_transcript_round_trip_filters_and_orders_by_time(db: Database) -> None:
+    transcript = SqliteTranscript(db)
+    turn = TurnId(uuid.uuid4())
+    late = utterance(3, Party.ASSISTANT, turn_id=turn)
+    early = utterance(1, turn_id=turn)
+    outside = utterance(2, session="s2")  # tur dışında duyulan söz
+    for u in (late, outside, early):
+        transcript.append(u)
+
+    assert transcript.read() == [early, outside, late]
+    assert transcript.read(session="s1") == [early, late]
+    assert transcript.read(turn_id=turn) == [early, late]
+    assert transcript.read(since=T0 + timedelta(seconds=2)) == [outside, late]
+    assert transcript.read(until=T0 + timedelta(seconds=2)) == [early]
+
+
+@pytest.mark.parametrize(
+    ("party", "role"), [(Party.PERSON, None), (Party.ASSISTANT, Role.OWNER)]
+)
+def test_utterance_role_follows_its_party(
+    db: Database, party: Party, role: Role | None
+) -> None:
+    # Kişinin sözü rolsüz, Mayen'inki rollü yazılamaz.
+    broken = dataclasses.replace(utterance(0, party), role=role)
+    with pytest.raises(sqlite3.IntegrityError):
+        SqliteTranscript(db).append(broken)

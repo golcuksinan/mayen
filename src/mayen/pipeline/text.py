@@ -3,7 +3,8 @@
 Taşıma çerçevenindir (§13); bu modül yalnızca serileştiriciyi ve hattın iki ucunu verir.
 Gelen yazı `text` tetikleyicisiyle tur açar; yazılı mesaj tek parça gelir ve dinleme
 durumundan geçmez (§5.4). Onay beklenirken gelen yazı tur açmaz, cevaptır: yalnızca onay
-çözümleyicisine gider (§5.4, §10.5). Cevabın metni istemciye parça parça gider.
+çözümleyicisine gider (§5.4, §10.5). Her yazı, açtığı ya da cevap verdiği turla transkripte
+girer (§11). Cevabın metni istemciye parça parça gider.
 """
 
 import logging
@@ -12,19 +13,22 @@ from typing import Protocol
 from pipecat.frames.frames import (
     Frame,
     InputTransportMessageFrame,
+    LLMAssistantPushAggregationFrame,
     LLMFullResponseEndFrame,
     OutputTransportMessageFrame,
     TextFrame,
     TTSSpeakFrame,
+    TTSStartedFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.serializers.base_serializer import FrameSerializer
 
+from mayen.core.transcript import Transcript
 from mayen.pipeline.session import Sessions
 from mayen.ports.channels import MessageKind, WireMessage
 from mayen.ports.confirmation import Answer
 from mayen.ports.tools import Caller
-from mayen.ports.triggers import Priority, Trigger, TriggerSource
+from mayen.ports.triggers import Priority, Trigger, TriggerSource, TurnId
 
 log = logging.getLogger(__name__)
 
@@ -68,11 +72,13 @@ class TextInput(FrameProcessor):
         confirmations: Confirmations,
         requester: Caller,
         priority: Priority,
+        transcript: Transcript,
     ) -> None:
         super().__init__()
         self._session = session
         self._sessions = sessions
         self._confirmations = confirmations
+        self._transcript = transcript
         self._requester = requester  # bağlantının cihazından; tur boyunca değişmez
         self._priority = priority
 
@@ -85,20 +91,21 @@ class TextInput(FrameProcessor):
                 direction is FrameDirection.DOWNSTREAM
                 and frame.message.kind is MessageKind.TEXT
             ):
+                text = frame.message.text
                 if self._confirmations.awaiting:
-                    text, speaker = frame.message.text, self._requester.person_id
-                    self._confirmations.answer(Answer(text, speaker))
+                    turn = self._sessions.running(self._session)
+                    self._heard(None if turn is None else turn.id, text)
+                    self._confirmations.answer(Answer(text, self._requester.person_id))
                     return
                 trigger = Trigger(
-                    self._session,
-                    self._priority,
-                    TriggerSource.TEXT,
-                    frame.message.text,
-                    self._requester,
+                    self._session, self._priority, TriggerSource.TEXT, text, self._requester
                 )
-                await self._sessions.submit(trigger)
+                await self._sessions.submit(trigger, lambda turn_id: self._heard(turn_id, text))
             return  # mesaj tetikleyici oldu; kare hatta ilerlemez
         await self.push_frame(frame, direction)
+
+    def _heard(self, turn_id: TurnId | None, text: str) -> None:
+        self._transcript.heard(self._session, turn_id, self._requester, text)
 
 
 class TextOutput(FrameProcessor):
@@ -106,6 +113,8 @@ class TextOutput(FrameProcessor):
 
     Metin kareleri hatta da ilerler: asistan toplayıcısı cevabı geçmişe onlardan yazar.
     Yalnızca tool çağıran bir model cevabı istemciye gitmez; boş bir cevap sonu da gitmez.
+    Okutulan soruyu seste geçmişe TTS servisi yazar; yazılı hatta TTS olmadığından aynı
+    kareleri bu işlemci verir, yoksa soru ne geçmişe ne transkripte girerdi.
     """
 
     def __init__(self) -> None:
@@ -120,6 +129,10 @@ class TextOutput(FrameProcessor):
         if isinstance(frame, TTSSpeakFrame):
             await self._send(MessageKind.TEXT, frame.text)
             await self._send(MessageKind.RESPONSE_END)
+            if frame.append_to_context:
+                await self.push_frame(TTSStartedFrame(append_to_context=True))
+                await self.push_frame(TextFrame(frame.text))
+                await self.push_frame(LLMAssistantPushAggregationFrame())
         elif isinstance(frame, TextFrame) and frame.text:
             await self._send(MessageKind.TEXT, frame.text)
         elif isinstance(frame, LLMFullResponseEndFrame) and self._open:

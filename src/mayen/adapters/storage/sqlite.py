@@ -27,6 +27,7 @@ from mayen.ports.notes import Note
 from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError, Person
 from mayen.ports.timers import Timer, TimerState
 from mayen.ports.tools import Role, Sensitivity, Status
+from mayen.ports.transcript import Party, Utterance, UtteranceId
 from mayen.ports.triggers import Priority, TurnId
 
 # Ayrı bir bağlantının (yedek gibi) tuttuğu yazma kilidi için beklenecek süre.
@@ -53,6 +54,8 @@ VOCABULARIES: Sequence[tuple[str, str, type[StrEnum]]] = (
     ("timers", "sensitivity", Sensitivity),
     ("timers", "state", TimerState),
     ("people", "role", Role),
+    ("utterances", "party", Party),
+    ("utterances", "role", Role),
 )
 
 # Sürüm = sıradaki yeri (1'den başlar). Uygulanmış bir migration değiştirilmez; düzeltme
@@ -120,6 +123,25 @@ MIGRATIONS: Sequence[Sequence[str]] = (
             person_id INTEGER NOT NULL REFERENCES people (id) ON DELETE CASCADE
         ) STRICT""",
         "CREATE INDEX devices_person ON devices (person_id, id)",
+    ),
+    (
+        # Kişinin sözünde rol vardır, Mayen'inkinde yoktur; ikisi tabloda da birbirini tutar.
+        f"""CREATE TABLE utterances (
+            seq INTEGER PRIMARY KEY,
+            id TEXT NOT NULL UNIQUE,
+            time TEXT NOT NULL,
+            session TEXT NOT NULL,
+            turn_id TEXT,
+            party TEXT NOT NULL {check_in("party", Party)},
+            role TEXT {check_in("role", Role)},
+            person_id TEXT,
+            text TEXT NOT NULL,
+            interrupted INTEGER NOT NULL CHECK (interrupted IN (0, 1)),
+            CHECK ((party = '{Party.PERSON.value}') = (role IS NOT NULL))
+        ) STRICT""",
+        "CREATE INDEX utterances_time ON utterances (time, seq)",
+        "CREATE INDEX utterances_session ON utterances (session, time, seq)",
+        "CREATE INDEX utterances_turn ON utterances (turn_id, time, seq)",
     ),
 )
 
@@ -267,21 +289,7 @@ class SqliteEventLog:
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[Event]:
-        where: list[str] = []
-        params: list[str] = []
-        if session is not None:
-            where.append("session = ?")
-            params.append(session)
-        if turn_id is not None:
-            where.append("turn_id = ?")
-            params.append(str(turn_id))
-        if since is not None:
-            where.append("time >= ?")
-            params.append(stamp(since))
-        if until is not None:
-            where.append("time < ?")
-            params.append(stamp(until))
-        condition = f"WHERE {' AND '.join(where)}" if where else ""
+        condition, params = _range(session, turn_id, since, until)
         with self._db.transaction() as conn:
             rows = conn.execute(
                 "SELECT seq, id, kind, source, time, session, turn_id, duration_s, status, body"
@@ -314,6 +322,88 @@ def _event(row: tuple[Any, ...], related: list[str]) -> Event:
         related=tuple(related),
     )
     return Event(header, json.loads(body))
+
+
+def _range(
+    session: str | None,
+    turn_id: TurnId | None,
+    since: datetime | None,
+    until: datetime | None,
+) -> tuple[str, list[str]]:
+    """Olay kaydının ve transkriptin ortak süzgeci: oturum, tur ve `[since, until)`."""
+    where: list[str] = []
+    params: list[str] = []
+    if session is not None:
+        where.append("session = ?")
+        params.append(session)
+    if turn_id is not None:
+        where.append("turn_id = ?")
+        params.append(str(turn_id))
+    if since is not None:
+        where.append("time >= ?")
+        params.append(stamp(since))
+    if until is not None:
+        where.append("time < ?")
+        params.append(stamp(until))
+    return (f"WHERE {' AND '.join(where)}" if where else ""), params
+
+
+class SqliteTranscript:
+    """Transkript (§11) SQLite'ta."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def append(self, utterance: Utterance) -> None:
+        u = utterance
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO utterances (id, time, session, turn_id, party, role, person_id,"
+                " text, interrupted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(u.id),
+                    stamp(u.time),
+                    u.session,
+                    None if u.turn_id is None else str(u.turn_id),
+                    u.party.value,
+                    None if u.role is None else u.role.value,
+                    u.person_id,
+                    u.text,
+                    int(u.interrupted),
+                ),
+            )
+
+    def read(
+        self,
+        *,
+        session: str | None = None,
+        turn_id: TurnId | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[Utterance]:
+        condition, params = _range(session, turn_id, since, until)
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, time, session, turn_id, party, role, person_id, text, interrupted"
+                f" FROM utterances {condition} ORDER BY time, seq",
+                params,
+            ).fetchall()
+        return [_utterance(row) for row in rows]
+
+
+def _utterance(row: tuple[Any, ...]) -> Utterance:
+    id_, time, session, turn_id, party, role, person_id, text, interrupted = row
+    return Utterance(
+        id=UtteranceId(UUID(id_)),
+        time=parse_stamp(time),
+        session=session,
+        turn_id=None if turn_id is None else TurnId(UUID(turn_id)),
+        party=Party(party),
+        role=None if role is None else Role(role),
+        person_id=person_id,
+        text=text,
+        interrupted=bool(interrupted),
+    )
 
 
 def _fold(text: str) -> str:

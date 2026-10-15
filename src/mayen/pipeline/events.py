@@ -1,8 +1,9 @@
-"""Hattan olay üretimi (§5.5): Pipecat gözlemcisinin gördüğü kareler ve oturum bağlamı.
+"""Hattan olay ve transkript üretimi (§5.5, §11): gözlemcinin gördüğü kareler, oturum bağlamı.
 
 Ayrı bir olay altyapısı yoktur; gözlemci her kareyi ilk itilişinde bir kez görür ve
 olaya dönüştürdüklerini çekirdeğin `Recorder`'ına verir. Mayen'in kendi katmanındaki
-olaylar (tur, tool, onay) onları üreten işlemcilerde yayımlanır.
+olaylar (tur, tool, onay) onları üreten işlemcilerde yayımlanır. Duyulan söz transkripte
+yazılır; STT olayı ona yalnızca kimliğiyle bağlanır.
 """
 
 from collections.abc import Callable, Mapping, Sequence
@@ -13,8 +14,10 @@ from pipecat.metrics.metrics import LLMUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 
 from mayen.core.events import Recorder
+from mayen.core.transcript import Transcript
 from mayen.ports.events import Event, EventKind
-from mayen.ports.tools import Status
+from mayen.ports.tools import Caller, Status
+from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
 
 
@@ -53,27 +56,52 @@ class SessionEvents:
         )
 
 
+class SessionTranscript:
+    """Bir oturumun transkripti: oturum ve o anki tur kimliği söze kendiliğinden girer."""
+
+    def __init__(
+        self, transcript: Transcript, session: str, turn: Callable[[], TurnId | None]
+    ) -> None:
+        self._transcript = transcript
+        self.session = session
+        self._turn = turn
+
+    def heard(self, speaker: Caller, text: str) -> Utterance:
+        return self._transcript.heard(self.session, self._turn(), speaker, text)
+
+    def said(self, text: str, *, interrupted: bool) -> Utterance:
+        return self._transcript.said(self.session, self._turn(), text, interrupted=interrupted)
+
+
 class EventObserver(BaseObserver):
     """STT segmentleri ve LLM token sayıları; token sayısı yalnızca hatta kullanım
-    ölçümü açıkken gelir."""
+    ölçümü açıkken gelir. Segmentin konuşmacısını hattı kuran söyler (`speaker`)."""
 
-    def __init__(self, events: SessionEvents) -> None:
+    def __init__(
+        self,
+        events: SessionEvents,
+        transcript: SessionTranscript,
+        speaker: Callable[[TranscriptionFrame], Caller],
+    ) -> None:
         # Her kare hattın her adımında yeniden itilir; olay ilk itilişte bir kez üretilir.
         super().__init__(observe_every_push=False)
         self._events = events
+        self._transcript = transcript
+        self._speaker = speaker
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
         if isinstance(frame, TranscriptionFrame):
+            utterance = self._transcript.heard(self._speaker(frame), frame.text)
             self._events.emit(
                 EventKind.STT_SEGMENT,
                 __name__,
                 {
-                    "text": frame.text,
                     "language": None if frame.language is None else str(frame.language),
                     "finalized": frame.finalized,
                 },
                 status=Status.OK,
+                related=[str(utterance.id)],
             )
         elif isinstance(frame, MetricsFrame):
             for metric in frame.data:

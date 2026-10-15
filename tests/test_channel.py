@@ -17,10 +17,10 @@ from pipecat.frames.frames import (
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.tests.utils import run_test
+from pipecat.tests.utils import SleepFrame, run_test
 
 import mayen.adapters.channel.tailscale as tailscale
-from fakes import MemoryEventLog
+from fakes import MemoryEventLog, MemoryTranscript, transcript
 from mayen.adapters.channel.tailscale import TailscaleIdentity
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.turns import Turns
@@ -28,7 +28,9 @@ from mayen.pipeline.session import Sessions, TriggerGate
 from mayen.pipeline.text import TextInput, TextOutput, WireSerializer
 from mayen.ports.channels import MessageKind, WireMessage
 from mayen.ports.confirmation import Answer
+from mayen.ports.events import EventKind
 from mayen.ports.tools import Caller, Role
+from mayen.ports.transcript import Party
 from mayen.ports.triggers import Fate, Priority, TriggerSource
 
 OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
@@ -70,7 +72,10 @@ async def test_serializer_speaks_only_wire_messages() -> None:
 
 
 async def written(
-    text: str, confirmations: Confirmations, log: MemoryEventLog
+    texts: Sequence[str],
+    confirmations: Confirmations,
+    log: MemoryEventLog,
+    store: MemoryTranscript | None = None,
 ) -> Sequence[Frame]:
     sessions = Sessions(Turns(dict.fromkeys(TriggerSource, Fate.CANCEL)), Priority.NORMAL)
     gate = TriggerGate(
@@ -81,33 +86,63 @@ async def written(
         settle_s=0.1,
         response_timeout_s=0.3,
     )
-    text_input = TextInput("s1", sessions, confirmations, OWNER, Priority.HIGH)
-    message = WireMessage(MessageKind.TEXT, text)
+    writer, memory = transcript()
+    if store is not None:
+        memory.utterances = store.utterances
+    text_input = TextInput("s1", sessions, confirmations, OWNER, Priority.HIGH, writer)
     down, _ = await run_test(
         Pipeline([text_input, gate]),
-        frames_to_send=[InputTransportMessageFrame(message=message)],
+        frames_to_send=[
+            *[
+                InputTransportMessageFrame(message=WireMessage(MessageKind.TEXT, text))
+                for text in texts
+            ],
+            # Cevapsız tur zaman aşımıyla kapanır, sıradaki başlar.
+            SleepFrame(len(texts) * 0.6),
+        ],
     )
     return down
 
 
 async def test_written_message_opens_a_text_turn_for_the_device_owner() -> None:
     log = MemoryEventLog()
-    down = await written("selam", Confirmations(awaiting=False), log)
+    store = MemoryTranscript()
+    down = await written(["selam"], Confirmations(awaiting=False), log, store)
     [append] = [f for f in down if isinstance(f, LLMMessagesAppendFrame)]
     assert append.messages == [{"role": "user", "content": "selam"}]
     assert not any(isinstance(f, InputTransportMessageFrame) for f in down)
     [started] = [e for e in log.events if e.body.get("source") == "text"]
     assert started.body["priority"] == "high"
+    [utterance] = store.utterances
+    assert (utterance.text, utterance.party, utterance.person_id) == (
+        "selam",
+        Party.PERSON,
+        "1",
+    )
+    assert utterance.turn_id == started.header.turn_id
+
+
+async def test_queued_message_is_written_with_the_turn_it_later_opens() -> None:
+    log = MemoryEventLog()
+    store = MemoryTranscript()
+    # İkinci yazı birincinin turu sürerken gelir ve sıraya girer (§5.3).
+    await written(["bir", "iki"], Confirmations(awaiting=False), log, store)
+    started = [e.header.turn_id for e in log.of(EventKind.TURN_STARTED)]
+    assert [u.text for u in store.utterances] == ["bir", "iki"]
+    assert [u.turn_id for u in store.utterances] == started
 
 
 async def test_written_message_while_awaiting_is_only_an_answer() -> None:
     log = MemoryEventLog()
+    store = MemoryTranscript()
     confirmations = Confirmations(awaiting=True)
-    down = await written("evet", confirmations, log)
+    down = await written(["evet"], confirmations, log, store)
     assert confirmations.answers == [Answer("evet", "1")]
     # Tur açılmaz, model çalışmaz (§5.4: kapalı durum).
     assert not any(isinstance(f, LLMMessagesAppendFrame) for f in down)
     assert not [e for e in log.events if e.body.get("source") == "text"]
+    # Cevap da söylenendir; transkripte girer.
+    assert [u.text for u in store.utterances] == ["evet"]
 
 
 async def test_reply_and_spoken_question_reach_the_client_as_messages() -> None:
