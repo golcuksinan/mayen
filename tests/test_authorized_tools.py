@@ -1,17 +1,19 @@
 """Yetki sarmalayıcısı (§10.3, §10.5 adım 1, §9.1): Pipecat hattı çalıştırılmadan."""
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
+from enum import StrEnum
 from typing import Any, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fakes import FakeClock, MemoryEventLog
 from mayen.core.events import Recorder
 from mayen.core.policy import ROLE_TABLE, system_table
 from mayen.core.registry import ToolRegistry
 from mayen.pipeline.events import SessionEvents
-from mayen.pipeline.tools import AWAITING_CONFIRMATION, AuthorizedTools
+from mayen.pipeline.tools import AWAITING_CONFIRMATION, AuthorizedTools, tools_schema
 from mayen.ports.events import EventKind
 from mayen.ports.tools import (
     Caller,
@@ -241,6 +243,29 @@ def test_schema_lists_every_tool() -> None:
     assert names == ["note_search", "note_delete", "slow", "broken"]
     delete = schema.standard_tools[1]
     assert delete.required == ["id"]
+
+
+class Level(StrEnum):
+    LOW = "low"
+    HIGH = "high"
+
+
+class WithEnum(BaseModel):
+    level: Level = Field(default=Level.LOW, description="how loud")
+
+
+def test_schema_carries_no_dangling_refs() -> None:
+    # `$defs` alanlarla gitmez; şemayı dil bilgisine çeviren sunucu çözülemeyen ref'i reddeder.
+    spec = _spec("set_level", Effect.WRITE, _search, WithEnum)
+    (function,) = tools_schema(ToolRegistry([spec])).standard_tools
+    assert "$ref" not in json.dumps(function.properties)
+    assert function.properties["level"] == {
+        "enum": ["low", "high"],
+        "title": "Level",
+        "type": "string",
+        "default": "low",
+        "description": "how loud",
+    }
 
 
 async def test_run_is_recorded_with_the_skills_own_result() -> None:

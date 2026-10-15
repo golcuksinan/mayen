@@ -70,11 +70,25 @@ async def execute(spec: ToolSpec[Any], args: BaseModel, ctx: ToolContext) -> Too
         return ToolResult(Status.ERROR, error=str(e))
 
 
+def _inline(node: Any, defs: Mapping[str, Any]) -> Any:  # noqa: ANN401
+    """`$ref`'i tanımıyla değiştirir: `$defs` alanlarla birlikte gitmez, ref boşa düşer."""
+    if isinstance(node, list):
+        return [_inline(n, defs) for n in node]
+    if not isinstance(node, dict):
+        return node
+    ref = node.get("$ref")
+    rest = {k: _inline(v, defs) for k, v in node.items() if k != "$ref"}
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        return {**_inline(defs[ref.removeprefix("#/$defs/")], defs), **rest}
+    return rest
+
+
 def tools_schema(registry: ToolRegistry) -> ToolsSchema:
     """Modele giden tool şeması; hat da replay de bunu gönderir (§14)."""
     functions = []
     for spec in registry.specs():
-        params = spec.args.model_json_schema()
+        schema = spec.args.model_json_schema()
+        params = _inline(schema, schema.pop("$defs", {}))
         functions.append(
             FunctionSchema(
                 name=spec.name,
