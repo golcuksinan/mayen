@@ -1,0 +1,7 @@
+# STT servisinin config örneği. Kopyalayıp `stt.yaml` adıyla düzenleyin.
+# Çekirdeğin config'indeki `stt.url` bu adresi gösterir.
+host: 127.0.0.1
+port: 8770
+model: large-v3          # faster-whisper model adı ya da indirilmiş model klasörü
+device: cuda             # cpu da olur
+compute_type: float16    # cpu'da int8

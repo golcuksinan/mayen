@@ -3,13 +3,13 @@
 Süreçte bir `Core` vardır (depolar, kayıt defteri, tur kuyruğu); her oturum ondan kendi
 hattını kurar (§5.2). Oturum cihaz başınadır: sesli oturum çekirdeğin kendi ses birimleriyle,
 yazılı oturum her bağlantıyla kurulur. Ses birimleri (girdi, STT, TTS, çıktı) dışarıdan
-verilir: hangi motorun kullanılacağı hattın kuralı değildir, ve ses bağımlılıkları ancak ses
-hattıyla gelir.
+verilir: hangi motorun kullanılacağı hattın kuralı değildir. STT ve TTS'in olağan kaynağı
+config'teki model servisleridir (`Core.speech`); modeller çekirdekte yüklenmez (§18).
 """
 
 import importlib
 import pkgutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -59,6 +59,7 @@ from mayen.pipeline.events import (
 )
 from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
+from mayen.pipeline.speech import ServiceSTT, ServiceTTS
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
 from mayen.ports.events import Clock
@@ -127,6 +128,10 @@ class ToolCtx:
     clock: Clock
     caller: Caller
     defaults: Mapping[str, Any]
+
+
+# TTS, cevabın dilini soran bir çağrılabilirle kurulur: ses dile göre seçilir (§16.3).
+type TtsFactory = Callable[[Callable[[], str]], FrameProcessor]
 
 
 # Turu açabilen, kimse konuşmadan gelen kaynaklar; her birinin `system` yetkisi config'te
@@ -206,6 +211,17 @@ class Core:
             else caller_of(person)
         )
 
+    def speech(self) -> tuple[FrameProcessor, TtsFactory]:
+        """Config'teki STT ve TTS servislerinin istemcileri (§3)."""
+        stt, tts = self.config.stt, self.config.tts
+        if stt is None or tts is None:
+            raise ConfigError("a voice session needs both stt and tts in the config")
+
+        def make_tts(language: Callable[[], str]) -> FrameProcessor:
+            return ServiceTTS(tts.url, tts.voices, language)
+
+        return ServiceSTT(stt.url, stt.language), make_tts
+
     def context(self, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
         return ToolCtx(
             self.notes, self.timers, self.recorder.clock, caller, self.defaults[spec.name]
@@ -218,7 +234,7 @@ class Voice:
 
     input: FrameProcessor
     stt: FrameProcessor
-    tts: FrameProcessor
+    tts: TtsFactory
     output: FrameProcessor
     vad: VADAnalyzer
     # Konuşmacı tanıma gelene kadar sözün kime ait olduğunu hattı kuran söyler (§10.4).
@@ -247,6 +263,7 @@ class _Conversation:
     llm: FrameProcessor
     events: SessionEvents
     state: StateTracker
+    language: Callable[[], str]  # süren turu isteyenin dili (§8.6)
 
 
 def _conversation(
@@ -263,14 +280,15 @@ def _conversation(
         turn = core.sessions.running(session)
         return UNIDENTIFIED if turn is None else turn.trigger.requester
 
+    def language() -> str:
+        return core.context_block.language(session, caller())
+
     events = SessionEvents(core.recorder, session, turn_id)
     transcript = SessionTranscript(core.transcript, session, turn_id)
     state = session_state(events)
     confirmation = ConfirmationGateProcessor(
         # Onay sorusu, turu isteyenin dilinde (§8.6).
-        LlamaCppQuestionWriter(
-            endpoint, lambda: core.context_block.language(session, caller())
-        ),
+        LlamaCppQuestionWriter(endpoint, language),
         LlamaCppAnswerResolver(endpoint),
         config.confirmation.timeout_s,
         lambda frame: speaker(frame).person_id,
@@ -316,7 +334,7 @@ def _conversation(
         ),
     )
     _bind_response(aggregators.assistant(), gate, transcript)
-    return _Conversation(gate, confirmation, aggregators, llm, events, state)
+    return _Conversation(gate, confirmation, aggregators, llm, events, state, language)
 
 
 def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Session:
@@ -342,7 +360,7 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
             c.confirmation,
             c.aggregators.user(),
             c.llm,
-            voice.tts,
+            voice.tts(c.language),
             voice.output,
             c.aggregators.assistant(),
         ]

@@ -1,7 +1,8 @@
 """§4'ün katman sınırlarını mekanik olarak zorlar.
 
-Üç kural: katmanlar yalnızca izin tablosundaki katmanları import eder; ödünç alınan çerçeve
-yalnızca `pipeline` ve `app`'te import edilir; SQL depo adaptörünün dışında geçmez. Bir
+Dört kural: katmanlar yalnızca izin tablosundaki katmanları import eder; ödünç alınan çerçeve
+yalnızca `pipeline` ve `app`'te import edilir; SQL depo adaptörünün dışında geçmez; model
+servisleri Mayen'i import etmez. Bir
 import reddedildiğinde çözüm tabloyu genişletmek değil sınırı düzeltmektir (§4).
 """
 
@@ -12,7 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PACKAGE = "mayen"
-SRC = Path(__file__).resolve().parent.parent / "src"
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "src"
+SERVICES = ROOT / "services"
 
 # §4 "İzin verilen import'lar" tablosu. Katmanın kendi içindeki import'lar her zaman serbest.
 ALLOWED: dict[str, frozenset[str]] = {
@@ -91,6 +94,32 @@ def find_violations(src: Path) -> list[Violation]:
             for text, line in _sql_strings(tree):
                 found.append(Violation("sql", path, line, f"SQL metni: {text}"))
     return found
+
+
+def find_service_violations(services: Path) -> list[Violation]:
+    """Model servisleri ayrı projedir; aralarında yalnızca ağ vardır (§4)."""
+    found: list[Violation] = []
+    for path in sorted(services.rglob("*.py")):
+        if ".venv" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for module, line in _imports(tree):
+            if module.split(".")[0] == PACKAGE:
+                found.append(Violation("servis", path, line, f"services -> {module}"))
+    return found
+
+
+def test_services_do_not_import_mayen() -> None:
+    violations = find_service_violations(SERVICES)
+    assert not violations, "\n".join(map(str, violations))
+
+
+def test_detects_a_service_importing_mayen(tmp_path: Path) -> None:
+    (tmp_path / "stt").mkdir()
+    (tmp_path / "stt" / "main.py").write_text("from mayen.ports import speech\n")
+    (tmp_path / "tts").mkdir()
+    (tmp_path / "tts" / "main.py").write_text("import numpy\n")
+    assert [v.file.parent.name for v in find_service_violations(tmp_path)] == ["stt"]
 
 
 def test_source_respects_boundaries() -> None:

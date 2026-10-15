@@ -91,6 +91,8 @@ def test_home_in_storage_path_is_expanded(tmp_path: Path) -> None:
         (("timer: restart", "timer: resume"), "timer"),  # hatta karşılığı olmayan akıbet
         (("system: prompts/system.txt", "system: prompts/none.txt"), "none.txt"),
         (("timer: {}", "timer: {READ: [SECRET]}"), "SECRET"),
+        # tanınmayan kişinin dilinde ses yok: ilk yabancıya asistan susar
+        (("    English: default", "    Turkish: default"), "default_language"),
     ],
 )
 def test_bad_config_is_a_config_error(
@@ -269,12 +271,18 @@ def test_voice_session_is_wired(tmp_path: Path) -> None:
         def caller(_: TranscriptionFrame) -> Caller:
             return OWNER
 
-        voice = Voice(
-            Passing(), Passing(), Passing(), Passing(), SilentVAD(), caller, LOCAL_DEVICE
-        )
+        languages: list[str] = []
+
+        def tts(language: Callable[[], str]) -> FrameProcessor:
+            languages.append(language())
+            return Passing()
+
+        voice = Voice(Passing(), Passing(), tts, Passing(), SilentVAD(), caller, LOCAL_DEVICE)
         session = voice_session(core, "s1", voice)
         assert session.gate.session == "s1"
         assert core.sessions.running("s1") is None
+        # Turu yokken dinleyen bilinmez: ses varsayılan dilden seçilir (§8.6).
+        assert languages == [config.default_language]
 
 
 def test_setup_sets_up_the_owner_once(tmp_path: Path) -> None:

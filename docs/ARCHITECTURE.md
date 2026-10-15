@@ -154,11 +154,13 @@ skills/        her biri bağımsız, bir dosya (bash dahil)
 adapters/      storage/ trigger/ channel/ decider/
 pipeline/      ödünç alınan çerçeveye bağlanan her şey: hattaki işlemciler (onay kapısı,
                proaktif kapı, girdi eleme), bağlam ve istek hazırlayan model servisi, yetki
-               sarmalayıcısı, seslendirme ve ses birimi dönüşümü
+               sarmalayıcısı, model servislerinin istemcileri
 app/           giriş noktası: config'i okur, adaptörleri ve servisleri seçer, her şeyi bağlar
 replay/        tekrar oynatma ve mock tool adaptörleri
 clients/       mikrofon, klavye, masaüstü, telefon istemcileri
 panel/         gözlem arayüzü; Python değil, depo kökünde ayrı bir web projesi (§14)
+services/      model süreçleri (STT, TTS); her biri depo kökünde kendi bağımlılıklarıyla ayrı
+               bir proje (§3)
 config/        YAML + prompt dosyaları (kod değil)
 ```
 
@@ -178,6 +180,7 @@ Olağan çözüm, iç katmanda tanımlanan bir `Protocol` ve onu dışta gerçek
 | `app` | hepsi |
 | `replay` | `ports`, `core`, `pipeline`, `skills` |
 | `clients` | `ports` |
+| `services` | — (Mayen'in hiçbir katmanı) |
 
 - **Ödünç alınan çerçeve yalnızca `pipeline` ve `app`'te import edilir.** Çerçevenin sürüm
   güncellemesinin dokunduğu yüzey tek katmanla sınırlı kalır, yetki ve onay kararları
@@ -190,6 +193,11 @@ Olağan çözüm, iç katmanda tanımlanan bir `Protocol` ve onu dışta gerçek
   sözleşmeyi atlayan ikinci bir yol demektir.
 - **`skills` ile `adapters` birbirini görmez.** Tool *ne* istendiğini bilir, *nasıl* yapıldığını
   port arkasındaki adaptör bilir (§9.5).
+- **Model servisleri çekirdeğin kodunu görmez, çekirdek de onlarınkini;** aralarında yalnızca
+  ağ vardır. Sözleşme `ports`'tadır ve servis onu kendi kodunda aynen kurar. Model
+  kütüphaneleri çekirdeğin ortamına girseydi ayrı süreç (§3) yalnızca kâğıtta kalırdı. Ses
+  birimine çevirmek sesin işidir ve servistedir; hangi parçanın hangi dilde okunacağını
+  söyleyen işaret (§7) hatta okunur.
 - **İstemciler ve panel ayrı süreçlerdir**; çekirdeğe yalnızca taşımayla bağlanır (§13),
   çekirdeğin koduna değil. Python'da yazılmayan bir istemci ya da panel, `ports`'taki
   sözleşmeyi kendi dilinde aynen kurar ve sürümü tutmayan mesajı göstermez.

@@ -46,6 +46,17 @@ panel:
     - http://localhost:5173      # geliştirme sunucusu (npm run dev)
   # dist: ../panel/dist          # derlenmiş panel (npm run build); verilirse /panel/ altında sunulur
 
+# Ses birimleri (§3): STT ve TTS kendi süreçlerinde çalışır (`services/`); burada yalnızca
+# adresleri. Model ve ses dosyaları servislerin kendi config'indedir. Yalnızca yazılı kanalla
+# çalışılacaksa iki bölüm de silinebilir.
+stt:
+  url: http://127.0.0.1:8770
+  # language: en               # dinleme dili; verilmezse model kendisi bulur
+tts:
+  url: http://127.0.0.1:8771
+  voices:                      # her çıkış dilinin sesi (§16.3): anahtar profildeki dil,
+    English: default           # değer TTS servisinin config'indeki sesin adı
+
 # Kimse konuşmadan açılan turun (system rolü) yetkisi, turu açan kaynağa göre (§10.2).
 # Etki sınıfı başına okunabilen/yazılabilen hassasiyetler; yazılmayan hücre kapalıdır.
 system_role:

@@ -75,6 +75,20 @@ class PanelConfig(_Strict):
     dist: Path | None = None  # derlenmiş panel; verilirse çekirdek onu `/panel/` altında sunar
 
 
+class SttConfig(_Strict):
+    """STT model servisi (§3); model ve boyutu servisin kendi config'inde."""
+
+    url: str
+    language: str | None = None  # dinleme dili; verilmezse model kendisi bulur
+
+
+class TtsConfig(_Strict):
+    """TTS model servisi (§3). Her çıkış dilinin sesi (§16.3): anahtar, profildeki dil."""
+
+    url: str
+    voices: dict[str, str]
+
+
 class _File(_Strict):
     storage: StorageConfig
     prompts: PromptConfig
@@ -84,6 +98,9 @@ class _File(_Strict):
     loop: LoopConfig
     channel: ChannelConfig
     panel: PanelConfig = PanelConfig()
+    # Ses birimleri; yalnızca yazılı kanalla çalışan kurulumda yoktur (§7, kısmi çalışma).
+    stt: SttConfig | None = None
+    tts: TtsConfig | None = None
     # Kimse konuşmadan açılan turun yetkisi, turu açan kaynağa göre (§10.2).
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     # Skill varsayılanlarının üzerine yazılanlar (§9.1); doğrulaması skill'ler bulununca.
@@ -103,6 +120,8 @@ class Config:
     loop: LoopConfig
     channel: ChannelConfig
     panel: PanelConfig
+    stt: SttConfig | None
+    tts: TtsConfig | None
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     skills: dict[str, dict[str, Any]]
 
@@ -135,6 +154,13 @@ def _panel(config: Path, panel: PanelConfig) -> PanelConfig:
     return panel.model_copy(update={"dist": _relative(config, panel.dist)})
 
 
+def _tts(tts: TtsConfig | None, default_language: str) -> TtsConfig | None:
+    if tts is not None and default_language not in tts.voices:
+        # Tanınmayan kişiye konuşulan dilin sesi yoksa ilk yabancıya asistan susar.
+        raise ConfigError(f"tts.voices has no voice for default_language {default_language!r}")
+    return tts
+
+
 def load(path: Path, env: Mapping[str, str]) -> Config:
     """Bütün config; her hata `ConfigError` olarak, açılışta yükselir."""
     try:
@@ -152,6 +178,8 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             loop=file.loop,
             channel=file.channel,
             panel=_panel(path, file.panel),
+            stt=file.stt,
+            tts=_tts(file.tts, file.default_language),
             system_role=file.system_role,
             skills=file.skills,
         )

@@ -1,0 +1,27 @@
+# TTS servisinin config örneği. Kopyalayıp `tts.yaml` adıyla düzenleyin.
+# Çekirdeğin config'indeki `tts.url` bu adresi, `tts.voices` buradaki ses adlarını gösterir.
+host: 127.0.0.1
+port: 8771
+sample_rate: 24000             # sabit çıkış hızı; çekirdek /health'ten okur
+
+kokoro:                        # Kokoro sesi varsa
+  model: ~/models/kokoro-v1.0.onnx
+  voices: ~/models/voices-v1.0.bin
+
+voices:
+  default:
+    engine: kokoro
+    voice: af_heart            # Kokoro ses dosyasındaki ad
+    language: en-us            # sesin kendi dili
+    speed: 1.0
+  # another:
+  #   engine: piper
+  #   model: ~/models/some-voice.onnx   # yanında .onnx.json
+  #   effect: radio
+
+effects:                       # isteğe bağlı; bir ses `effect:` ile adını verir
+  radio:
+    echo: {input: 0.8, output: 0.88, delay_ms: 40, decay: 0.4}
+    highpass_hz: 400
+    lowpass_hz: 3000
+    gain: 1.5

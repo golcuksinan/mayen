@@ -14,5 +14,14 @@
 /config/*
 !/config/mayen.yaml.example
 !/panel/
+!/services/
+/services/*
+!/services/stt/
+!/services/tts/
+/services/*/*
+!/services/*/main.py
+!/services/*/pyproject.toml
+!/services/*/uv.lock
+!/services/*/*.yaml.example
 
 __pycache__/
