@@ -44,6 +44,7 @@ from mayen.adapters.storage.sqlite import (
     SqlitePersonStore,
     SqliteTimerStore,
     SqliteTranscript,
+    SqliteVoiceprintStore,
 )
 from mayen.adapters.trigger.timer import TimerTrigger
 from mayen.app.config import Config, ConfigError
@@ -54,6 +55,7 @@ from mayen.core.policy import ROLE_TABLE, PolicyTable, system_table
 from mayen.core.presence import Presence
 from mayen.core.profile import caller as caller_of
 from mayen.core.registry import ToolRegistry
+from mayen.core.speakers import SpeakerMatcher, label
 from mayen.core.state import StateTracker
 from mayen.core.timers import TimerDispatcher
 from mayen.core.transcript import Transcript
@@ -67,7 +69,14 @@ from mayen.pipeline.events import (
 from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
 from mayen.pipeline.sounds import ToolSound
-from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceTurn, ServiceVAD
+from mayen.pipeline.speaker import SpeakerLabel, recognized
+from mayen.pipeline.speech import (
+    ServiceSpeaker,
+    ServiceSTT,
+    ServiceTTS,
+    ServiceTurn,
+    ServiceVAD,
+)
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
 from mayen.pipeline.wake import ServiceWake, WakeStart
@@ -164,6 +173,13 @@ class Core:
             config.turns(), config.triggers.voice_priority, self._interacted
         )
         self.people = SqlitePersonStore(db)
+        speaker = config.speaker
+        # Konuşmacı tanıma yoksa söz cihazın kişisinindir (`Voice.caller`).
+        self.matcher = (
+            None
+            if speaker is None
+            else SpeakerMatcher(SqliteVoiceprintStore(db), speaker.threshold)
+        )
         self.context_block = ContextBlock(
             self.people,
             self.presence,
@@ -211,6 +227,15 @@ class Core:
             return ROLE_TABLE
         return self.tables.get(turn.trigger.source, ROLE_TABLE)
 
+    def label(self, requester: Caller) -> str:
+        """Geçmişteki sözün başına yazılan ad (§8.1)."""
+        person_id = requester.person_id
+        return label(None if person_id is None else self.people.get(person_id))
+
+    def recognizer(self) -> CallerSource | None:
+        """Sesten konuşanı bulan kaynak; config'te konuşmacı tanıma yoksa `None`."""
+        return None if self.matcher is None else recognized(self.matcher, self.people)
+
     def caller(self, role: Role, person_id: str | None) -> Caller:
         """Kayıttaki rol ve kimlikten çağıran; kişisel cihazı profilden (replay, §14)."""
         person = None if person_id is None else self.people.get(person_id)
@@ -230,8 +255,11 @@ class Core:
         def make_tts(language: Callable[[], str]) -> FrameProcessor:
             return ServiceTTS(tts.url, tts.voices, language)
 
+        speaker = self.config.speaker
         return (
-            ServiceSTT(stt.url, stt.language),
+            ServiceSTT(
+                stt.url, stt.language, None if speaker is None else ServiceSpeaker(speaker.url)
+            ),
             make_tts,
             ServiceVAD(stt.url),
             ServiceTurn(stt.url),
@@ -268,8 +296,9 @@ class Voice:
     output: FrameProcessor
     vad: VADAnalyzer
     turn: BaseTurnAnalyzer  # sözün bittiğine karar veren (§5.4)
-    # Konuşmacı tanıma gelene kadar sözün kime ait olduğunu hattı kuran söyler (§10.4);
-    # `None` sözü cihazın kişisine verir, yazılı kanaldaki gibi (kişisel değilse tanımsız).
+    # Sözün kime ait olduğu: konuşmacı tanıma (`Core.recognizer`) ya da hattı kuranın
+    # kaynağı; `None` sözü cihazın kişisine verir, yazılı kanaldaki gibi (kişisel değilse
+    # tanımsız).
     caller: CallerSource | None
     # Ses birimlerinin cihazı; çekirdeğin kendi makinesindeyse `LOCAL_DEVICE` (§10.1).
     device: DeviceId | None
@@ -347,6 +376,7 @@ def _conversation(
         drops=[confirmation.drop],
         device_person=lambda: core.presence.personal(session),
         state=state,
+        label=core.label,
     )
     start = (
         None
@@ -424,6 +454,7 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
             voice.stt,
             c.gate,
             c.confirmation,
+            SpeakerLabel(lambda frame: core.label(speaker(frame))),
             c.aggregators.user(),
             c.llm,
             voice.tts(c.language),

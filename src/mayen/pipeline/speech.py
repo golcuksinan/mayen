@@ -1,4 +1,4 @@
-"""STT ve TTS model servislerinin istemcileri (§3): model çekirdekte yüklenmez (§18).
+"""STT, TTS ve konuşmacı model servislerinin istemcileri (§3): model çekirdekte yüklenmez (§18).
 
 Servisle konuşma `ports.speech` sözleşmesidir. Açılışta servis biçimini bildirir; bildirilen
 biçim bekleneni tutmazsa birim kalıcı hatayla düşer (§14): sessiz bir uyuşmazlık "asistan
@@ -48,15 +48,18 @@ from websockets.exceptions import WebSocketException
 from websockets.sync.client import ClientConnection, connect
 
 from mayen.ports.speech import (
+    EMBED,
     HEALTH,
     SPEAK,
     TRANSCRIBE,
     TURN,
     VAD,
     VAD_FRAME,
+    Embedding,
     Health,
     Part,
     SpeechContractError,
+    parse_embedding,
     parse_health,
     parse_stream_hello,
     parse_transcription,
@@ -65,6 +68,10 @@ from mayen.ports.speech import (
 )
 
 log = logging.getLogger(__name__)
+
+# Sözün ses izi (`Embedding`) ya da çıkarılamadıysa `None`; konuşmacı servisi bağlıysa her
+# sözün karesinde bulunur. İzden kişiye karar çekirdektedir (`pipeline/speaker.py`).
+VOICE = "mayen.voice"
 
 TAG = re.compile(r"<(/?)([a-z]{2})>")
 
@@ -195,13 +202,59 @@ class ServiceTurn(BaseSmartTurn):
         return {"prediction": int(probability > COMPLETE_ABOVE), "probability": probability}
 
 
-class ServiceSTT(SegmentedSTTService):
-    """Sözün sesi bittiğinde STT servisine gider; metin ve skor döner."""
+class ServiceSpeaker:
+    """Konuşmacı servisinin istemcisi (§6): sözün sesinden izi.
 
-    def __init__(self, url: str, language: str | None, **kwargs: Any) -> None:  # noqa: ANN401
+    Servise ulaşılamazsa iz yoktur ve konuşan tanınmamış sayılır; söz yine yazıya dökülür.
+    Hata loga yazılır: sahibin tanınmaması sessiz kalmamalı.
+    """
+
+    def __init__(self, url: str) -> None:
+        self._url = url.rstrip("/")
+        self._http: aiohttp.ClientSession | None = None
+        self._rate = 0
+        self._resampler = create_stream_resampler()
+
+    async def open(self, http: aiohttp.ClientSession) -> None:
+        self._http = http
+        try:
+            self._rate = (await _health(http, self._url)).sample_rate
+        except (aiohttp.ClientError, SpeechContractError) as e:
+            log.error("speaker service: %s", e)
+
+    async def embed(self, audio: bytes, sample_rate: int) -> Embedding | None:
+        if self._http is None or not self._rate:
+            return None
+        pcm = await self._resampler.resample(audio, sample_rate, self._rate)
+        try:
+            async with self._http.post(self._url + EMBED, data=pcm) as r:
+                if r.status != 200:
+                    log.error("speaker service %s: %s", r.status, await r.text())
+                    return None
+                return parse_embedding(await r.json())
+        except (aiohttp.ClientError, SpeechContractError) as e:
+            log.error("speaker service: %s", e)
+            return None
+
+
+class ServiceSTT(SegmentedSTTService):
+    """Sözün sesi bittiğinde STT servisine gider; metin ve skor döner.
+
+    Konuşmacı servisi verilmişse aynı ses ona da gider, iki istek birlikte yürür; iz karenin
+    `VOICE` alanına yazılır.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        language: str | None,
+        speaker: ServiceSpeaker | None = None,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> None:
         super().__init__(settings=STTSettings(model=None, language=None), **kwargs)
         self._url = url.rstrip("/")
         self._language = language  # dinleme dili; çıkış dilinden bağımsız (§8.6)
+        self._speaker = speaker
         self._http: aiohttp.ClientSession | None = None
         self._rate = 0
         self._resampler = create_stream_resampler()
@@ -217,6 +270,8 @@ class ServiceSTT(SegmentedSTTService):
             self._rate = (await _health(self._http, self._url)).sample_rate
         except (aiohttp.ClientError, SpeechContractError) as e:
             await self.push_error(f"STT service: {e}", e, force_treat_as_permanent=True)
+        if self._speaker is not None:
+            await self._speaker.open(self._http)
 
     async def stop(self, frame: EndFrame) -> None:
         await super().stop(frame)
@@ -232,6 +287,21 @@ class ServiceSTT(SegmentedSTTService):
             self._http = None
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame]:
+        voice = (
+            None
+            if self._speaker is None
+            else asyncio.ensure_future(self._speaker.embed(audio, self.sample_rate))
+        )
+        try:
+            async for frame in self._transcribe(audio):
+                if voice is not None and isinstance(frame, TranscriptionFrame):
+                    frame.metadata[VOICE] = await voice
+                yield frame
+        finally:
+            if voice is not None and not voice.done():
+                voice.cancel()
+
+    async def _transcribe(self, audio: bytes) -> AsyncGenerator[Frame]:
         if self._http is None or not self._rate:
             yield ErrorFrame("STT service is not available")
             return

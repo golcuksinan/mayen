@@ -59,6 +59,12 @@ tts:
   url: http://127.0.0.1:8771
   voices:                      # her çıkış dilinin sesi (§16.3): anahtar profildeki dil,
     English: default           # değer TTS servisinin config'indeki sesin adı
+# Konuşmacı tanıma (§6), isteğe bağlı: sesin izini çıkaran servis ve izi kişiye çeviren eşik.
+# Yoksa söz cihazın kişisinindir. Varsa sahibin izi `mayen voice <wav…>` ile yazılır.
+# speaker:
+#   url: http://127.0.0.1:8772
+#   threshold: 0.50            # yer tutucu. Adaylar: 0.25 (SpeechBrain'in varsayılanı) ve 0.65
+#                              # (v1); yükseği yanlış kabule, düşüğü yanlış redde karşı sıkıdır
 
 # Kimse konuşmadan açılan turun (system rolü) yetkisi, turu açan kaynağa göre (§10.2).
 # Etki sınıfı başına okunabilen/yazılabilen hassasiyetler; yazılmayan hücre kapalıdır.

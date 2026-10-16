@@ -268,8 +268,9 @@ async def test_turn_is_replayed_from_its_opening_with_recorded_results() -> None
     assert (
         first[1]["role"] == "developer" and "Answer in British English." in first[1]["content"]
     )
-    assert first[2:] == [{"role": "user", "content": "dişçi notunu sil"}]
-    assert replay.heard == "dişçi notunu sil"
+    # Söz, hattaki gibi konuşanın adıyla (§8.1).
+    assert first[2:] == [{"role": "user", "content": "Sahip: dişçi notunu sil"}]
+    assert replay.heard == "Sahip: dişçi notunu sil"
     [found, asked] = [s for s in replay.replayed if isinstance(s, Called)]
     assert found.result == {
         "status": "ok",

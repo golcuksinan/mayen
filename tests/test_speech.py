@@ -25,8 +25,16 @@ from pipecat.tests.utils import SleepFrame, run_test
 
 from fakes import FakeSpeech, speech_service
 from mayen.pipeline.sounds import ToolSound
-from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceTurn, ServiceVAD, split_parts
-from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Part, Transcription
+from mayen.pipeline.speech import (
+    VOICE,
+    ServiceSpeaker,
+    ServiceSTT,
+    ServiceTTS,
+    ServiceTurn,
+    ServiceVAD,
+    split_parts,
+)
+from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Embedding, Part, Transcription
 
 
 @pytest.fixture
@@ -63,6 +71,28 @@ async def test_stt_turns_a_segment_into_text(fake: tuple[FakeSpeech, str]) -> No
     result = texts[0].result
     assert isinstance(result, Transcription) and result.segments[0].avg_logprob == -0.2
     assert service.requests[0][0] == {"language": "en"}
+
+
+async def test_stt_sends_the_same_words_to_the_speaker_service(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    stt = ServiceSTT(url, "en", ServiceSpeaker(url))
+    down, _ = await run_test(stt, frames_to_send=[*_speech(), SleepFrame(0.3)])
+    [text] = [f for f in down if isinstance(f, TranscriptionFrame)]
+    assert text.metadata[VOICE] == Embedding("ecapa", (0.6, 0.8))
+    sizes = [n for kind, n in service.requests if kind == "embed"]
+    assert sizes and sizes[0] == service.requests[0][1]  # aynı ses, aynı hızda
+
+
+async def test_unreachable_speaker_service_leaves_the_words_without_a_voice(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    _, url = fake
+    stt = ServiceSTT(url, "en", ServiceSpeaker("http://127.0.0.1:9"))
+    down, _ = await run_test(stt, frames_to_send=[*_speech(), SleepFrame(0.3)])
+    [text] = [f for f in down if isinstance(f, TranscriptionFrame)]
+    assert text.text == "hello" and text.metadata[VOICE] is None
 
 
 async def test_stt_with_another_contract_version_fails_loudly(

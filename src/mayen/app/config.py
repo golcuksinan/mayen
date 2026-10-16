@@ -91,6 +91,17 @@ class SttConfig(_Strict):
     wake: WakeConfig | None = None
 
 
+class SpeakerConfig(_Strict):
+    """Konuşmacı tanıma (§6): izi çıkaran model servisi ve izi kişiye çeviren eşik.
+
+    Eşiğin varsayılanı yoktur: yanlış kabulün (başkası sahip sayılır) ve yanlış reddin (sahip
+    tanınmaz, onay yeniden sorulur) bedeli eşit değildir; seçim config'i yazanındır.
+    """
+
+    url: str
+    threshold: float = Field(gt=0, lt=1)  # kosinüs puanı; en yüksek puan bunu geçerse tanınır
+
+
 class TtsConfig(_Strict):
     """TTS model servisi (§3). Her çıkış dilinin sesi (§16.3): anahtar, profildeki dil."""
 
@@ -110,6 +121,8 @@ class _File(_Strict):
     # Ses birimleri; yalnızca yazılı kanalla çalışan kurulumda yoktur (§7, kısmi çalışma).
     stt: SttConfig | None = None
     tts: TtsConfig | None = None
+    # Yoksa söz cihazın kişisinindir (kişisel değilse tanımsız); varsa sesten tanınır (§6).
+    speaker: SpeakerConfig | None = None
     # Kimse konuşmadan açılan turun yetkisi, turu açan kaynağa göre (§10.2).
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     # Skill varsayılanlarının üzerine yazılanlar (§9.1); doğrulaması skill'ler bulununca.
@@ -131,6 +144,7 @@ class Config:
     panel: PanelConfig
     stt: SttConfig | None
     tts: TtsConfig | None
+    speaker: SpeakerConfig | None
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     skills: dict[str, dict[str, Any]]
 
@@ -189,6 +203,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             panel=_panel(path, file.panel),
             stt=file.stt,
             tts=_tts(file.tts, file.default_language),
+            speaker=file.speaker,
             system_role=file.system_role,
             skills=file.skills,
         )
@@ -212,5 +227,17 @@ def storage_path(path: Path) -> Path:
     """YAML'ın `storage` bölümünden veritabanı dosyası (§11.6); model gerekmez."""
     try:
         return _relative(path, StorageConfig.model_validate(_read(path).get("storage")).path)
+    except (OSError, yaml.YAMLError, ValidationError) as e:
+        raise ConfigError(str(e)) from e
+
+
+def speaker_url(path: Path) -> str:
+    """YAML'ın `speaker` bölümünden konuşmacı servisinin adresi; kurulum komutu için, model
+    gerekmez."""
+    try:
+        section = _read(path).get("speaker")
+        if section is None:
+            raise ConfigError(f"{path}: no speaker section")
+        return SpeakerConfig.model_validate(section).url
     except (OSError, yaml.YAMLError, ValidationError) as e:
         raise ConfigError(str(e)) from e

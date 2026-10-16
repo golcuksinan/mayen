@@ -116,6 +116,8 @@ class FakeSpeech:
     vad_connections: int = 0
     turn_delay_s: float = 0.0
     wake_model: bool = True
+    embed_model: str = "ecapa"
+    embed_vector: list[float] = field(default_factory=lambda: [0.6, 0.8])
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -125,7 +127,19 @@ class FakeSpeech:
         app.router.add_get("/vad", self.vad)
         app.router.add_post("/turn", self.turn)
         app.router.add_get("/wake", self.wake)
+        app.router.add_post("/embed", self.embed)
         return app
+
+    async def embed(self, request: web.Request) -> web.Response:
+        body = await request.read()
+        self.requests.append(("embed", len(body)))
+        return web.json_response(
+            {
+                "schema_version": self.version,
+                "model": self.embed_model,
+                "vector": self.embed_vector,
+            }
+        )
 
     async def health(self, _: web.Request) -> web.Response:
         return web.json_response(

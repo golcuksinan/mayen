@@ -343,7 +343,7 @@ kuralına uyar (§8.8).
 | **Echo cancellation** | Donanımda, istemcide ya da yazılımda; hattın ses girişinden önce. AEC yoksa istemci yarım dubleks çalışır (asistan konuşurken mikrofon kapalı); bu söz kesmeyi öldürür, yani bir kaçış yolu, çözüm değil |
 | **Sürekli STT** | STT sürekli çalışır, transkript her zaman kaydedilir. Sunucuya sürekli ses akar; taşıma biçimi **AÇIK** (§16.9) |
 | **Wake word** | Bir tetikleyici adaptörü; sunucuda, ses girişinden beslenir: ses zaten sürekli sunucuya akar, istemci her cihaz için yeniden yazılmaz. Model ve eşik config'tedir; söz, eğitilmiş modelin kendisidir |
-| **Konuşmacı tanıma** | Bir adaptör. Sonucu bir **skordur**, iddia değil; skor bir eşleşme seviyesine çevrilir. Bağlamda `speaker` alanı olur ve yetkilendirmede profile eşlenir |
+| **Konuşmacı tanıma** | Bir adaptör. Sonucu bir **skordur**, iddia değil; skor bir eşleşme seviyesine çevrilir. Bağlamda `speaker` alanı olur ve yetkilendirmede profile eşlenir. Model SpeechBrain ECAPA-TDNN, kendi sürecinde (§3); servis yalnızca sesin izini çıkarır. İz kişi deposundadır; puanı (kosinüs) çekirdek hesaplar ve config'teki eşikle karar verir: eşiği geçen en yüksek puanlı kişi konuşandır, geçen yoksa konuşan tanınmamıştır. Başka modelle çıkarılmış iz karşılaştırılmaz, yüksek sesle hatadır |
 | **Genel medya** | Duyu girişi sese özel değil. Kayıt deposu medya türünden bağımsız, `media_id` referansı, LLM mesajında medya parçası |
 | **Kamera ve vision** | Medya hattının adaptörleri |
 | **Girdi eleme** | Metin seviyesinde: boş metin ve düşük STT skoru (Whisper'ın kendi kuralı, iki sinyal birlikte: `no_speech_prob` > 0.6 ve `avg_logprob` < -1). Uzunluk kuralı kaynağı bulunana kadar yoktur; tek kelimelik cevap onayda gereklidir. Asıl süzgeç wake word'dür (§5.1): uyanık değilken duyulan modele gitmez. Karar modelini kabul edecek şekilde tasarlıdır |
@@ -1213,8 +1213,9 @@ Cevaplanmadan uygulanmaz; yerine varsayım konmaz (§0). Numaralar sabittir.
 2. **STT modeli**, nerede çalıştığı ve sözün bittiğine nasıl karar verildiği.
 3. **Her çıkış dili için TTS sesi.** Profillerdeki her çıkış dili için bir ses gerekir.
 4. ✅ §7
-5. **Konuşmacı tanıma:** model, eşleşme eşikleri, kayıt için gereken ses süresi, "güçlü
-   eşleşme"nin tanımı.
+5. **Konuşmacı tanıma:** eşiğin değeri (adaylar: SpeechBrain'in varsayılanı 0,25 ve v1'in
+   0,65; sahibin kayıtlarıyla seçilecek), kayıt için gereken ses süresi, "güçlü eşleşme"nin
+   tanımı. Karar verilen kısım §6'da.
 6. ✅ §10.3
 7. ✅ §10.3
 8. ✅ §6

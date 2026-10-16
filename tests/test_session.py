@@ -64,6 +64,7 @@ def make(
     log: MemoryEventLog | None = None,
     store: MemoryTranscript | None = None,
     state: StateTracker | None = None,
+    label: Callable[[Caller], str] | None = None,
 ) -> tuple[Sessions, TriggerGate]:
     turns = Turns(fates or dict.fromkeys(TriggerSource, Fate.CANCEL))
     sessions = Sessions(turns, Priority.NORMAL)
@@ -80,6 +81,7 @@ def make(
         response_timeout_s=TIMEOUT_S,
         holds=holds,
         state=state,
+        label=label,
     )
     return sessions, gate
 
@@ -113,6 +115,15 @@ async def test_text_trigger_goes_to_the_model_as_the_users_message() -> None:
     )
     assert appended(down) == [{"role": "user", "content": "selam"}]
     assert next(f for f in down if isinstance(f, LLMMessagesAppendFrame)).run_llm
+
+
+async def test_text_carries_the_name_of_who_wrote_it() -> None:
+    sessions, gate = make(label=lambda requester: f"{requester.role.value}-adı")
+    down, _ = await run(
+        gate,
+        [Call(lambda: sessions.submit(trig(Priority.NORMAL, TriggerSource.TEXT, "selam")))],
+    )
+    assert appended(down) == [{"role": "user", "content": "owner-adı: selam"}]
 
 
 async def test_system_trigger_is_a_labelled_developer_message() -> None:
@@ -393,6 +404,7 @@ async def test_heard_segment_is_written_and_tied_to_its_turn() -> None:
     record = f"utterance:{utterance.id}"
     assert stt.header.related == (record,)
     assert stt.body["muted"] is False
+    assert stt.body["speaker_score"] is None  # konuşmacı tanıma yok
     assert "dişçi" not in json.dumps(stt.body)  # metin yalnızca transkriptte (§11)
     # Kayıt kare üstünde aşağı gider: onay kapısı cevabı ona bağlar.
     [passed] = [f for f in down if isinstance(f, TranscriptionFrame)]

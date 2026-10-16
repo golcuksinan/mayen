@@ -1,4 +1,4 @@
-"""Kişi profili portu (§11.1, §10.2): kişiler, rolleri ve eşleştirilmiş cihazları."""
+"""Kişi profili portu (§11.1, §10.2): kişiler, rolleri, cihazları ve ses izleri."""
 
 from dataclasses import dataclass
 from typing import NewType, Protocol
@@ -46,3 +46,21 @@ class PersonStore(Protocol):
     def by_device(self, device: DeviceId) -> Person | None:
         """Cihazın eşleştirildiği kişi; eşleşmemişse ortak cihazdır ve `None` döner."""
         ...
+
+
+@dataclass(frozen=True)
+class Voiceprint:
+    """Bir kişinin ses izi (§10.4). `Person`'da değil: profilin modele giden kısmına hiç girmez
+    (§11.1); onu yalnızca konuşmacıyı tanıyan çekirdek okur."""
+
+    person_id: str
+    model: str  # izi çıkaran model; başka modelin iziyle karşılaştırılmaz
+    vector: tuple[float, ...]
+
+
+class VoiceprintStore(Protocol):
+    def set(self, person_id: str, model: str, vector: tuple[float, ...]) -> None:
+        """Kişinin ses izini yazar; varsa eskisinin yerine. Kişi yoksa `KeyError`."""
+        ...
+
+    def all(self) -> list[Voiceprint]: ...

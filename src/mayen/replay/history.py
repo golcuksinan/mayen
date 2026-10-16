@@ -33,6 +33,8 @@ type Message = dict[str, Any]
 
 # Kişinin rolü ve kimliğinden çağıran; kişisel cihazı olup olmadığı profilden.
 type CallerOf = Callable[[Role, str | None], Caller]
+# Kaydedilmiş sözün kişisinden başına yazılan ad (§8.1); hattaki etiketin aynısı.
+type LabelOf = Callable[[str | None], str]
 type TableOf = Callable[[TriggerSource], PolicyTable]
 
 
@@ -72,8 +74,10 @@ class Records:
         utterances: Sequence[Utterance],
         timers: TimerStore,
         caller_of: CallerOf,
+        label_of: LabelOf | None = None,
     ) -> None:
         self.events = events
+        self._label_of = label_of
         self.utterances = utterances
         self._timers = timers
         stt = [e for e in events if e.header.kind is EventKind.STT_SEGMENT]
@@ -143,7 +147,7 @@ class Records:
                         text = texts.get(turn.id) or restarted
                         restarted = None
                         if text is not None:
-                            out.append({"role": "user", "content": text.text})
+                            out.append({"role": "user", "content": self._labelled(text)})
                     elif turn.source is not TriggerSource.VOICE:
                         out.append({"role": "developer", "content": self._trigger(item, turn)})
                 case EventKind.TURN_INTERRUPTED if turn is not None:
@@ -186,11 +190,17 @@ class Records:
         if record not in self._muted or self._muted[record] or record in self._answers:
             return []  # yazı turuyla girer; duyulmayan ve cevap olan söz modele gitmedi
         last = out[-1] if out else None
+        text = self._labelled(utterance)
         if last is not None and last["role"] == "user" and last.get("voice"):
-            # Bir sözün segmentleri tek kullanıcı mesajıdır.
-            last["content"] = f"{last['content']} {utterance.text}"
+            # Bir sözün segmentleri tek kullanıcı mesajıdır; her segment kendi etiketiyle.
+            last["content"] = f"{last['content']} {text}"
             return []
-        return [{"role": "user", "content": utterance.text, "voice": True}]
+        return [{"role": "user", "content": text, "voice": True}]
+
+    def _labelled(self, utterance: Utterance) -> str:
+        if self._label_of is None:
+            return utterance.text
+        return f"{self._label_of(utterance.person_id)}: {utterance.text}"
 
     def _trigger(self, started: Event, turn: TurnInfo) -> str:
         """Hattın tetikleyiciden kurduğu etiketli mesaj (§2.1), bağlı kayıtlardan."""

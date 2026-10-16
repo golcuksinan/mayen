@@ -137,7 +137,7 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
                 session: str, transport: FastAPIWebsocketTransport, device: DeviceId | None
             ) -> Session:
                 stt, tts, vad, turn = core.speech()
-                # Konuşmacı tanıma yok: söz cihazın kişisinindir (`caller=None`).
+                # Konuşmacı tanıma config'te yoksa söz cihazın kişisinindir.
                 parts = Voice(
                     transport.input(),
                     stt,
@@ -145,7 +145,7 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
                     transport.output(),
                     vad,
                     turn,
-                    None,
+                    core.recognizer(),
                     device,
                     core.wake(),
                 )

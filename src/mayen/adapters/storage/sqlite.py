@@ -12,6 +12,7 @@ yaptığı için kullanılmaz; migration'lar ifade ifade aynı transaction'da ç
 import fcntl
 import json
 import sqlite3
+import struct
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -24,7 +25,7 @@ from uuid import UUID
 
 from mayen.ports.events import Event, EventId, EventKind, Header, parse_stamp, stamp
 from mayen.ports.notes import Note
-from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError, Person
+from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError, Person, Voiceprint
 from mayen.ports.timers import Timer, TimerState
 from mayen.ports.tools import Role, Sensitivity, Status
 from mayen.ports.transcript import Party, Utterance, UtteranceId
@@ -175,6 +176,14 @@ MIGRATIONS: Sequence[Sequence[str]] = (
     ),
     rebuild_events(),  # tool.requested
     rebuild_events(),  # state.changed
+    (
+        # Kişi başına tek iz; kişi silinince izi de gider. Vektör float32, little-endian.
+        """CREATE TABLE voiceprints (
+            person_id INTEGER PRIMARY KEY REFERENCES people (id) ON DELETE CASCADE,
+            model TEXT NOT NULL,
+            vector BLOB NOT NULL CHECK (length(vector) > 0 AND length(vector) % 4 = 0)
+        ) STRICT""",
+    ),
 )
 
 
@@ -628,3 +637,37 @@ class SqlitePersonStore:
             address_as,
             tuple(DeviceId(d) for (d,) in devices),
         )
+
+
+class SqliteVoiceprintStore:
+    """Ses izleri (§10.4); profilden ayrı tablo, modele giden hiçbir sorguya girmez (§11.1)."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def set(self, person_id: str, model: str, vector: tuple[float, ...]) -> None:
+        number = _number(person_id)
+        blob = struct.pack(f"<{len(vector)}f", *vector)
+        with self._db.transaction() as conn:
+            if (
+                number is None
+                or conn.execute("SELECT 1 FROM people WHERE id = ?", (number,)).fetchone()
+                is None
+            ):
+                raise KeyError(person_id)
+            conn.execute(
+                "INSERT INTO voiceprints (person_id, model, vector) VALUES (?, ?, ?)"
+                " ON CONFLICT (person_id) DO UPDATE SET model = excluded.model,"
+                " vector = excluded.vector",
+                (number, model, blob),
+            )
+
+    def all(self) -> list[Voiceprint]:
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT person_id, model, vector FROM voiceprints ORDER BY person_id"
+            ).fetchall()
+        return [
+            Voiceprint(str(person_id), model, struct.unpack(f"<{len(blob) // 4}f", blob))
+            for person_id, model, blob in rows
+        ]

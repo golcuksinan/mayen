@@ -5,6 +5,9 @@ yeniden başlatma döngüsüne sokmaz. Alt komutlar:
 
 - `check` (varsayılan): açılışı doğrular ve çıkar.
 - `setup`: sahibi kurar (§10.2). Makinenin başında çalıştırılır; sahip varsa reddeder.
+  `--voice` verilirse sahibin ses izi de yazılır (konuşmacı servisi açık olmalı).
+- `voice`: kurulmuş sahibin ses izini dosyalardan yazar; eskisinin yerine. `setup` gibi
+  makinenin başında çalışır; iz sesle verilemez (§10.2).
 - `serve`: yazılı ve sesli kanalı (§7, §13) ve hatırlatmaları çalıştırır. Sesli kanal,
   config'te STT ve TTS servisleri varsa açılır.
 - `replay`: kayıttaki turları listeler; bir tur verilirse onu bugünkü prompt ve modelle
@@ -22,9 +25,15 @@ import uvicorn
 import yaml
 
 from mayen.adapters.channel.tailscale import TailscaleIdentity
-from mayen.adapters.storage.sqlite import Database, SqlitePersonStore, StorageError
-from mayen.app.config import Config, ConfigError, load, storage_path
+from mayen.adapters.storage.sqlite import (
+    Database,
+    SqlitePersonStore,
+    SqliteVoiceprintStore,
+    StorageError,
+)
+from mayen.app.config import Config, ConfigError, load, speaker_url, storage_path
 from mayen.app.server import LoopbackIsLocal, core_app
+from mayen.app.voice import VoiceError, voiceprint
 from mayen.app.wiring import Core, SkillLoadError, replayer
 from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError
 from mayen.replay.run import render
@@ -52,6 +61,13 @@ def _parser() -> argparse.ArgumentParser:
         # `local` geliştirme istisnasıdır: mimaride bu makinenin ses birimleri ortaktır.
         help="personal device: a Tailscale node StableID, or 'local' (development only)",
     )
+    setup.add_argument(
+        "--voice", nargs="+", type=Path, default=[], help="the owner's voice samples (WAV)"
+    )
+    voice = commands.add_parser(
+        "voice", help="replace the owner's voiceprint (on this machine)"
+    )
+    voice.add_argument("samples", nargs="+", type=Path, help="voice samples (WAV)")
     commands.add_parser("serve", help="run the text and voice channels and reminders")
     replay = commands.add_parser("replay", help="list recorded turns, or replay one")
     replay.add_argument("turn", nargs="?", help="turn id or a unique prefix of it")
@@ -72,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "setup":
             return _setup(args.config, args)
+        if args.command == "voice":
+            return _voice(args.config, args.samples)
         config = load(args.config, os.environ)
         config.storage_path.parent.mkdir(parents=True, exist_ok=True)
         with Database(config.storage_path) as db:
@@ -88,11 +106,16 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigError, StorageError, SkillLoadError) as e:
         log.error("configuration error: %s", e)
         return EXIT_CONFIG
+    except VoiceError as e:
+        log.error("voice refused: %s", e)
+        return EXIT_REFUSED
     return 0
 
 
 def _setup(path: Path, args: argparse.Namespace) -> int:
-    # Model gerekmez: sahibi kurmak için yalnızca veritabanı açılır.
+    # Model gerekmez: sahibi kurmak için yalnızca veritabanı açılır. İz önce çıkarılır: servis
+    # hata verirse izsiz bir sahip kalmaz.
+    owner_voice = None if not args.voice else voiceprint(speaker_url(path), args.voice)
     db_path = storage_path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with Database(db_path) as db:
@@ -103,7 +126,26 @@ def _setup(path: Path, args: argparse.Namespace) -> int:
         except (OwnerExistsError, DevicePairedError) as e:
             log.error("setup refused: %s", e)
             return EXIT_REFUSED
-    log.info("owner set up: id=%s devices=%s", owner.id, ",".join(owner.devices) or "-")
+        if owner_voice is not None:
+            SqliteVoiceprintStore(db).set(owner.id, owner_voice.model, owner_voice.vector)
+    log.info(
+        "owner set up: id=%s devices=%s voice=%s",
+        owner.id,
+        ",".join(owner.devices) or "-",
+        "-" if owner_voice is None else f"{len(args.voice)} samples, {owner_voice.model}",
+    )
+    return 0
+
+
+def _voice(path: Path, samples: list[Path]) -> int:
+    owner_voice = voiceprint(speaker_url(path), samples)
+    with Database(storage_path(path)) as db:
+        owner = SqlitePersonStore(db).owner()
+        if owner is None:
+            log.error("voice refused: no owner; run setup first")
+            return EXIT_REFUSED
+        SqliteVoiceprintStore(db).set(owner.id, owner_voice.model, owner_voice.vector)
+    log.info("owner voiceprint set: %d samples, %s", len(samples), owner_voice.model)
     return 0
 
 

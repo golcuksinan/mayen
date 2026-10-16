@@ -41,12 +41,13 @@ from mayen.core.events import Recorder
 from mayen.core.state import StateTracker
 from mayen.core.turns import Interrupt, Start, Turn, Turns
 from mayen.pipeline.events import UTTERANCE, SessionTranscript
+from mayen.pipeline.speaker import score
 from mayen.ports.events import EventKind, ref
 from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource, TurnId
 
-# İlk segmentin konuşmacısı; hattı kuran bağlar. Konuşmacı tanıma gelince değişen yalnızca
-# bu kaynaktır (onay kapısındaki `SpeakerSource` gibi).
+# Segmentin konuşmacısı; hattı kuran bağlar: konuşmacı tanıma (`pipeline/speaker.py`) ya da
+# cihazın kişisi. Onay kapısındaki `SpeakerSource` da bu kaynaktan okur.
 type CallerSource = Callable[[TranscriptionFrame], Caller]
 
 # Söz başladığında kimin konuştuğu henüz bilinmez; kesme kuralı onu sahip saymaz.
@@ -151,6 +152,7 @@ class TriggerGate(FrameProcessor):
         drops: Sequence[Callable[[], Awaitable[None]]] = (),
         device_person: Callable[[], str | None] = lambda: None,
         state: StateTracker | None = None,
+        label: Callable[[Caller], str] | None = None,
     ) -> None:
         super().__init__()
         self.session = session
@@ -167,6 +169,8 @@ class TriggerGate(FrameProcessor):
         self._device_person = device_person
         # Oturumun durumu (§5.4): kapı turu, sözü ve sesi bildirir.
         self._state = state or StateTracker(lambda _, __: None)
+        # Yazılı sözün başına konuşanın adı (§8.1); sesli sözünkini `SpeakerLabel` yazar.
+        self._label = label
         self._turn: Turn | None = None
         self._identified = True
         self._user_speaking = False
@@ -227,9 +231,12 @@ class TriggerGate(FrameProcessor):
             # Baştan başlayan sesli tur: söz bağlamda duruyor, model yeniden çalışır.
             await self._push_run(LLMRunFrame())
         elif source is TriggerSource.TEXT:
+            content = turn.trigger.content
+            if self._label is not None:
+                content = f"{self._label(requester)}: {content}"
             await self._push_run(
                 LLMMessagesAppendFrame(
-                    messages=[{"role": "user", "content": turn.trigger.content}], run_llm=True
+                    messages=[{"role": "user", "content": content}], run_llm=True
                 )
             )
         else:
@@ -332,6 +339,8 @@ class TriggerGate(FrameProcessor):
                 "language": None if frame.language is None else str(frame.language),
                 "finalized": frame.finalized,
                 "muted": not self.hears(),
+                # Konuşmacı tanımanın en yüksek puanı (§6); eşik config'te, karar çekirdekte.
+                "speaker_score": score(frame),
             },
             session=self.session,
             turn_id=None if self._turn is None else self._turn.id,

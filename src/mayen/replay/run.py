@@ -17,6 +17,7 @@ from mayen.core.context import ContextBlock
 from mayen.core.policy import decide, filter_records
 from mayen.core.presence import Presence
 from mayen.core.registry import ToolRegistry, parse_args
+from mayen.core.speakers import label
 from mayen.pipeline.llm import StepCap, count_steps, with_block
 from mayen.pipeline.tools import AWAITING_CONFIRMATION, openai_tools, to_model
 from mayen.ports.events import EventKind, EventLog
@@ -95,10 +96,18 @@ class Replayer:
         self._default = default_language
         self._cap = cap
 
+    def _label(self, person_id: str | None) -> str:
+        """Hattın yazdığı adın aynısı (§8.1): replay üretimdeki isteği kurar."""
+        return label(None if person_id is None else self._people.get(person_id))
+
     def turns(self) -> list[TurnInfo]:
         """Kayıttaki bütün turlar, başlama sırasıyla."""
         records = Records(
-            self._events.read(), self._transcript.read(), self._timers, self._caller_of
+            self._events.read(),
+            self._transcript.read(),
+            self._timers,
+            self._caller_of,
+            self._label,
         )
         return sorted(records.turns.values(), key=lambda t: t.time)
 
@@ -121,6 +130,7 @@ class Replayer:
             self._transcript.read(session=session),
             self._timers,
             self._caller_of,
+            self._label,
         )
         turn = records.turns[turn_id]
         outputs = [

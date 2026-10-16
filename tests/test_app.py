@@ -318,6 +318,28 @@ def test_wake_word_is_read_and_wired(tmp_path: Path) -> None:
         assert voice_session(core, "s1", voice).gate.session == "s1"
 
 
+def test_speaker_recognition_is_read_and_its_threshold_is_required(tmp_path: Path) -> None:
+    path = config_dir(tmp_path)
+    plain = path.read_text(encoding="utf-8")
+    path.write_text(plain + "speaker:\n  url: http://127.0.0.1:9\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="threshold"):
+        load(path, {"MAYEN_MODEL": "local"})
+    path.write_text(
+        plain + "speaker:\n  url: http://127.0.0.1:9\n  threshold: 0.5\n", encoding="utf-8"
+    )
+    config = load(path, {"MAYEN_MODEL": "local"})
+    with Database(tmp_path / "m.db") as db:
+        core = Core(config, db)
+        assert core.matcher is not None and core.matcher.threshold == 0.5
+        assert core.recognizer() is not None
+
+
+def test_without_speaker_recognition_the_words_belong_to_the_device(tmp_path: Path) -> None:
+    config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
+    with Database(tmp_path / "m.db") as db:
+        assert Core(config, db).recognizer() is None
+
+
 def test_without_wake_word_in_the_config_there_is_none(tmp_path: Path) -> None:
     config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
     with Database(tmp_path / "m.db") as db:

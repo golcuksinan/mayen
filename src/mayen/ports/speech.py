@@ -1,4 +1,5 @@
-"""Model servislerinin sözleşmesi (§3, §4): çekirdekle STT ve TTS süreçleri arasındaki HTTP.
+"""Model servislerinin sözleşmesi (§3, §4): çekirdekle STT, TTS ve konuşmacı süreçleri
+arasındaki HTTP.
 
 Servisler ayrı projelerdir ve bu modülü import etmez; tanımı kendi kodlarında aynen kurar.
 Her yanıt `schema_version` taşır; tutmayan yanıt kullanılmaz (§18).
@@ -26,7 +27,13 @@ TTS: `POST /speak` gövdesi JSON: `voice` ve sırasıyla okunacak `parts`; her p
 `language`'ı `null` ise sesin kendi dilidir, değilse parça o dilin okunuşuyla aynı sese
 verilir (§7). Yanıt `sample_rate` hızında ham PCM akışıdır; ilk ses üretilir üretilmez gelir.
 
-İkisi de `GET /health` ile biçimini bildirir. Çıkış biçimi sabittir; bildirilen biçim
+Konuşmacı (§6, §10.5): ayrı bir servis. `POST /embed` gövdesi bir sözün sesi, ham PCM (16 bit,
+tek kanal, `sample_rate` hızında); yanıt JSON: `model` ve `vector`, sesin izi (birim uzunlukta).
+Servis kimseyi tanımaz, iz tutmaz: izi kayıtlı izlerle karşılaştırıp puanı bulan ve eşikle
+karar veren çekirdektir. `model` izin hangi modelle çıkarıldığıdır; başka modelin iziyle
+karşılaştırılmaz.
+
+Hepsi `GET /health` ile biçimini bildirir. Çıkış biçimi sabittir; bildirilen biçim
 bekleneni tutmazsa istemci yüksek sesle başarısız olur (§14).
 """
 
@@ -41,6 +48,7 @@ SPEAK = "/speak"
 VAD = "/vad"
 TURN = "/turn"
 WAKE = "/wake"
+EMBED = "/embed"
 
 VAD_FRAME = 512
 """VAD modelinin bir seferde baktığı örnek sayısı (16 kHz'de 32 ms): modelin özelliği."""
@@ -71,6 +79,14 @@ class Transcription:
     text: str
     language: str
     segments: tuple[Segment, ...]
+
+
+@dataclass(frozen=True)
+class Embedding:
+    """Bir sözün ses izi; `model` onu çıkaran modelin adıdır."""
+
+    model: str
+    vector: tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -112,6 +128,17 @@ def parse_transcription(body: Any) -> Transcription:  # noqa: ANN401
         )
     except (KeyError, TypeError, ValueError) as e:
         raise SpeechContractError(f"transcription: {e}") from e
+
+
+def parse_embedding(body: Any) -> Embedding:  # noqa: ANN401
+    b = _versioned(body)
+    try:
+        vector = tuple(float(x) for x in b["vector"])
+        if not vector:
+            raise ValueError("empty vector")
+        return Embedding(str(b["model"]), vector)
+    except (KeyError, TypeError, ValueError) as e:
+        raise SpeechContractError(f"embedding: {e}") from e
 
 
 @dataclass(frozen=True)
