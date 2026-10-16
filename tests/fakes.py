@@ -1,5 +1,6 @@
 """Testlerin ortak sahteleri: saat, bellekte olay kaydı, transkript ve ses servisleri."""
 
+import asyncio
 import struct
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -113,6 +114,7 @@ class FakeSpeech:
     requests: list[Any] = field(default_factory=list)
     vad_frame: int = VAD_FRAME
     vad_connections: int = 0
+    turn_delay_s: float = 0.0
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -120,6 +122,7 @@ class FakeSpeech:
         app.router.add_post("/transcribe", self.transcribe)
         app.router.add_post("/speak", self.speak)
         app.router.add_get("/vad", self.vad)
+        app.router.add_post("/turn", self.turn)
         return app
 
     async def health(self, _: web.Request) -> web.Response:
@@ -160,6 +163,14 @@ class FakeSpeech:
                 first = struct.unpack_from("<h", message.data)[0]
                 await ws.send_bytes(struct.pack("<f", first / 32767))
         return ws
+
+    async def turn(self, request: web.Request) -> web.Response:
+        """Olasılık, sesin son örneğinin büyüklüğü: test sesi kendisi seçer."""
+        body = await request.read()
+        self.requests.append((dict(request.query), len(body)))
+        await asyncio.sleep(self.turn_delay_s)
+        last = struct.unpack_from("<h", body, len(body) - 2)[0]
+        return web.json_response({"schema_version": self.version, "probability": last / 32767})
 
     async def speak(self, request: web.Request) -> web.StreamResponse:
         self.requests.append(await request.json())

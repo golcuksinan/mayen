@@ -13,6 +13,10 @@ sırasıyla bir konuşma olasılığıyla (4 bayt, float32, little-endian) cevap
 bağlantı başınadır: bir bağlantı tek bir ses akışıdır. Olasılığı söze çeviren kural (eşik,
 başlama ve bitiş süreleri) çekirdektedir; serviste yalnızca model durur.
 
+Sözün bitişi: `POST /turn?sample_rate=<hız>` gövdesi bir sözün o ana kadarki sesi, ham PCM
+(16 bit, tek kanal); yanıt JSON: `probability`, sözün bittiği olasılığı. Hız servisinkini
+tutmazsa servis 400 döner. Olasılığı karara çeviren eşik çekirdektedir.
+
 TTS: `POST /speak` gövdesi JSON: `voice` ve sırasıyla okunacak `parts`; her parçanın
 `language`'ı `null` ise sesin kendi dilidir, değilse parça o dilin okunuşuyla aynı sese
 verilir (§7). Yanıt `sample_rate` hızında ham PCM akışıdır; ilk ses üretilir üretilmez gelir.
@@ -30,6 +34,7 @@ HEALTH = "/health"
 TRANSCRIBE = "/transcribe"
 SPEAK = "/speak"
 VAD = "/vad"
+TURN = "/turn"
 
 VAD_FRAME = 512
 """VAD modelinin bir seferde baktığı örnek sayısı (16 kHz'de 32 ms): modelin özelliği."""
@@ -112,6 +117,15 @@ def parse_vad_hello(body: Any) -> VadHello:  # noqa: ANN401
         return VadHello(int(b["sample_rate"]), int(b["frame"]))
     except (KeyError, TypeError, ValueError) as e:
         raise SpeechContractError(f"vad: {e}") from e
+
+
+def parse_turn(body: Any) -> float:  # noqa: ANN401
+    """Sözün bittiği olasılığı."""
+    b = _versioned(body)
+    try:
+        return float(b["probability"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise SpeechContractError(f"turn: {e}") from e
 
 
 def speak_request(voice: str, parts: list[Part]) -> dict[str, Any]:

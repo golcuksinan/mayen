@@ -9,7 +9,9 @@ kurar. Her yanıt `schema_version` taşır.
 
 VAD modeli (Silero, faster-whisper'ın içindeki) da burada yaşar: `/vad` akan sesin her parçasına
 bir konuşma olasılığı döner. Sözün başı ve sonu olasılıktan çekirdekte çıkar; `/transcribe`'a
-bitmiş bir söz gelir. Sessizlik elemesi
+bitmiş bir söz gelir. Sözün bitip bitmediğini bulan model (Pipecat'in Smart Turn'ü) da burada:
+`/turn` sözün o ana kadarki sesine bir "bitti" olasılığı döner; eşik çekirdektedir. Sessizlik
+elemesi
 Whisper'ın kendi kuralıdır (faster-whisper'ın varsayılanı: `no_speech_prob` 0.6'nın üstünde
 **ve** `avg_logprob` -1'in altında olan parça atılır); tek sinyalle eleme cümle başlarını
 yutar.
@@ -70,6 +72,23 @@ class Silero:
         if self._frames % VAD_RESET_FRAMES == 0:
             self._reset()
         return float(np.ravel(out)[0])
+
+
+class Turn:
+    """Sözün bittiği olasılığı; çekirdekteki Pipecat'in yerel modeliyle aynı hesap.
+
+    Kesiti (son 8 sn) ve özellikleri Pipecat'in analizcisi hazırlar; onu çekirdek değil bu
+    süreç yükler. Eşiğin uyguladığı karar dönmez, olasılık döner.
+    """
+
+    def __init__(self) -> None:
+        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+
+        self._model = LocalSmartTurnAnalyzerV3()
+
+    def __call__(self, pcm: bytes) -> float:
+        audio = np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+        return float(self._model._predict_endpoint(audio)["probability"])
 
 
 def vad_session() -> Any:  # noqa: ANN401
@@ -133,6 +152,7 @@ def build(settings: Settings) -> FastAPI:
     lock = asyncio.Lock()
     # Oturum durumsuzdur, bağlantılar paylaşır; durum her bağlantının `Silero`'sundadır.
     vad = vad_session()
+    turn = Turn()
     app = FastAPI()
 
     @app.get("/health")
@@ -164,6 +184,16 @@ def build(settings: Settings) -> FastAPI:
         audio = np.frombuffer(body, np.int16).astype(np.float32) / 32768.0
         async with lock:
             return await asyncio.to_thread(transcribe_sync, audio, language)
+
+    @app.post("/turn")
+    async def end_of_turn(request: Request, sample_rate: int) -> dict[str, Any]:
+        if sample_rate != SAMPLE_RATE:
+            raise HTTPException(400, f"expected {SAMPLE_RATE} Hz, got {sample_rate}")
+        body = await request.body()
+        if not body or len(body) % 2:
+            raise HTTPException(400, "body is not 16-bit PCM")
+        probability = await asyncio.to_thread(turn, body)
+        return {"schema_version": SCHEMA_VERSION, "probability": probability}
 
     @app.websocket("/vad")
     async def voice_activity(websocket: WebSocket) -> None:

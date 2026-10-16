@@ -5,7 +5,8 @@ biçim bekleneni tutmazsa birim kalıcı hatayla düşer (§14): sessiz bir uyu�
 ince sesle konuşuyor" diye duyulur.
 
 Sözün başı ve sonu olasılıktan Pipecat'in VAD kuralıyla çıkar (eşik, başlama ve bitiş süreleri);
-olasılığı veren model STT servisindedir (`ServiceVAD`).
+olasılığı veren model STT servisindedir (`ServiceVAD`). Sözün bittiğine dair olasılık da
+oradadır (`ServiceTurn`); eşik ve sessizlik süresi Pipecat'in Smart Turn kuralıdır.
 
 TTS'e giden metindeki dil işaretini (`<tr>…</tr>`) model koyar (§7); burada yalnızca okunur ve
 parçalara bölünür, dili yorumlanmaz (§2.1). Ses birimine çevirmek sesin işidir, servistedir.
@@ -16,11 +17,17 @@ import json
 import logging
 import re
 import time
+import urllib.error
+import urllib.request
 from collections.abc import AsyncGenerator, Callable, Mapping
 from typing import Any
 
 import aiohttp
 import numpy as np
+from pipecat.audio.turn.smart_turn.base_smart_turn import (
+    BaseSmartTurn,
+    SmartTurnTimeoutException,
+)
 from pipecat.audio.utils import create_stream_resampler
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADParams
 from pipecat.frames.frames import (
@@ -44,6 +51,7 @@ from mayen.ports.speech import (
     HEALTH,
     SPEAK,
     TRANSCRIBE,
+    TURN,
     VAD,
     VAD_FRAME,
     Health,
@@ -51,6 +59,7 @@ from mayen.ports.speech import (
     SpeechContractError,
     parse_health,
     parse_transcription,
+    parse_turn,
     parse_vad_hello,
     speak_request,
 )
@@ -146,6 +155,44 @@ class ServiceVAD(VADAnalyzer):
         # Bağlantı analizcinin iş parçacığında yaşar; kapanış el sıkışması döngüyü bekletmez.
         await asyncio.get_running_loop().run_in_executor(self._executor, self._drop)
         await super().cleanup()  # type: ignore[no-untyped-call]  # Pipecat'te tipsiz
+
+
+COMPLETE_ABOVE = 0.5
+"""Pipecat'in yerel Smart Turn'ünün eşiği; model aynı kaldıkça karar da aynı kalır."""
+
+
+class ServiceTurn(BaseSmartTurn):
+    """Sözün bitip bitmediğini STT servisindeki modele sorar (§18: çekirdek model yüklemez);
+    sessizlik süresi ve sözün kesitini Pipecat'in `BaseSmartTurn`'ü belirler.
+
+    Analizcinin kendi iş parçacığında çağrılır. Servis cevap vermezse söz bitmemiş sayılır ve
+    hata loga yazılır; söz yine de sessizlik süresi dolunca biter. Süre içinde cevap gelmezse
+    beklenen sessizlik zaten geçmiştir, söz bitmiş sayılır (Pipecat'in kuralı).
+    """
+
+    def __init__(self, url: str, **kwargs: Any) -> None:  # noqa: ANN401
+        super().__init__(**kwargs)
+        self._url = url.rstrip("/") + TURN
+
+    def _predict_endpoint(self, audio_array: np.ndarray) -> dict[str, Any]:
+        # Servis 32768'e böler; aynı ölçek, aynı olasılık.
+        pcm = np.clip(audio_array * 32768, -32768, 32767).astype("<i2").tobytes()
+        request = urllib.request.Request(
+            f"{self._url}?sample_rate={self.sample_rate}",
+            data=pcm,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.params.stop_secs) as r:
+                probability = parse_turn(json.load(r))
+        except (OSError, ValueError, SpeechContractError) as e:
+            # Bağlanırken dolan süre `URLError`'ın içinde gelir.
+            reason = e.reason if isinstance(e, urllib.error.URLError) else e
+            if isinstance(reason, TimeoutError):
+                raise SmartTurnTimeoutException(str(e)) from e
+            log.error("turn service: %s", e)
+            return {"prediction": 0, "probability": 0.0}
+        return {"prediction": int(probability > COMPLETE_ABOVE), "probability": probability}
 
 
 class ServiceSTT(SegmentedSTTService):

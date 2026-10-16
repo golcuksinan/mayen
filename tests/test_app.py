@@ -2,6 +2,7 @@
 
 import asyncio
 import shutil
+import sys
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -34,6 +35,7 @@ from mayen.app.wiring import (
     voice_session,
 )
 from mayen.core.policy import ROLE_TABLE
+from mayen.pipeline.speech import ServiceTurn
 from mayen.ports.channels import VoiceHello
 from mayen.ports.people import LOCAL_DEVICE, DeviceId
 from mayen.ports.tools import Caller, Effect, Role, Sensitivity, Status
@@ -278,12 +280,17 @@ def test_voice_session_is_wired(tmp_path: Path) -> None:
             languages.append(language())
             return Passing()
 
-        voice = Voice(Passing(), Passing(), tts, Passing(), SilentVAD(), caller, LOCAL_DEVICE)
+        turn = ServiceTurn("http://127.0.0.1:9")
+        voice = Voice(
+            Passing(), Passing(), tts, Passing(), SilentVAD(), turn, caller, LOCAL_DEVICE
+        )
         session = voice_session(core, "s1", voice)
         assert session.gate.session == "s1"
         assert core.sessions.running("s1") is None
         # Turu yokken dinleyen bilinmez: ses varsayılan dilden seçilir (§8.6).
         assert languages == [config.default_language]
+        # Sözün bitişini bulan model çekirdekte yüklenmez (§18); Pipecat'in varsayılanı yükler.
+        assert "pipecat.audio.turn.smart_turn.local_smart_turn_v3" not in sys.modules
 
 
 def test_setup_sets_up_the_owner_once(tmp_path: Path) -> None:

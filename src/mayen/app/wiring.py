@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from pipecat.audio.turn.base_turn_analyzer import BaseTurnAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADAnalyzer
 from pipecat.observers.base_observer import BaseObserver
 from pipecat.pipeline.pipeline import Pipeline
@@ -26,6 +27,8 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.base_transport import BaseTransport
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies, UserTurnStrategies
 
 import mayen.skills
 from mayen.adapters.llamacpp.chat import LlamaCppChat
@@ -60,7 +63,7 @@ from mayen.pipeline.events import (
 from mayen.pipeline.llm import StepCap, llm_service
 from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
 from mayen.pipeline.sounds import ToolSound
-from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceVAD
+from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceTurn, ServiceVAD
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
 from mayen.ports.events import Clock
@@ -212,8 +215,9 @@ class Core:
             else caller_of(person)
         )
 
-    def speech(self) -> tuple[FrameProcessor, TtsFactory, VADAnalyzer]:
-        """Config'teki STT ve TTS servislerinin istemcileri (§3); VAD modeli STT servisinde."""
+    def speech(self) -> tuple[FrameProcessor, TtsFactory, VADAnalyzer, BaseTurnAnalyzer]:
+        """Config'teki STT ve TTS servislerinin istemcileri (§3); VAD ve sözün bitişini
+        bulan model de STT servisinde."""
         stt, tts = self.config.stt, self.config.tts
         if stt is None or tts is None:
             raise ConfigError("a voice session needs both stt and tts in the config")
@@ -221,7 +225,12 @@ class Core:
         def make_tts(language: Callable[[], str]) -> FrameProcessor:
             return ServiceTTS(tts.url, tts.voices, language)
 
-        return ServiceSTT(stt.url, stt.language), make_tts, ServiceVAD(stt.url)
+        return (
+            ServiceSTT(stt.url, stt.language),
+            make_tts,
+            ServiceVAD(stt.url),
+            ServiceTurn(stt.url),
+        )
 
     def context(self, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
         return ToolCtx(
@@ -238,6 +247,7 @@ class Voice:
     tts: TtsFactory
     output: FrameProcessor
     vad: VADAnalyzer
+    turn: BaseTurnAnalyzer  # sözün bittiğine karar veren (§5.4)
     # Konuşmacı tanıma gelene kadar sözün kime ait olduğunu hattı kuran söyler (§10.4);
     # `None` sözü cihazın kişisine verir, yazılı kanaldaki gibi (kişisel değilse tanımsız).
     caller: CallerSource | None
@@ -273,6 +283,7 @@ def _conversation(
     session: str,
     speaker: CallerSource,
     vad: VADAnalyzer | None,
+    turn: BaseTurnAnalyzer | None,
     sound: ToolSound | None = None,
 ) -> _Conversation:
     config = core.config
@@ -336,6 +347,15 @@ def _conversation(
         LLMContext(tools=tools.schema()),
         user_params=LLMUserAggregatorParams(
             vad_analyzer=vad,
+            # Açık verilmezse Pipecat Smart Turn'ü çekirdekte yükler (§18). Yazılı hatta söz
+            # yoktur, mesaj tetikleyici kapısından gelir; bitişine karar verilecek bir şey yok.
+            user_turn_strategies=(
+                ExternalUserTurnStrategies()
+                if turn is None
+                else UserTurnStrategies(
+                    stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
+                )
+            ),
             user_mute_strategies=[HeardOnly(gate)] if vad is not None else [],
             empty_user_turn=NoRecoveryWhileAwaiting(confirmation),
         ),
@@ -361,7 +381,7 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
     speaker = voice.caller or (lambda _: requester)
     # Tool bitince sözsüz ses (§8.8); yazılı oturumda ses yok.
     sound = ToolSound()
-    c = _conversation(core, session, speaker, voice.vad, sound)
+    c = _conversation(core, session, speaker, voice.vad, voice.turn, sound)
     pipeline = Pipeline(
         [
             voice.input,
@@ -385,7 +405,7 @@ def text_session(
     """Bir yazılı bağlantının oturumu (§7). Yazının kime ait olduğunu cihaz söyler: kişisel
     cihazdan gelen yazı o kişinindir, doğrulanmamış ya da ortak cihazdan gelen tanımsızdır."""
     requester = core.connect(session, device)
-    c = _conversation(core, session, lambda _: requester, None)
+    c = _conversation(core, session, lambda _: requester, None, None)
     text_input = TextInput(
         session,
         core.sessions,

@@ -5,7 +5,12 @@ import struct
 from collections.abc import AsyncIterator
 from typing import Any
 
+import numpy as np
 import pytest
+from pipecat.audio.turn.smart_turn.base_smart_turn import (
+    SmartTurnParams,
+    SmartTurnTimeoutException,
+)
 from pipecat.frames.frames import (
     ErrorFrame,
     InputAudioRawFrame,
@@ -20,7 +25,7 @@ from pipecat.tests.utils import SleepFrame, run_test
 
 from fakes import FakeSpeech, speech_service
 from mayen.pipeline.sounds import ToolSound
-from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceVAD, split_parts
+from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceTurn, ServiceVAD, split_parts
 from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Part, Transcription
 
 
@@ -140,6 +145,51 @@ async def test_vad_without_a_service_hears_nothing() -> None:
     vad = ServiceVAD("http://127.0.0.1:9")
     vad.set_sample_rate(16000)
     assert await asyncio.to_thread(vad.voice_confidence, _frame(32767)) == 0.0
+
+
+def _ending(level: float) -> np.ndarray:
+    audio = np.zeros(16000, np.float32)
+    audio[-1] = level
+    return audio
+
+
+async def test_turn_takes_the_probability_from_the_service(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    turn = ServiceTurn(url)
+    turn.set_sample_rate(16000)
+    done = await asyncio.to_thread(turn._predict_endpoint, _ending(0.9))
+    open_ = await asyncio.to_thread(turn._predict_endpoint, _ending(0.1))
+    assert (done["prediction"], open_["prediction"]) == (1, 0)
+    assert done["probability"] == pytest.approx(0.9, abs=1e-3)
+    # Ses 16 bit PCM olarak, hızıyla gider.
+    assert service.requests == [({"sample_rate": "16000"}, 32000)] * 2
+
+
+async def test_turn_with_another_contract_version_is_not_finished(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    service.version = SCHEMA_VERSION + 1
+    turn = ServiceTurn(url)
+    turn.set_sample_rate(16000)
+    assert (await asyncio.to_thread(turn._predict_endpoint, _ending(0.9)))["prediction"] == 0
+
+
+async def test_turn_without_a_service_is_not_finished() -> None:
+    turn = ServiceTurn("http://127.0.0.1:9")
+    turn.set_sample_rate(16000)
+    assert (await asyncio.to_thread(turn._predict_endpoint, _ending(0.9)))["prediction"] == 0
+
+
+async def test_turn_waiting_past_the_silence_is_finished(fake: tuple[FakeSpeech, str]) -> None:
+    service, url = fake
+    service.turn_delay_s = 0.5
+    turn = ServiceTurn(url, params=SmartTurnParams(stop_secs=0.1))
+    turn.set_sample_rate(16000)
+    with pytest.raises(SmartTurnTimeoutException):
+        await asyncio.to_thread(turn._predict_endpoint, _ending(0.1))
 
 
 async def test_tool_sound_is_short_and_at_the_output_rate() -> None:
