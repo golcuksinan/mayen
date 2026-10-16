@@ -25,3 +25,10 @@ effects:                       # isteğe bağlı; bir ses `effect:` ile adını 
     highpass_hz: 400
     lowpass_hz: 3000
     gain: 1.5
+  wide_radio:                  # sesin kendisi telsizin yanında kalır
+    pre: {highpass_hz: 70, lowpass_hz: 9000, low_shelf_hz: 220, low_shelf_db: 6}
+    dry: 0.15                  # `pre` çıkışının telsize eklenen payı
+    echo: {input: 1.0, output: 0.85, delay_ms: 30, decay: 0.3}
+    highpass_hz: 400
+    lowpass_hz: 3000
+    gain: 1.25

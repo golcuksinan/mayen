@@ -54,9 +54,23 @@ class Echo(_Strict):
     decay: float
 
 
-class Effect(_Strict):
-    """ffmpeg'in `aecho` + `highpass` + `lowpass` + `volume` zincirinin karşılığı."""
+class Pre(_Strict):
+    """Telsizden önce sesin kendisine: bant süzgeci ve kalın uçta raf yükseltmesi."""
 
+    highpass_hz: float
+    lowpass_hz: float
+    low_shelf_hz: float
+    low_shelf_db: float
+
+
+class Effect(_Strict):
+    """ffmpeg'in `aecho` + `highpass` + `lowpass` + `volume` zincirinin karşılığı.
+
+    `pre` verilirse telsiz onun çıkışına uygulanır; `dry`, telsizin yanına karışan bu sesin
+    payıdır. İkisi yoksa ses bütünüyle telsizden geçer."""
+
+    pre: Pre | None = None
+    dry: float = 0.0
     echo: Echo
     highpass_hz: float
     lowpass_hz: float
@@ -115,8 +129,24 @@ class Radio:
             ]
         )
         self._zi = sosfilt_zi(self._sos) * 0.0
+        pre = effect.pre
+        if pre is not None:
+            self._pre_sos = np.vstack(
+                [
+                    butter(2, pre.highpass_hz, "highpass", fs=rate, output="sos"),
+                    butter(2, pre.lowpass_hz, "lowpass", fs=rate, output="sos"),
+                ]
+            )
+            self._pre_zi = sosfilt_zi(self._pre_sos) * 0.0
+            self._shelf_sos = butter(2, pre.low_shelf_hz, "lowpass", fs=rate, output="sos")
+            self._shelf_zi = sosfilt_zi(self._shelf_sos) * 0.0
+            self._shelf_gain = 10 ** (pre.low_shelf_db / 20) - 1
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
+        if self._e.pre is not None:
+            x, self._pre_zi = sosfilt(self._pre_sos, x, zi=self._pre_zi)
+            low, self._shelf_zi = sosfilt(self._shelf_sos, x, zi=self._shelf_zi)
+            x = x + low * self._shelf_gain
         echo = self._e.echo
         # Gecikmiş giriş, önceki parçanın kuyruğu ile bu parçanın başından oluşur.
         longer = np.concatenate([self._delay, x])
@@ -124,7 +154,7 @@ class Radio:
         self._delay = longer[len(x) :]
         y = (x * echo.input + delayed * echo.decay) * echo.output
         out, self._zi = sosfilt(self._sos, y, zi=self._zi)
-        return out * self._e.gain
+        return (out + x * self._e.dry) * self._e.gain
 
 
 def _pcm(x: np.ndarray) -> bytes:
