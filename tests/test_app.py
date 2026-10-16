@@ -293,6 +293,37 @@ def test_voice_session_is_wired(tmp_path: Path) -> None:
         assert "pipecat.audio.turn.smart_turn.local_smart_turn_v3" not in sys.modules
 
 
+def test_wake_word_is_read_and_wired(tmp_path: Path) -> None:
+    path = config_dir(tmp_path)
+    body = path.read_text(encoding="utf-8").replace(
+        "  # wake:", "  wake:\n    threshold: 0.5\n    follow_up_s: 3\n  # wake:"
+    )
+    path.write_text(body, encoding="utf-8")
+    config = load(path, {"MAYEN_MODEL": "local"})
+    with Database(tmp_path / "m.db") as db:
+        core = Core(config, db)
+        wake = core.wake()
+        assert wake is not None and wake.follow_up_s == 3
+        voice = Voice(
+            Passing(),
+            Passing(),
+            lambda _: Passing(),
+            Passing(),
+            SilentVAD(),
+            ServiceTurn("http://127.0.0.1:9"),
+            None,
+            LOCAL_DEVICE,
+            wake,
+        )
+        assert voice_session(core, "s1", voice).gate.session == "s1"
+
+
+def test_without_wake_word_in_the_config_there_is_none(tmp_path: Path) -> None:
+    config = load(config_dir(tmp_path), {"MAYEN_MODEL": "local"})
+    with Database(tmp_path / "m.db") as db:
+        assert Core(config, db).wake() is None
+
+
 def test_setup_sets_up_the_owner_once(tmp_path: Path) -> None:
     path = config_dir(tmp_path)
     args = ["--config", str(path), "setup", "--name", "Sinan", "--language", "tr"]

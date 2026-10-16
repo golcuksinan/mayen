@@ -10,11 +10,12 @@ kurar. Her yanıt `schema_version` taşır.
 VAD modeli (Silero, faster-whisper'ın içindeki) da burada yaşar: `/vad` akan sesin her parçasına
 bir konuşma olasılığı döner. Sözün başı ve sonu olasılıktan çekirdekte çıkar; `/transcribe`'a
 bitmiş bir söz gelir. Sözün bitip bitmediğini bulan model (Pipecat'in Smart Turn'ü) da burada:
-`/turn` sözün o ana kadarki sesine bir "bitti" olasılığı döner; eşik çekirdektedir. Sessizlik
-elemesi
-Whisper'ın kendi kuralıdır (faster-whisper'ın varsayılanı: `no_speech_prob` 0.6'nın üstünde
-**ve** `avg_logprob` -1'in altında olan parça atılır); tek sinyalle eleme cümle başlarını
-yutar.
+`/turn` sözün o ana kadarki sesine bir "bitti" olasılığı döner; eşik çekirdektedir. Wake word
+modeli de (openWakeWord) burada: `/wake` akan sesin her 80 ms'sine bir puan döner; söz,
+eğitilmiş modelin kendisidir, eşik çekirdektedir. Config'te `wake` yoksa uç selamdan önce
+kapanır. Sessizlik elemesi Whisper'ın kendi kuralıdır (faster-whisper'ın varsayılanı:
+`no_speech_prob` 0.6'nın üstünde **ve** `avg_logprob` -1'in altında olan parça atılır); tek
+sinyalle eleme cümle başlarını yutar.
 
 Çalıştırma:
 
@@ -43,6 +44,8 @@ hıza kendisi çevirir."""
 VAD_FRAME = 512
 """Silero'nun 16 kHz'de bir seferde baktığı örnek sayısı; bağlamı önceki parçanın son 64'ü."""
 VAD_CONTEXT = 64
+WAKE_FRAME = 1280
+"""openWakeWord'ün bir adımı (80 ms); ses özelliği bu boyda parçalarla ilerler."""
 VAD_RESET_FRAMES = 5 * SAMPLE_RATE // VAD_FRAME
 """Model durumu bu kadar parçada bir sıfırlanır (Pipecat'in Silero'suyla aynı, ~5 sn): durum
 uzun akışta sürüklenir, söz için birkaç saniyeden eskisi gerekmez."""
@@ -91,6 +94,32 @@ class Turn:
         return float(self._model._predict_endpoint(audio)["probability"])
 
 
+class WakeSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: Path  # eğitilmiş wake word modeli (.onnx)
+    melspectrogram: Path  # openWakeWord'ün ortak ses özelliği modeli
+    embedding: Path  # openWakeWord'ün ortak gömme modeli
+
+
+class Wake:
+    """Tek bir ses akışının wake word durumu; openWakeWord önceki parçaları kendisi tutar."""
+
+    def __init__(self, settings: WakeSettings) -> None:
+        from openwakeword.model import Model
+
+        self._model = Model(
+            wakeword_models=[str(settings.model)],
+            inference_framework="onnx",
+            melspec_model_path=str(settings.melspectrogram),
+            embedding_model_path=str(settings.embedding),
+        )
+        self._name = next(iter(self._model.models))
+
+    def __call__(self, pcm: bytes) -> float:
+        return float(self._model.predict(np.frombuffer(pcm, np.int16))[self._name])
+
+
 def vad_session() -> Any:  # noqa: ANN401
     import onnxruntime
     from faster_whisper.utils import get_assets_path
@@ -115,6 +144,7 @@ class Settings(BaseModel):
     model: str  # faster-whisper model klasörü ya da adı
     device: str = "cuda"
     compute_type: str = "float16"
+    wake: WakeSettings | None = None
 
 
 def preload_cuda() -> None:
@@ -210,6 +240,27 @@ def build(settings: Settings) -> FastAPI:
                     return
                 # Parça başına model döngüyü bekletmeyecek kadar kısa sürer.
                 await websocket.send_bytes(np.array(silero(pcm), "<f4").tobytes())
+        except WebSocketDisconnect:
+            pass
+
+    @app.websocket("/wake")
+    async def wake_word(websocket: WebSocket) -> None:
+        await websocket.accept()
+        if settings.wake is None:
+            await websocket.close(code=1011, reason="no wake word model")
+            return
+        await websocket.send_json(
+            {"schema_version": SCHEMA_VERSION, "sample_rate": SAMPLE_RATE, "frame": WAKE_FRAME}
+        )
+        wake = await asyncio.to_thread(Wake, settings.wake)
+        try:
+            while True:
+                pcm = await websocket.receive_bytes()
+                if len(pcm) != WAKE_FRAME * 2:
+                    await websocket.close(code=1003, reason=f"expected {WAKE_FRAME} samples")
+                    return
+                score = await asyncio.to_thread(wake, pcm)
+                await websocket.send_bytes(np.array(score, "<f4").tobytes())
         except WebSocketDisconnect:
             pass
 

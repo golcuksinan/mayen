@@ -16,7 +16,7 @@ from mayen.core.transcript import Transcript
 from mayen.pipeline.events import SessionTranscript
 from mayen.pipeline.session import Sessions
 from mayen.ports.events import Event, EventKind
-from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME
+from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, WAKE_FRAME
 from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
 
@@ -115,6 +115,7 @@ class FakeSpeech:
     vad_frame: int = VAD_FRAME
     vad_connections: int = 0
     turn_delay_s: float = 0.0
+    wake_model: bool = True
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -123,6 +124,7 @@ class FakeSpeech:
         app.router.add_post("/speak", self.speak)
         app.router.add_get("/vad", self.vad)
         app.router.add_post("/turn", self.turn)
+        app.router.add_get("/wake", self.wake)
         return app
 
     async def health(self, _: web.Request) -> web.Response:
@@ -158,6 +160,21 @@ class FakeSpeech:
                 "frame": self.vad_frame,
             }
         )
+        async for message in ws:
+            if message.type is WSMsgType.BINARY:
+                first = struct.unpack_from("<h", message.data)[0]
+                await ws.send_bytes(struct.pack("<f", first / 32767))
+        return ws
+
+    async def wake(self, request: web.Request) -> web.WebSocketResponse:
+        """Puan, parçanın ilk örneğinin büyüklüğü (VAD gibi); model yoksa selamsız kapanır."""
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        if not self.wake_model:
+            await ws.close(code=1011, message=b"no wake word model")
+            return ws
+        hello = {"schema_version": self.version, "sample_rate": self.sample_rate}
+        await ws.send_json({**hello, "frame": WAKE_FRAME})
         async for message in ws:
             if message.type is WSMsgType.BINARY:
                 first = struct.unpack_from("<h", message.data)[0]

@@ -27,6 +27,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.base_transport import BaseTransport
+from pipecat.turns.user_start import (
+    TranscriptionUserTurnStartStrategy,
+    VADUserTurnStartStrategy,
+)
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies, UserTurnStrategies
 
@@ -66,6 +70,7 @@ from mayen.pipeline.sounds import ToolSound
 from mayen.pipeline.speech import ServiceSTT, ServiceTTS, ServiceTurn, ServiceVAD
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
+from mayen.pipeline.wake import ServiceWake, WakeStart
 from mayen.ports.events import Clock
 from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
@@ -232,10 +237,25 @@ class Core:
             ServiceTurn(stt.url),
         )
 
+    def wake(self) -> "Wake | None":
+        """STT servisindeki wake word modelinin istemcisi; config'te yoksa her söz tur açar."""
+        stt = self.config.stt
+        if stt is None or stt.wake is None:
+            return None
+        return Wake(ServiceWake(stt.url, stt.wake.threshold), stt.wake.follow_up_s)
+
     def context(self, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
         return ToolCtx(
             self.notes, self.timers, self.recorder.clock, caller, self.defaults[spec.name]
         )
+
+
+@dataclass(frozen=True)
+class Wake:
+    """Wake word (§6): sesi modele akıtan ve asistan sustuktan sonraki takip penceresi."""
+
+    detector: FrameProcessor
+    follow_up_s: float
 
 
 @dataclass(frozen=True)
@@ -253,6 +273,8 @@ class Voice:
     caller: CallerSource | None
     # Ses birimlerinin cihazı; çekirdeğin kendi makinesindeyse `LOCAL_DEVICE` (§10.1).
     device: DeviceId | None
+    # Yoksa her söz tur açar (§5.1).
+    wake: Wake | None = None
 
 
 @dataclass
@@ -285,6 +307,7 @@ def _conversation(
     vad: VADAnalyzer | None,
     turn: BaseTurnAnalyzer | None,
     sound: ToolSound | None = None,
+    follow_up_s: float | None = None,
 ) -> _Conversation:
     config = core.config
     endpoint = config.models.endpoint(CONVERSATION_ROLE)
@@ -325,6 +348,16 @@ def _conversation(
         device_person=lambda: core.presence.personal(session),
         state=state,
     )
+    start = (
+        None
+        if follow_up_s is None
+        else [
+            # Pipecat'in varsayılan başlangıç stratejileri, önlerinde uyanıklık şartı.
+            WakeStart(lambda: gate.turn is not None, follow_up_s),
+            VADUserTurnStartStrategy(),
+            TranscriptionUserTurnStartStrategy(),
+        ]
+    )
     tools = AuthorizedTools(
         core.registry,
         lambda: core.table(session),
@@ -353,7 +386,7 @@ def _conversation(
                 ExternalUserTurnStrategies()
                 if turn is None
                 else UserTurnStrategies(
-                    stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
+                    start=start, stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
                 )
             ),
             user_mute_strategies=[HeardOnly(gate)] if vad is not None else [],
@@ -381,10 +414,13 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
     speaker = voice.caller or (lambda _: requester)
     # Tool bitince sözsüz ses (§8.8); yazılı oturumda ses yok.
     sound = ToolSound()
-    c = _conversation(core, session, speaker, voice.vad, voice.turn, sound)
+    wake = voice.wake
+    follow_up_s = None if wake is None else wake.follow_up_s
+    c = _conversation(core, session, speaker, voice.vad, voice.turn, sound, follow_up_s)
     pipeline = Pipeline(
         [
             voice.input,
+            *([] if wake is None else [wake.detector]),
             voice.stt,
             c.gate,
             c.confirmation,

@@ -52,6 +52,9 @@ panel:
 stt:
   url: http://127.0.0.1:8770
   # language: en               # dinleme dili; verilmezse model kendisi bulur
+  # wake:                       # wake word (§6); model STT servisinin config'inde. Yoksa her
+  #   threshold: 0.5            # söz tur açar; varsa yalnızca wake word, süren tur ve
+  #   follow_up_s: 3            # asistan sustuktan sonraki bu kadar saniyede başlayan söz
 tts:
   url: http://127.0.0.1:8771
   voices:                      # her çıkış dilinin sesi (§16.3): anahtar profildeki dil,

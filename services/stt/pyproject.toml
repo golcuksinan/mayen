@@ -18,6 +18,13 @@ dependencies = [
     # Sözün bitişini bulan model (Smart Turn) ve girdisini hazırlayan kod; çekirdekteki
     # Pipecat sürümüyle aynı, çekirdek modeli kendisi yüklemesin diye burada (§18).
     "pipecat-ai==1.12.0",
+    # Wake word modeli ve girdisini hazırlayan kod (ses özelliği + gömme modelleri); §6.
+    "openwakeword==0.6.0",
     "nvidia-cublas-cu12>=12.9",  # CTranslate2 CUDA 12 ister; sistemde olmayabilir
     "nvidia-cudnn-cu12>=9",
 ]
+
+[tool.uv]
+# openwakeword'ün Linux'ta istediği tflite-runtime yalnız tflite modeli içindir; model .onnx.
+override-dependencies = ["tflite-runtime; sys_platform == 'never'"]
+environments = ["sys_platform == 'linux'"]

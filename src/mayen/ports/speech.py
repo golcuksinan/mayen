@@ -17,6 +17,11 @@ Sözün bitişi: `POST /turn?sample_rate=<hız>` gövdesi bir sözün o ana kada
 (16 bit, tek kanal); yanıt JSON: `probability`, sözün bittiği olasılığı. Hız servisinkini
 tutmazsa servis 400 döner. Olasılığı karara çeviren eşik çekirdektedir.
 
+Wake word: `WS /wake`, `/vad` gibi: selam (`schema_version`, `sample_rate`, `frame`), sonra her
+`frame` örneklik parçaya sırasıyla bir puan (4 bayt, float32): bu parçayla biten sesin wake
+word olduğu olasılığı. Durum bağlantı başınadır. Serviste wake word modeli yoksa selamdan önce
+1011 koduyla kapanır. Eşik çekirdektedir.
+
 TTS: `POST /speak` gövdesi JSON: `voice` ve sırasıyla okunacak `parts`; her parçanın
 `language`'ı `null` ise sesin kendi dilidir, değilse parça o dilin okunuşuyla aynı sese
 verilir (§7). Yanıt `sample_rate` hızında ham PCM akışıdır; ilk ses üretilir üretilmez gelir.
@@ -35,9 +40,13 @@ TRANSCRIBE = "/transcribe"
 SPEAK = "/speak"
 VAD = "/vad"
 TURN = "/turn"
+WAKE = "/wake"
 
 VAD_FRAME = 512
 """VAD modelinin bir seferde baktığı örnek sayısı (16 kHz'de 32 ms): modelin özelliği."""
+
+WAKE_FRAME = 1280
+"""Wake word modelinin bir adımı (16 kHz'de 80 ms): modelin özelliği."""
 
 
 class SpeechContractError(Exception):
@@ -106,17 +115,19 @@ def parse_transcription(body: Any) -> Transcription:  # noqa: ANN401
 
 
 @dataclass(frozen=True)
-class VadHello:
+class StreamHello:
+    """Akış uçlarının (`/vad`, `/wake`) selamı: servisin hızı ve parça boyu."""
+
     sample_rate: int
     frame: int
 
 
-def parse_vad_hello(body: Any) -> VadHello:  # noqa: ANN401
+def parse_stream_hello(body: Any, endpoint: str) -> StreamHello:  # noqa: ANN401
     b = _versioned(body)
     try:
-        return VadHello(int(b["sample_rate"]), int(b["frame"]))
+        return StreamHello(int(b["sample_rate"]), int(b["frame"]))
     except (KeyError, TypeError, ValueError) as e:
-        raise SpeechContractError(f"vad: {e}") from e
+        raise SpeechContractError(f"{endpoint}: {e}") from e
 
 
 def parse_turn(body: Any) -> float:  # noqa: ANN401

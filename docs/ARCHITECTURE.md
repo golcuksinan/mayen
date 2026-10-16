@@ -230,6 +230,11 @@ bir **kaynak** taşır.
 (§10). STT'nin sürekli akması LLM'in her sese cevap vermesi demek değildir: gürültüyü
 tetikleyici katmanı eler.
 
+Wake word'süz söz ancak bir tur sürerken ya da asistan sustuktan sonraki takip penceresinde
+tur açar; pencere sözün başladığı anla ölçülür, yazıya dökülmesiyle değil: son anında başlayan
+söz de pencerenindir. Süre config'tedir; pencerede başkasına söylenen söz de tur açar, onu
+ayırmak karar modelinin işidir (§16.10).
+
 ### 5.2 Oturum ve eşzamanlılık
 
 - Her tur bir oturum kimliği ve bir `turn_id` taşır. `turn_id` sayaç değil uuid'dir: kayıtlar
@@ -337,7 +342,7 @@ kuralına uyar (§8.8).
 | **Ses girişi** | Çok tüketicili akış (STT + kayıt + konuşmacı tanıma). Çalınan sesi referans olarak alabilir |
 | **Echo cancellation** | Donanımda, istemcide ya da yazılımda; hattın ses girişinden önce. AEC yoksa istemci yarım dubleks çalışır (asistan konuşurken mikrofon kapalı); bu söz kesmeyi öldürür, yani bir kaçış yolu, çözüm değil |
 | **Sürekli STT** | STT sürekli çalışır, transkript her zaman kaydedilir. Sunucuya sürekli ses akar; taşıma biçimi **AÇIK** (§16.9) |
-| **Wake word** | Bir tetikleyici adaptörü. Motor, kelime ve nerede çalıştığı **AÇIK** (§16.8) |
+| **Wake word** | Bir tetikleyici adaptörü; sunucuda, ses girişinden beslenir: ses zaten sürekli sunucuya akar, istemci her cihaz için yeniden yazılmaz. Model ve eşik config'tedir; söz, eğitilmiş modelin kendisidir |
 | **Konuşmacı tanıma** | Bir adaptör. Sonucu bir **skordur**, iddia değil; skor bir eşleşme seviyesine çevrilir. Bağlamda `speaker` alanı olur ve yetkilendirmede profile eşlenir |
 | **Genel medya** | Duyu girişi sese özel değil. Kayıt deposu medya türünden bağımsız, `media_id` referansı, LLM mesajında medya parçası |
 | **Kamera ve vision** | Medya hattının adaptörleri |
@@ -1205,7 +1210,7 @@ Cevaplanmadan uygulanmaz; yerine varsayım konmaz (§0). Numaralar sabittir.
    eşleşme"nin tanımı.
 6. ✅ §10.3
 7. ✅ §10.3
-8. **Wake word:** motor, kelime, istemcide mi sunucuda mı çalışacağı.
+8. ✅ §6
 9. **Ses taşıma biçimi:** PCM mi sıkıştırma mı. Sürekli STT yüzünden ses sürekli akar; karar
    bant genişliği ölçümüne bağlı.
 10. **Karar modeli:** model, profillerdeki dillerde başarımı, eşikler, hangi noktalarda devreye gireceği.

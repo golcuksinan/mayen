@@ -5,3 +5,8 @@ port: 8770
 model: large-v3          # faster-whisper model adı ya da indirilmiş model klasörü
 device: cuda             # cpu da olur
 compute_type: float16    # cpu'da int8
+# Wake word (§6), isteğe bağlı: openWakeWord modeli ve ortak iki modeli. Yoksa /wake kapalıdır.
+# wake:
+#   model: /yol/hey_mayen.onnx
+#   melspectrogram: /yol/melspectrogram.onnx
+#   embedding: /yol/embedding_model.onnx

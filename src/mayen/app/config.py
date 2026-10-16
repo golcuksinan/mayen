@@ -75,11 +75,20 @@ class PanelConfig(_Strict):
     dist: Path | None = None  # derlenmiş panel; verilirse çekirdek onu `/panel/` altında sunar
 
 
+class WakeConfig(_Strict):
+    """Wake word (§6); model STT servisinde, sözü de odur."""
+
+    threshold: float = Field(gt=0, lt=1)  # modelin puanı bunu geçince uyanır
+    follow_up_s: float = Field(ge=0)  # asistan sustuktan sonra wake word'süz söz başlama süresi
+
+
 class SttConfig(_Strict):
     """STT model servisi (§3); model ve boyutu servisin kendi config'inde."""
 
     url: str
     language: str | None = None  # dinleme dili; verilmezse model kendisi bulur
+    # Yoksa her söz tur açar; varsa yalnızca wake word, süren tur ve takip penceresi (§5.1).
+    wake: WakeConfig | None = None
 
 
 class TtsConfig(_Strict):

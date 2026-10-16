@@ -58,9 +58,9 @@ from mayen.ports.speech import (
     Part,
     SpeechContractError,
     parse_health,
+    parse_stream_hello,
     parse_transcription,
     parse_turn,
-    parse_vad_hello,
     speak_request,
 )
 
@@ -134,7 +134,7 @@ class ServiceVAD(VADAnalyzer):
         self._retry_at = time.monotonic() + 1.0
         ws = connect(self._url, open_timeout=2.0, legacy=True)
         try:
-            hello = parse_vad_hello(json.loads(ws.recv(timeout=2.0)))
+            hello = parse_stream_hello(json.loads(ws.recv(timeout=2.0)), "vad")
             if (hello.sample_rate, hello.frame) != (self.sample_rate, VAD_FRAME):
                 raise SpeechContractError(
                     f"vad: service is {hello.sample_rate} Hz / {hello.frame} samples, "

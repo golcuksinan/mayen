@@ -139,7 +139,15 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
                 stt, tts, vad, turn = core.speech()
                 # Konuşmacı tanıma yok: söz cihazın kişisinindir (`caller=None`).
                 parts = Voice(
-                    transport.input(), stt, tts, transport.output(), vad, turn, None, device
+                    transport.input(),
+                    stt,
+                    tts,
+                    transport.output(),
+                    vad,
+                    turn,
+                    None,
+                    device,
+                    core.wake(),
                 )
                 return voice_session(core, session, parts)
 
