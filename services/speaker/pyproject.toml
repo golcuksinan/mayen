@@ -1,0 +1,23 @@
+# Mayen'in konuşmacı servisi; çekirdeğin ortamından ayrı bir proje. PyTorch ve SpeechBrain
+# birkaç gigabayt ve çekirdeğin kapılarının hiçbiri onlara bakmıyor. Çalıştırma:
+#
+#     uv run --project services/speaker python services/speaker/main.py <config.yaml>
+[project]
+name = "mayen-speaker"
+version = "0.1.0"
+description = "Mayen'in konuşmacı servisi: ses izi, kendi sürecinde"
+license = "Apache-2.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    # ECAPA-TDNN (§6); v1'de bu sürümlerle çalıştı.
+    "speechbrain==1.1.0",
+    "torch==2.8.0",
+    "torchaudio==2.8.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "numpy>=2",
+    "pyyaml>=6.0.3",
+]
+
+[tool.uv]
+environments = ["sys_platform == 'linux'"]

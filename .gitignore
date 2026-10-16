@@ -19,6 +19,7 @@
 /services/*
 !/services/stt/
 !/services/tts/
+!/services/speaker/
 /services/*/*
 !/services/*/main.py
 !/services/*/pyproject.toml

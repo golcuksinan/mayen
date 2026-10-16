@@ -1,0 +1,7 @@
+# Konuşmacı servisinin config örneği. Kopyalayıp `speaker.yaml` adıyla düzenleyin.
+# Çekirdeğin config'indeki `speaker.url` bu adresi gösterir.
+host: 127.0.0.1
+port: 8772
+model: speechbrain/spkrec-ecapa-voxceleb   # Hugging Face kimliği ya da indirilmiş klasör
+savedir: ~/.cache/mayen/speaker             # modelin yerel kopyası
+device: cpu              # cuda da olur; işlemcide 3 sn'lik söz ~25 ms (16 Ekim 2026 ölçümü)
