@@ -346,7 +346,7 @@ kuralına uyar (§8.8).
 | **Konuşmacı tanıma** | Bir adaptör. Sonucu bir **skordur**, iddia değil; skor bir eşleşme seviyesine çevrilir. Bağlamda `speaker` alanı olur ve yetkilendirmede profile eşlenir |
 | **Genel medya** | Duyu girişi sese özel değil. Kayıt deposu medya türünden bağımsız, `media_id` referansı, LLM mesajında medya parçası |
 | **Kamera ve vision** | Medya hattının adaptörleri |
-| **Girdi eleme** | Metin seviyesinde (boş, çok kısa, düşük STT skoru). Karar modelini kabul edecek şekilde tasarlıdır |
+| **Girdi eleme** | Metin seviyesinde: boş metin ve düşük STT skoru (Whisper'ın kendi kuralı, iki sinyal birlikte: `no_speech_prob` > 0.6 ve `avg_logprob` < -1). Uzunluk kuralı kaynağı bulunana kadar yoktur; tek kelimelik cevap onayda gereklidir. Asıl süzgeç wake word'dür (§5.1): uyanık değilken duyulan modele gitmez. Karar modelini kabul edecek şekilde tasarlıdır |
 
 **Kimlik bilgisi kullanıcının metnine yazılmaz.** Kullanıcı metni ve kimlik ayrı alanlarda
 taşınır; kimlik prompt'a yalnızca sistemin kontrol ettiği bağlam bloğunda girer.
