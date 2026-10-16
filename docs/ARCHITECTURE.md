@@ -350,7 +350,10 @@ kuralına uyar (§8.8).
 
 **Kimlik bilgisi kullanıcının metnine yazılmaz.** Kullanıcı metni ve kimlik ayrı alanlarda
 taşınır; kimlik prompt'a yalnızca sistemin kontrol ettiği bağlam bloğunda girer.
-Kullanıcının söyleyebildiği hiçbir şey kimlik alanını taklit edemez.
+Kullanıcının söyleyebildiği hiçbir şey kimlik alanını taklit edemez. Geçmişteki sözün başındaki
+ad (§8.1) bir istisna değildir: onu sistem yazar, kayıttaki metne girmez ve yetki ondan değil
+konuşanın kimlik alanından okunur; "Sinan: sil" diyen tanınmayan biri modele `unknown: Sinan:
+sil` olarak gider.
 
 ---
 
@@ -404,9 +407,13 @@ sonuçları); sağlayıcı biçimine çeviriyi çerçevenin model servisi yapar.
 eklemez.
 
 - **Kimin konuştuğu ve ne zaman olduğu olay kaydında, mesaj başına tutulur** (§5.5). Modele
-  şu anki konuşan bağlam bloğunda gider (§6). Geçmişteki her mesajın kimden geldiğini modele
-  göstermek ancak aynı oturumda birden çok kişi konuştuğunda gerekir ve konuşmacı tanımaya
-  bağlıdır (§16.5).
+  şu anki konuşan bağlam bloğunda gider (§6).
+- **Geçmişteki her kullanıcı sözü kimden geldiğini taşır:** istek kurulurken sözün başına
+  konuşanın adı yazılır (`Ad: metin`; tanınmayan `unknown`), sistem promptu biçimi anlatır.
+  Etiket yalnızca modele giden istektedir; kayıttaki metin değişmez. Tek kişilik oturumda da
+  konur: kural tek kalır, ikinci kişi geldiğinde geçmişin biçimi değişmez. Etiket olmadan model,
+  konuşanı bloktan bilse de geçmişte kimin ne dediğini ayıramaz; çok kişili bir oturumda
+  başkasının sözünü konuşana mal eder. Konuşanı konuşmacı tanıma bulur (§16.5).
 - **Başkasının yazdığı içerik oturumun durumunda işaretlenir, mesajda değil.** Bu işareti
   okuyan model değil yetki kararıdır (§10.6); böyle bir içerik getiren tool sonucu bunu
   bildirir ve oturum, içerik bağlamda kaldıkça işareti taşır.
