@@ -20,6 +20,7 @@ class Capability(StrEnum):
 
     SPEAKER = "speaker"
     MEDIA = "media"
+    APPS = "apps"
 
 
 class MessageType(StrEnum):

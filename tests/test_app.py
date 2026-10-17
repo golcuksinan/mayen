@@ -128,6 +128,7 @@ def test_main_exits_with_the_config_code(
 
 def test_skills_are_discovered_from_the_folder() -> None:
     assert sorted(s.name for s in discover_skills()) == [
+        "apps",
         "audio_output",
         "media",
         "note_add",

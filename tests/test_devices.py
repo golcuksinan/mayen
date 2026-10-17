@@ -3,18 +3,19 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from fakes import FakeClock
 from mayen.app.wiring import ToolCtx
-from mayen.clients.desktop import CommandError, Desktop, Media, Speaker
+from mayen.clients.desktop import Apps, CommandError, Desktop, Media, Speaker, load_apps
 from mayen.clients.mic import respond
 from mayen.core.devices import NO_DEVICE, DeviceLink, Devices
 from mayen.ports.devices import Capabilities, Capability, Command, CommandResult, decode_client
 from mayen.ports.tools import Caller, Role, Status, ToolResult
-from mayen.skills import audio_output, media, volume
+from mayen.skills import apps, audio_output, media, volume
 
 OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
 
@@ -321,3 +322,47 @@ async def test_media_skill_sends_the_action_and_the_player() -> None:
     await media.run(media.Args(action=media.Action.NEXT, player="vlc"), ctx(device))
     await media.run(media.Args(action=media.Action.STATUS), ctx(device))
     assert device.calls == [("next", {"player": "vlc"}), ("status", {})]
+
+
+class Spawned:
+    def __init__(self) -> None:
+        self.argv: list[list[str]] = []
+
+    async def __call__(self, argv: list[str]) -> None:
+        self.argv.append(argv)
+
+
+async def test_apps_open_only_what_the_table_names() -> None:
+    spawned = Spawned()
+    table = Apps({"Steam": "steam", "Counter-Strike 2": "Counter-Strike 2"}, spawned)
+    listed = await table.handle("list", {})
+    assert listed is not None and listed.data == {"apps": ["Counter-Strike 2", "Steam"]}
+    opened = await table.handle("open", {"app": "counter-strike 2"})  # büyük-küçük harf önemsiz
+    assert opened is not None and opened.data == {"opened": "Counter-Strike 2"}
+    # Ad argv'nin ayrı bir öğesi; boşluklu kimlik kabukta bölünmez (§9.4).
+    assert spawned.argv == [["gtk-launch", "Counter-Strike 2"]]
+    refused = await table.handle("open", {"app": "konsole; rm -rf ~"})
+    assert refused is not None and refused.status is Status.ERROR
+    assert refused.data["apps"] == ["Counter-Strike 2", "Steam"]
+    unnamed = await table.handle("open", {})
+    assert unnamed is not None and unnamed.status is Status.ERROR
+    assert len(spawned.argv) == 1
+
+
+def test_an_empty_table_declares_no_capability(tmp_path: Path) -> None:
+    assert load_apps(tmp_path / "missing.yaml") == {}
+    assert not Apps({}).available()
+    broken = tmp_path / "apps.yaml"
+    broken.write_text("- steam\n- obs\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_apps(broken)
+    good = tmp_path / "good.yaml"
+    good.write_text("steam: steam\nobs: com.obsproject.Studio\n", encoding="utf-8")
+    assert load_apps(good) == {"steam": "steam", "obs": "com.obsproject.Studio"}
+
+
+async def test_apps_skill_sends_the_action_and_the_name() -> None:
+    device = Device({"open": ToolResult(Status.OK), "list": ToolResult(Status.OK)})
+    await apps.run(apps.Args(action=apps.Action.OPEN, app="Steam"), ctx(device))
+    await apps.run(apps.Args(action=apps.Action.LIST), ctx(device))
+    assert device.calls == [("open", {"app": "Steam"}), ("list", {})]

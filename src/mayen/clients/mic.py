@@ -19,18 +19,22 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import sounddevice as sd  # type: ignore[import-untyped]  # tip bilgisi yok
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import WebSocketException
 
-from mayen.clients.desktop import Desktop
+from mayen.clients.desktop import Desktop, load_apps
 from mayen.ports.channels import VoiceHello
 from mayen.ports.devices import Capabilities, Command, CommandResult
 from mayen.ports.tools import Status
 
 DEFAULT_URL = "ws://127.0.0.1:8765/voice"
+# Açılabilecek uygulamaların tablosu bu cihazda durur (§9.4, §9.7): her cihazda başka uygulama
+# kuruludur.
+DEFAULT_APPS = Path.home() / ".config" / "mayen" / "apps.yaml"
 
 BLOCK_S = 0.02
 """Mikrofondan okunan parça: VAD'ın ve ağın gördüğü en küçük gecikme."""
@@ -129,14 +133,14 @@ class Commands:
                 print(f"[could not send a command result: {e}]", file=sys.stderr)
 
 
-async def run(url: str, traffic: Traffic) -> None:
+async def run(url: str, traffic: Traffic, apps: Path = DEFAULT_APPS) -> None:
     loop = asyncio.get_running_loop()
     microphone: asyncio.Queue[bytes] = asyncio.Queue()
 
     def captured(data: Any, _frames: int, _time: Any, _status: Any) -> None:  # noqa: ANN401
         loop.call_soon_threadsafe(microphone.put_nowait, bytes(data))
 
-    desktop = Desktop()
+    desktop = Desktop(apps=load_apps(apps))
     async with connect(url) as ws:
         hello = VoiceHello.decode(await ws.recv())
         capabilities = desktop.capabilities()
@@ -172,11 +176,12 @@ async def run(url: str, traffic: Traffic) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mayen-mic")
     parser.add_argument("url", nargs="?", default=DEFAULT_URL)
+    parser.add_argument("--apps", type=Path, default=DEFAULT_APPS, help="app table (YAML)")
     args = parser.parse_args(argv)
     traffic = Traffic()
     code = 0
     try:
-        asyncio.run(run(args.url, traffic))
+        asyncio.run(run(args.url, traffic, args.apps))
     except KeyboardInterrupt:
         pass
     except (OSError, ValueError, WebSocketException, sd.PortAudioError) as e:

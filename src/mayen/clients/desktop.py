@@ -7,13 +7,19 @@ argv'nin ayrı bir öğesi olarak durur.
 Hoparlör, varsayılan çıkış cihazıdır; `pactl` ile (PipeWire'da da çalışır). Medya, MPRIS
 arayüzünü sunan oynatıcılardır; `busctl` ile oturum veri yolundan. Okumalar JSON çıktısından
 yapılır: düz metin çıktısı yerel ayara göre değişir.
+
+Uygulamalar, sahibin bu cihazdaki tablosundan açılır (§9.4): ad → `.desktop` kimliği. Model
+yalnızca tablodaki bir adı seçer; uygulama sistemin kendi tanımıyla `gtk-launch` ile açılır.
 """
 
 import asyncio
 import json
 import shutil
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Any, Protocol
+
+import yaml
 
 from mayen.ports.devices import Capability, Command, CommandResult
 from mayen.ports.tools import Status
@@ -36,6 +42,32 @@ async def run_argv(argv: list[str]) -> str:
     if process.returncode != 0:
         raise CommandError(err.decode(errors="replace").strip() or f"{argv[0]} failed")
     return out.decode()
+
+
+async def spawn_argv(argv: list[str]) -> None:
+    """Başlatır ve başlatıcının bitmesini bekler; çıktılar kapalı. Açılan uygulama boruları
+    miras alsaydı, okuyan taraf uygulama kapanana kadar beklerdi."""
+    process = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+    )
+    if await process.wait() != 0:
+        raise CommandError(f"{argv[0]} exited with {process.returncode}")
+
+
+type Spawn = Callable[[list[str]], Awaitable[None]]
+
+
+def load_apps(path: Path) -> dict[str, str]:
+    """Tablo dosyası; yoksa boş tablo (yetenek bildirilmez). Bozuk dosya `ValueError`'dur:
+    sessizce boş sayılan bir tablo, sahibin yazdığı uygulamaların açılmaması olurdu."""
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in data.items()
+    ):
+        raise ValueError(f"{path}: expected 'name: desktop-entry-id' lines")
+    return dict(data)
 
 
 class Executor(Protocol):
@@ -196,13 +228,44 @@ class Media:
         return CommandResult("", Status.OK, data)
 
 
+class Apps:
+    def __init__(self, table: Mapping[str, str], spawn: Spawn = spawn_argv) -> None:
+        self._table = {name.casefold(): (name, entry) for name, entry in table.items()}
+        self._spawn = spawn
+
+    def available(self) -> bool:
+        return bool(self._table) and shutil.which("gtk-launch") is not None
+
+    async def handle(self, action: str, args: Mapping[str, Any]) -> CommandResult | None:
+        names = sorted(name for name, _ in self._table.values())
+        if action == "list":
+            return CommandResult("", Status.OK, {"apps": names})
+        if action != "open":
+            return None
+        if not args.get("app"):
+            return CommandResult("", Status.ERROR, {"apps": names}, "say which app to open")
+        found = self._table.get(str(args["app"]).casefold())
+        if found is None:
+            return CommandResult(
+                "", Status.ERROR, {"apps": names}, f"{args['app']!r} is not in the list"
+            )
+        name, entry = found
+        await self._spawn(["gtk-launch", entry])
+        return CommandResult("", Status.OK, {"opened": name})
+
+
 class Desktop:
     """Bu makinenin yürütücüleri; yetenek, yürütücüsü çalışabiliyorsa bildirilir."""
 
-    def __init__(self, executors: Mapping[Capability, Executor] | None = None) -> None:
+    def __init__(
+        self,
+        executors: Mapping[Capability, Executor] | None = None,
+        apps: Mapping[str, str] | None = None,
+    ) -> None:
         default: dict[Capability, Executor] = {
             Capability.SPEAKER: Speaker(),
             Capability.MEDIA: Media(),
+            Capability.APPS: Apps(apps or {}),
         }
         self._executors = default if executors is None else dict(executors)
 
