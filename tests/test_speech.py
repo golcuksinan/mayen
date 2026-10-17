@@ -136,6 +136,25 @@ async def test_a_word_that_ended_just_before_the_turn_opens_its_start(
     assert size > 2 * _SEGMENT
 
 
+async def test_a_turn_end_without_speech_transcribes_nothing(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    silence = InputAudioRawFrame(audio=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1)
+    down, _ = await run_test(
+        ServiceSTT(url, "en", join_turn_s=0),
+        frames_to_send=[
+            TurnEndSignal(),  # tur yokken
+            UserStartedSpeakingFrame(),
+            silence,
+            TurnEndSignal(),  # turda ama söz duyulmadı
+            SleepFrame(0.3),
+        ],
+    )
+    assert not [f for f in down if isinstance(f, TranscriptionFrame)]
+    assert _transcribed(service) == []
+
+
 async def test_outside_a_turn_each_word_is_still_transcribed(
     fake: tuple[FakeSpeech, str],
 ) -> None:

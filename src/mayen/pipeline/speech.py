@@ -322,6 +322,7 @@ class ServiceSTT(STTService):
         self._audio = bytearray()  # tur sürerken turun, yoksa sürmekte olan sözün sesi
         self._speaking = False
         self._in_turn = False
+        self._heard = False  # turun sesinde VAD bir söz duydu mu
         self._loose: list[bytes] = []  # tur dışında bitmiş, bekleyen sözler
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._worker: asyncio.Task[None] | None = None
@@ -361,6 +362,7 @@ class ServiceSTT(STTService):
         await super().process_frame(frame, direction)
         if isinstance(frame, VADUserStartedSpeakingFrame):
             self._speaking = True
+            self._heard = True
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speaking = False
             if not self._in_turn:
@@ -368,11 +370,16 @@ class ServiceSTT(STTService):
                 self._audio.clear()
         elif isinstance(frame, UserStartedSpeakingFrame):
             self._in_turn = True
+            self._heard = self._speaking or bool(self._loose)
             self._audio[:0] = b"".join(self._loose)
             self._loose.clear()
-        elif isinstance(frame, TurnEndSignal):
-            await self._release(bytes(self._audio))
+        elif isinstance(frame, TurnEndSignal) and self._in_turn:
+            # Söz duyulmamış ses yazıya dökülmez: Whisper sessizlikten metin uydurur, uydurulan
+            # metin Pipecat'te yeni bir tur açar ve tur yine buraya döner.
+            if self._heard:
+                await self._release(bytes(self._audio))
             self._audio.clear()
+            self._heard = self._speaking
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._in_turn = False
             if not self._speaking:
