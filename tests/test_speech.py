@@ -2,7 +2,9 @@
 
 import asyncio
 import struct
+import wave
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -153,6 +155,22 @@ async def test_a_turn_end_without_speech_transcribes_nothing(
     )
     assert not [f for f in down if isinstance(f, TranscriptionFrame)]
     assert _transcribed(service) == []
+
+
+async def test_each_transcribed_word_is_recorded_when_asked(
+    fake: tuple[FakeSpeech, str], tmp_path: Path
+) -> None:
+    _, url = fake
+    record = tmp_path / "sozler"
+    await run_test(
+        ServiceSTT(url, "en", join_turn_s=0, record_dir=record),
+        frames_to_send=[*_speech(), SleepFrame(0.3)],
+    )
+    [audio] = record.glob("*.wav")
+    with wave.open(str(audio)) as w:
+        assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (16000, 1, 2)
+        assert w.getnframes() >= 2 * 1600
+    assert audio.with_suffix(".txt").read_text(encoding="utf-8") == "hello\n"
 
 
 async def test_outside_a_turn_each_word_is_still_transcribed(

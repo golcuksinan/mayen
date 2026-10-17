@@ -89,6 +89,10 @@ class SttConfig(_Strict):
     language: str | None = None  # dinleme dili; verilmezse model kendisi bulur
     # Yoksa her söz tur açar; varsa yalnızca wake word, süren tur ve takip penceresi (§5.1).
     wake: WakeConfig | None = None
+    # Varsa yazıya dökülen her sözün sesi (WAV) ve metni buraya yazılır; config'e göre yol.
+    # Sahibin açık isteğiyle, izi yeniden çıkarmak için (§10.4: hangi sözün kimin olduğunu sahip
+    # seçer). Silinmez, saklama süresi yok (§16.15 açık).
+    record_dir: Path | None = None
 
 
 class SpeakerConfig(_Strict):
@@ -177,6 +181,12 @@ def _panel(config: Path, panel: PanelConfig) -> PanelConfig:
     return panel.model_copy(update={"dist": _relative(config, panel.dist)})
 
 
+def _stt(config: Path, stt: SttConfig | None) -> SttConfig | None:
+    if stt is None or stt.record_dir is None:
+        return stt
+    return stt.model_copy(update={"record_dir": _relative(config, stt.record_dir)})
+
+
 def _tts(tts: TtsConfig | None, default_language: str) -> TtsConfig | None:
     if tts is not None and default_language not in tts.voices:
         # Tanınmayan kişiye konuşulan dilin sesi yoksa ilk yabancıya asistan susar.
@@ -201,7 +211,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             loop=file.loop,
             channel=file.channel,
             panel=_panel(path, file.panel),
-            stt=file.stt,
+            stt=_stt(path, file.stt),
             tts=_tts(file.tts, file.default_language),
             speaker=file.speaker,
             system_role=file.system_role,

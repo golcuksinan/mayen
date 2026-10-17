@@ -23,7 +23,10 @@ import re
 import time
 import urllib.error
 import urllib.request
+import wave
 from collections.abc import AsyncGenerator, Callable, Mapping
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -148,6 +151,21 @@ def split_parts(text: str, open_tag: str | None) -> tuple[list[Part], str | None
     if position < len(text):
         parts.append(Part(open_tag, text[position:]))
     return [p for p in parts if p.text.strip()], open_tag
+
+
+def _record(directory: Path, pcm: bytes, sample_rate: int, text: str) -> None:
+    """Sözün sesi `<zaman>.wav`, metni yanında `<zaman>.txt`; adı yerel zamandır."""
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        stem = directory / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        with wave.open(str(stem.with_suffix(".wav")), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(sample_rate)
+            w.writeframes(pcm)
+        stem.with_suffix(".txt").write_text(text + "\n", encoding="utf-8")
+    except OSError as e:
+        log.error("recording the words: %s", e)  # kayıt düşse de söz yazıya dökülmüş olur
 
 
 async def _health(http: aiohttp.ClientSession, url: str) -> Health:
@@ -309,12 +327,14 @@ class ServiceSTT(STTService):
         language: str | None,
         speaker: ServiceSpeaker | None = None,
         join_turn_s: float = _JOIN_TURN_S,
+        record_dir: Path | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         super().__init__(settings=STTSettings(model=None, language=None), **kwargs)
         self._url = url.rstrip("/")
         self._language = language  # dinleme dili; çıkış dilinden bağımsız (§8.6)
         self._join_turn_s = join_turn_s
+        self._record_dir = record_dir  # her sözün sesi ve metni (`SttConfig.record_dir`)
         self._speaker = speaker
         self._http: aiohttp.ClientSession | None = None
         self._rate = 0
@@ -431,9 +451,14 @@ class ServiceSTT(STTService):
         )
         try:
             async for frame in self._transcribe(audio):
-                if voice is not None and isinstance(frame, TranscriptionFrame):
-                    frame.metadata[VOICE] = await voice
-                    frame.metadata[VOICE_S] = len(audio) / 2 / self.sample_rate
+                if isinstance(frame, TranscriptionFrame):
+                    if voice is not None:
+                        frame.metadata[VOICE] = await voice
+                        frame.metadata[VOICE_S] = len(audio) / 2 / self.sample_rate
+                    if self._record_dir is not None:
+                        await asyncio.to_thread(
+                            _record, self._record_dir, audio, self.sample_rate, frame.text
+                        )
                 yield frame
         finally:
             if voice is not None and not voice.done():

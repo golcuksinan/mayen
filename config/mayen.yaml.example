@@ -55,6 +55,7 @@ stt:
   # wake:                       # wake word (§6); model STT servisinin config'inde. Yoksa her
   #   threshold: 0.5            # söz tur açar; varsa yalnızca wake word, süren tur ve
   #   follow_up_s: 3            # asistan sustuktan sonraki bu kadar saniyede başlayan söz
+  # record_dir: kayitlar/sozler  # her sözün sesi (WAV) ve metni; izi yeniden çıkarmak için
 tts:
   url: http://127.0.0.1:8771
   voices:                      # her çıkış dilinin sesi (§16.3): anahtar profildeki dil,

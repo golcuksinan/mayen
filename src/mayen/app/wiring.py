@@ -269,7 +269,10 @@ class Core:
         speaker = self.config.speaker
         return (
             ServiceSTT(
-                stt.url, stt.language, None if speaker is None else ServiceSpeaker(speaker.url)
+                stt.url,
+                stt.language,
+                None if speaker is None else ServiceSpeaker(speaker.url),
+                record_dir=stt.record_dir,
             ),
             make_tts,
             ServiceVAD(stt.url),
