@@ -12,6 +12,7 @@ if TYPE_CHECKING:  # döngü: bu portlar `ports.tools`'un sözlüğünü kullan�
     from mayen.ports.events import Clock
     from mayen.ports.notes import NoteStore
     from mayen.ports.timers import TimerStore
+    from mayen.ports.weather import WeatherSource
 
 
 class Effect(StrEnum):
@@ -126,6 +127,17 @@ class ToolContext(Protocol):
         ...
 
     @property
+    def weather(self) -> "WeatherSource | None":
+        """Hava durumu kaynağı; yapılandırılmamışsa `None` ve skill kataloğa girmez."""
+        ...
+
+    @property
+    def location(self) -> str | None:
+        """Çağıranın kendi profilindeki varsayılan konum; tanınmayanın yoktur. Başkasının
+        konumu skill'e hiç verilmez: konum kişiseldir (§9.1)."""
+        ...
+
+    @property
     def caller(self) -> Caller:
         """Kaydın kime ait olduğu buradan yazılır; yetkiye çekirdek bakar, skill değil."""
         ...
@@ -157,10 +169,12 @@ class ToolSpec[A: BaseModel]:
 
 
 @dataclass(frozen=True)
-class SkillTables:
-    """Sahibin config'teki tabloları; seçenekleri bunlardan gelen skill tanımını açılışta
-    kurar. Seçenek katalogda görünür (§9.1): liste yalnızca gövdede olsaydı model hangi
-    değerlerin var olduğunu bilmez, olmayan bir değer de yazabilirdi."""
+class SkillConfig:
+    """Tanımı config'e bağlı skill'lerin gördüğü kısım; tanım açılışta bir kez kurulur.
+    Seçenekler katalogda görünür (§9.1): liste yalnızca gövdede olsaydı model hangi
+    değerlerin var olduğunu bilmez, olmayan bir değer de yazabilirdi. Yapılandırılmamış bir
+    skill kataloğa girmez: yapamayacağı bir şeyi modele vaat ederdi."""
 
     # Açılabilecek uygulamalar (§9.4): ad → cihazdaki `.desktop` kimliği.
     apps: Mapping[str, str] = field(default_factory=dict)
+    weather: bool = False  # hava durumu kaynağı yapılandırıldı mı

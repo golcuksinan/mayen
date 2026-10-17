@@ -40,7 +40,7 @@ from mayen.pipeline.speech import ServiceTurn
 from mayen.ports.channels import VoiceHello
 from mayen.ports.devices import Capabilities, Capability, Command, CommandResult
 from mayen.ports.people import LOCAL_DEVICE, DeviceId
-from mayen.ports.tools import Caller, Effect, Role, Sensitivity, SkillTables, Status
+from mayen.ports.tools import Caller, Effect, Role, Sensitivity, SkillConfig, Status
 from mayen.ports.triggers import Fate, Priority, TriggerSource
 from mayen.skills import (
     note_add,
@@ -143,7 +143,14 @@ def test_skills_are_discovered_from_the_folder() -> None:
 
 def ctx_for(db: Database, defaults: dict[str, object] | None = None) -> ToolCtx:
     return ToolCtx(
-        SqliteNoteStore(db), SqliteTimerStore(db), FakeClock(), NO_DEVICE, OWNER, defaults or {}
+        SqliteNoteStore(db),
+        SqliteTimerStore(db),
+        FakeClock(),
+        NO_DEVICE,
+        None,
+        None,
+        OWNER,
+        defaults or {},
     )
 
 
@@ -535,4 +542,4 @@ def test_app_entries_cannot_look_like_options(tmp_path: Path) -> None:
     path.write_text(body.replace("--help", "steam"), encoding="utf-8")
     config = load(path, {"MAYEN_MODEL": "local"})
     assert config.apps == {"Steam": "steam"}
-    assert "apps" in {s.name for s in discover_skills(SkillTables(apps=config.apps))}
+    assert "apps" in {s.name for s in discover_skills(SkillConfig(apps=config.apps))}

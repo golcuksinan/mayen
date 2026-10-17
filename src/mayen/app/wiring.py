@@ -46,6 +46,7 @@ from mayen.adapters.storage.sqlite import (
     SqliteVoiceprintStore,
 )
 from mayen.adapters.trigger.timer import TimerTrigger
+from mayen.adapters.weather.openweathermap import OpenWeatherMap
 from mayen.app.config import Config, ConfigError
 from mayen.core.context import ContextBlock
 from mayen.core.devices import DeviceLink, Devices
@@ -94,8 +95,9 @@ from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
 from mayen.ports.people import DeviceId
 from mayen.ports.timers import TimerStore
-from mayen.ports.tools import Caller, Role, SkillTables, ToolSpec, TurnFlags
+from mayen.ports.tools import Caller, Role, SkillConfig, ToolSpec, TurnFlags
 from mayen.ports.triggers import TriggerSource
+from mayen.ports.weather import WeatherSource
 from mayen.replay.run import Replayer
 
 # Tek kip (§8.10): bir rol hem tool kararını hem cevabı yazar; onay soruları da bu rolde.
@@ -106,11 +108,11 @@ class SkillLoadError(Exception):
     pass
 
 
-def discover_skills(tables: SkillTables | None = None) -> list[ToolSpec[Any]]:
+def discover_skills(tables: SkillConfig | None = None) -> list[ToolSpec[Any]]:
     """`skills/` klasöründeki her modülün `SPEC`'i, ya da config'in tablolarından kurulan
     `spec(tables)`'ı; katalog açılışta bir kez kurulur (§9.2). Tablosu boş skill `None` verir
     ve kataloğa girmez."""
-    tables = tables or SkillTables()
+    tables = tables or SkillConfig()
     specs: list[ToolSpec[Any]] = []
     for info in sorted(pkgutil.iter_modules(mayen.skills.__path__), key=lambda m: m.name):
         module = importlib.import_module(f"mayen.skills.{info.name}")
@@ -163,6 +165,8 @@ class ToolCtx:
     timers: TimerStore
     clock: Clock
     device: DeviceControl
+    weather: WeatherSource | None
+    location: str | None  # çağıranın kendi varsayılan konumu (§11.1)
     caller: Caller
     defaults: Mapping[str, Any]
 
@@ -208,7 +212,11 @@ class Core:
             config.default_language,
             self.devices.capabilities,
         )
-        specs = discover_skills(SkillTables(apps=config.apps))
+        weather = config.weather
+        self.weather: WeatherSource | None = (
+            None if weather is None else OpenWeatherMap(weather.url, weather.key)
+        )
+        specs = discover_skills(SkillConfig(apps=config.apps, weather=weather is not None))
         self.registry = ToolRegistry(specs)
         self.defaults = skill_defaults(specs, config.skills)
         self.notes = SqliteNoteStore(db)
@@ -306,11 +314,14 @@ class Core:
         return Wake(ServiceWake(stt.url, stt.wake.threshold), stt.wake.follow_up_s)
 
     def context(self, session: str, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
+        person = None if caller.person_id is None else self.people.get(caller.person_id)
         return ToolCtx(
             self.notes,
             self.timers,
             self.recorder.clock,
             self.devices.get(session),
+            self.weather,
+            None if person is None else person.location,
             caller,
             self.defaults[spec.name],
         )

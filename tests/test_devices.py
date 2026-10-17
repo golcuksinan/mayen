@@ -13,7 +13,7 @@ from mayen.clients.desktop import Apps, CommandError, Desktop, Media, Speaker
 from mayen.clients.mic import respond
 from mayen.core.devices import NO_DEVICE, DeviceLink, Devices
 from mayen.ports.devices import Capabilities, Capability, Command, CommandResult, decode_client
-from mayen.ports.tools import Caller, Role, SkillTables, Status, ToolResult
+from mayen.ports.tools import Caller, Role, SkillConfig, Status, ToolResult
 from mayen.skills import apps, audio_output, media, volume
 
 OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
@@ -202,7 +202,7 @@ class Device:
 
 
 def ctx(device: Device) -> ToolCtx:
-    return ToolCtx(None, None, FakeClock(), device, OWNER, {})  # type: ignore[arg-type]
+    return ToolCtx(None, None, FakeClock(), device, None, None, OWNER, {})  # type: ignore[arg-type]
 
 
 async def test_volume_reads_without_arguments_and_reports_what_it_changed() -> None:
@@ -347,8 +347,8 @@ async def test_the_client_opens_the_sent_entry_and_never_an_option() -> None:
 
 
 def test_app_names_are_choices_in_the_catalog_and_an_empty_table_adds_no_tool() -> None:
-    assert apps.spec(SkillTables()) is None
-    spec = apps.spec(SkillTables(apps={"Steam": "steam", "Dolphin": "org.kde.dolphin"}))
+    assert apps.spec(SkillConfig()) is None
+    spec = apps.spec(SkillConfig(apps={"Steam": "steam", "Dolphin": "org.kde.dolphin"}))
     assert spec is not None
     schema = spec.args.model_json_schema()
     assert schema["properties"]["app"]["enum"] == ["Dolphin", "Steam"]
@@ -357,7 +357,7 @@ def test_app_names_are_choices_in_the_catalog_and_an_empty_table_adds_no_tool() 
 
 
 async def test_apps_skill_sends_the_name_and_its_entry() -> None:
-    spec = apps.spec(SkillTables(apps={"Dolphin": "org.kde.dolphin"}))
+    spec = apps.spec(SkillConfig(apps={"Dolphin": "org.kde.dolphin"}))
     assert spec is not None
     device = Device({"open": ToolResult(Status.OK)})
     await spec.run(spec.args(app="Dolphin"), ctx(device))

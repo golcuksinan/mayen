@@ -83,6 +83,12 @@ apps: {}
 #  Steam: steam
 #  Dolphin: org.kde.dolphin
 
+# Hava durumu sağlayıcısı (§9.5). Anahtar config'e yazılmaz: ortamda ya da bu dosyanın
+# yanındaki `.env`'de durur (§14). Bölüm yoksa `weather` tool'u kataloğa girmez.
+# weather:
+#   url: https://api.openweathermap.org/data/2.5/weather
+#   api_key_env: OPENWEATHERMAP_KEY
+
 # Model deposu (§8.9, §8.10). Her rol her istekte kendi ayarlarını gönderir.
 models:
   local:

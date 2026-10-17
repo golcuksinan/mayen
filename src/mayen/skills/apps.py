@@ -15,14 +15,14 @@ from mayen.ports.devices import Capability
 from mayen.ports.tools import (
     Effect,
     Sensitivity,
-    SkillTables,
+    SkillConfig,
     ToolContext,
     ToolResult,
     ToolSpec,
 )
 
 
-def spec(tables: SkillTables) -> ToolSpec[Any] | None:
+def spec(tables: SkillConfig) -> ToolSpec[Any] | None:
     table: Mapping[str, str] = dict(tables.apps)
     if not table:
         return None

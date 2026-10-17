@@ -8,6 +8,8 @@ yeniden başlatma döngüsüne sokmaz. Alt komutlar:
   `--voice` verilirse sahibin ses izi de yazılır (konuşmacı servisi açık olmalı).
 - `voice`: kurulmuş sahibin ses izini dosyalardan yazar; eskisinin yerine. `setup` gibi
   makinenin başında çalışır; iz sesle verilemez (§10.2).
+- `profile`: sahibin profilinde varsayılan konumu yazar ya da siler (§11.1); yer söylenmeyen
+  sorgu (hava durumu) onu kullanır. Makinenin başında çalışır.
 - `serve`: yazılı ve sesli kanalı (§7, §13) ve hatırlatmaları çalıştırır. Sesli kanal,
   config'te STT ve TTS servisleri varsa açılır.
 - `replay`: kayıttaki turları listeler; bir tur verilirse onu bugünkü prompt ve modelle
@@ -31,7 +33,14 @@ from mayen.adapters.storage.sqlite import (
     SqliteVoiceprintStore,
     StorageError,
 )
-from mayen.app.config import Config, ConfigError, load, speaker_url, storage_path
+from mayen.app.config import (
+    Config,
+    ConfigError,
+    load,
+    speaker_url,
+    storage_path,
+    with_dotenv,
+)
 from mayen.app.server import LoopbackIsLocal, core_app
 from mayen.app.voice import VoiceError, voiceprint
 from mayen.app.wiring import Core, SkillLoadError, replayer
@@ -68,6 +77,12 @@ def _parser() -> argparse.ArgumentParser:
         "voice", help="replace the owner's voiceprint (on this machine)"
     )
     voice.add_argument("samples", nargs="+", type=Path, help="voice samples (WAV)")
+    profile = commands.add_parser(
+        "profile", help="change the owner's profile (on this machine)"
+    )
+    where = profile.add_mutually_exclusive_group(required=True)
+    where.add_argument("--location", help="default location, e.g. a city")
+    where.add_argument("--clear-location", action="store_true", help="remove it")
     commands.add_parser("serve", help="run the text and voice channels and reminders")
     replay = commands.add_parser("replay", help="list recorded turns, or replay one")
     replay.add_argument("turn", nargs="?", help="turn id or a unique prefix of it")
@@ -90,7 +105,9 @@ def main(argv: list[str] | None = None) -> int:
             return _setup(args.config, args)
         if args.command == "voice":
             return _voice(args.config, args.samples)
-        config = load(args.config, os.environ)
+        if args.command == "profile":
+            return _profile(args.config, None if args.clear_location else args.location)
+        config = load(args.config, with_dotenv(args.config, os.environ))
         config.storage_path.parent.mkdir(parents=True, exist_ok=True)
         with Database(config.storage_path) as db:
             core = Core(config, db)
@@ -146,6 +163,22 @@ def _voice(path: Path, samples: list[Path]) -> int:
             return EXIT_REFUSED
         SqliteVoiceprintStore(db).set(owner.id, owner_voice.model, owner_voice.vector)
     log.info("owner voiceprint set: %d samples, %s", len(samples), owner_voice.model)
+    return 0
+
+
+def _profile(path: Path, location: str | None) -> int:
+    db_path = storage_path(path)
+    if not db_path.exists():
+        log.error("profile refused: no owner; run setup first")
+        return EXIT_REFUSED
+    with Database(db_path) as db:
+        people = SqlitePersonStore(db)
+        owner = people.owner()
+        if owner is None:
+            log.error("profile refused: no owner; run setup first")
+            return EXIT_REFUSED
+        people.set_location(owner.id, location)
+    log.info("owner's default location %s", "removed" if location is None else "set")
     return 0
 
 

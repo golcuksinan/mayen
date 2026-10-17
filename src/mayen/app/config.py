@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from mayen.core.context import LANGUAGE_SLOT
 from mayen.core.models import ModelConfigError, ModelRegistry
@@ -95,6 +95,19 @@ class SttConfig(_Strict):
     record_dir: Path | None = None
 
 
+class WeatherConfig(_Strict):
+    """Hava durumu sağlayıcısı (§9.5); anahtarın kendisi değil, ortam değişkeninin adı (§14)."""
+
+    url: str
+    api_key_env: str
+
+
+@dataclass(frozen=True)
+class Weather:
+    url: str
+    key: SecretStr
+
+
 class SpeakerConfig(_Strict):
     """Konuşmacı tanıma (§6): izi çıkaran model servisi ve izi kişiye çeviren eşik.
 
@@ -133,6 +146,7 @@ class _File(_Strict):
     skills: dict[str, dict[str, Any]] = {}
     # Açılabilecek uygulamalar (§9.4): ad → `.desktop` kimliği; ad katalogda seçenek olur.
     apps: dict[str, str] = {}
+    weather: WeatherConfig | None = None
     models: dict[str, ModelRecord]
 
 
@@ -154,6 +168,7 @@ class Config:
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     skills: dict[str, dict[str, Any]]
     apps: dict[str, str]
+    weather: Weather | None
 
     def turns(self) -> Turns:
         return Turns(self.triggers.fates, self.triggers.max_running)
@@ -197,12 +212,45 @@ def _tts(tts: TtsConfig | None, default_language: str) -> TtsConfig | None:
     return tts
 
 
+def _weather(weather: WeatherConfig | None, env: Mapping[str, str]) -> Weather | None:
+    if weather is None:
+        return None
+    if not env.get(weather.api_key_env):
+        # Anahtarsız bir kaynak, sahibin açtığını sandığı ama çalışmayan bir tool olurdu.
+        raise ConfigError(f"weather: {weather.api_key_env} is not set (environment or .env)")
+    return Weather(weather.url, SecretStr(env[weather.api_key_env]))
+
+
 def _apps(apps: dict[str, str]) -> dict[str, str]:
     for name, entry in apps.items():
         if not entry or entry.startswith("-"):
             # Kimlik başlatıcının argv'sinde durur; tireyle başlayan değer bir seçenek olurdu.
             raise ConfigError(f"apps.{name}: {entry!r} is not a desktop entry id")
     return apps
+
+
+def with_dotenv(config: Path, env: Mapping[str, str]) -> dict[str, str]:
+    """Config'in yanındaki `.env`, ortamın altında: ortamdaki değişken önceliklidir (§14).
+
+    Satırlar `AD=değer`; boş satır ve `#` ile başlayan satır atlanır, değerin çevresindeki
+    tırnaklar atılır. Dosya yoksa yalnızca ortam.
+    """
+    path = config.parent / ".env"
+    values: dict[str, str] = {}
+    if path.exists():
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, sep, value = line.removeprefix("export ").partition("=")
+            if not sep or not name.strip():
+                # Değerin kendisi hata metnine girmez: bir anahtar olabilir.
+                raise ConfigError(f"{path}:{number}: expected NAME=value")
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            values[name.strip()] = value
+    return {**values, **env}
 
 
 def load(path: Path, env: Mapping[str, str]) -> Config:
@@ -228,6 +276,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             system_role=file.system_role,
             skills=file.skills,
             apps=_apps(file.apps),
+            weather=_weather(file.weather, env),
         )
         config.turns()  # eksik ya da hatta karşılığı olmayan akıbet açılışta görünsün (§5.3)
     except (OSError, yaml.YAMLError, ValidationError, ModelConfigError, TurnConfigError) as e:

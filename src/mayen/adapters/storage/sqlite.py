@@ -185,6 +185,7 @@ MIGRATIONS: Sequence[Sequence[str]] = (
         ) STRICT""",
     ),
     rebuild_events(),  # status unsupported
+    ("ALTER TABLE people ADD COLUMN location TEXT",),
 )
 
 
@@ -621,7 +622,8 @@ class SqlitePersonStore:
     def _one(self, condition: str, value: str | int) -> Person | None:
         with self._db.transaction() as conn:
             row = conn.execute(
-                f"SELECT id, name, role, language, address_as FROM people WHERE {condition}",
+                "SELECT id, name, role, language, address_as, location FROM people"
+                f" WHERE {condition}",
                 (value,),
             ).fetchone()
             if row is None:
@@ -629,7 +631,7 @@ class SqlitePersonStore:
             devices = conn.execute(
                 "SELECT id FROM devices WHERE person_id = ? ORDER BY id", (row[0],)
             ).fetchall()
-        id_, name, role, language, address_as = row
+        id_, name, role, language, address_as, location = row
         return Person(
             str(id_),
             name,
@@ -637,7 +639,17 @@ class SqlitePersonStore:
             language,
             address_as,
             tuple(DeviceId(d) for (d,) in devices),
+            location,
         )
+
+    def set_location(self, person_id: str, location: str | None) -> None:
+        number = _number(person_id)
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE people SET location = ? WHERE id = ?", (location, number)
+            )
+        if number is None or cursor.rowcount == 0:
+            raise KeyError(person_id)
 
 
 class SqliteVoiceprintStore:

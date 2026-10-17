@@ -22,6 +22,9 @@ class Person:
     language: str  # çıkış dili tercihi (§8.6)
     address_as: str | None  # hitap tercihi; yoksa model kendi seçer
     devices: tuple[DeviceId, ...]  # kişisel cihazları: her cihaz en çok bir kişiye eşleşir
+    # Varsayılan konum (şehir): yer söylenmeyen sorguda kullanılır. Konum kişiseldir (§9.1):
+    # bağlama girmez, yalnızca onu isteyen tool kişinin kendisi için okur.
+    location: str | None = None
 
 
 class OwnerExistsError(Exception):
@@ -45,6 +48,10 @@ class PersonStore(Protocol):
 
     def by_device(self, device: DeviceId) -> Person | None:
         """Cihazın eşleştirildiği kişi; eşleşmemişse ortak cihazdır ve `None` döner."""
+        ...
+
+    def set_location(self, person_id: str, location: str | None) -> None:
+        """Varsayılan konum; `None` siler. Kişi yoksa `KeyError`."""
         ...
 
 
