@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from pydantic import BaseModel
 
 if TYPE_CHECKING:  # döngü: bu portlar `ports.tools`'un sözlüğünü kullanır
+    from mayen.ports.devices import DeviceControl
     from mayen.ports.events import Clock
     from mayen.ports.notes import NoteStore
     from mayen.ports.timers import TimerStore
@@ -34,6 +35,7 @@ class Status(StrEnum):
     OK = "ok"
     ERROR = "error"
     DENIED = "denied"
+    UNSUPPORTED = "unsupported"  # oturumun cihazında bu yetenek yok (§9.7)
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
     STARTED = "started"
@@ -117,6 +119,11 @@ class ToolContext(Protocol):
 
     @property
     def clock(self) -> "Clock": ...
+
+    @property
+    def device(self) -> "DeviceControl":
+        """Oturumun cihazındaki istemci; makine denetimi oradan yapılır (§9.7)."""
+        ...
 
     @property
     def caller(self) -> Caller:

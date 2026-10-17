@@ -34,9 +34,11 @@ from mayen.app.wiring import (
     skill_defaults,
     voice_session,
 )
+from mayen.core.devices import NO_DEVICE
 from mayen.core.policy import ROLE_TABLE
 from mayen.pipeline.speech import ServiceTurn
 from mayen.ports.channels import VoiceHello
+from mayen.ports.devices import Capabilities, Capability, Command, CommandResult
 from mayen.ports.people import LOCAL_DEVICE, DeviceId
 from mayen.ports.tools import Caller, Effect, Role, Sensitivity, Status
 from mayen.ports.triggers import Fate, Priority, TriggerSource
@@ -126,6 +128,7 @@ def test_main_exits_with_the_config_code(
 
 def test_skills_are_discovered_from_the_folder() -> None:
     assert sorted(s.name for s in discover_skills()) == [
+        "audio_output",
         "note_add",
         "note_delete",
         "note_search",
@@ -133,12 +136,13 @@ def test_skills_are_discovered_from_the_folder() -> None:
         "reminder_delete",
         "reminder_list",
         "time",
+        "volume",
     ]
 
 
 def ctx_for(db: Database, defaults: dict[str, object] | None = None) -> ToolCtx:
     return ToolCtx(
-        SqliteNoteStore(db), SqliteTimerStore(db), FakeClock(), OWNER, defaults or {}
+        SqliteNoteStore(db), SqliteTimerStore(db), FakeClock(), NO_DEVICE, OWNER, defaults or {}
     )
 
 
@@ -471,7 +475,24 @@ async def test_voice_connection_gets_a_session_from_its_device(tmp_path: Path) -
                         await ws.send(b"\x00\x00" * 320)
                     await asyncio.sleep(0.2)
                     assert core.sessions.running(laptop) is None
+                    # Cihaz komutu sesle aynı bağlantıdan gider ve sonucu oradan döner (§9.7).
+                    link = core.devices.get(laptop)
+                    await ws.send(Capabilities(frozenset({Capability.SPEAKER})).encode())
+                    await until(
+                        lambda: core.devices.capabilities(laptop) == {Capability.SPEAKER}
+                    )
+                    running = asyncio.create_task(
+                        link.run(Capability.SPEAKER, "set_volume", {"level": 30})
+                    )
+                    message = await ws.recv()
+                    while not isinstance(message, str):  # araya giren ses parçaları
+                        message = await ws.recv()
+                    command = Command.decode(message)
+                    assert (command.action, command.args) == ("set_volume", {"level": 30})
+                    await ws.send(CommandResult(command.id, Status.OK, {"level": 30}).encode())
+                    assert (await running).data == {"level": 30}
                 await until(lambda: core.sessions.names() == [])
+                assert core.devices.capabilities(laptop) == frozenset()
             finally:
                 server.should_exit = True
                 await serving

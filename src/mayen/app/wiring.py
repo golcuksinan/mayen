@@ -48,6 +48,7 @@ from mayen.adapters.storage.sqlite import (
 from mayen.adapters.trigger.timer import TimerTrigger
 from mayen.app.config import Config, ConfigError
 from mayen.core.context import ContextBlock
+from mayen.core.devices import DeviceLink, Devices
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.feed import Feed
 from mayen.core.policy import ROLE_TABLE, PolicyTable, system_table
@@ -87,6 +88,7 @@ from mayen.pipeline.speech import (
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
 from mayen.pipeline.wake import ServiceWake, WakeStart
+from mayen.ports.devices import DeviceControl
 from mayen.ports.events import Clock
 from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
@@ -146,11 +148,13 @@ def skill_defaults(
 
 @dataclass(frozen=True)
 class ToolCtx:
-    """Skill'lerin gördüğü tek şey: depo portları, saat, çağıran ve varsayılanlar (§9.1)."""
+    """Skill'lerin gördüğü tek şey: depo portları, saat, oturumun cihazı, çağıran ve
+    varsayılanlar (§9.1)."""
 
     notes: NoteStore
     timers: TimerStore
     clock: Clock
+    device: DeviceControl
     caller: Caller
     defaults: Mapping[str, Any]
 
@@ -176,6 +180,7 @@ class Core:
         self.recorder = Recorder(self.events, SystemClock(), self.feed)
         self.transcript = Transcript(self.utterances, self.recorder.clock, self.feed)
         self.presence = Presence()
+        self.devices = Devices()
         self.sessions = Sessions(
             config.turns(), config.triggers.voice_priority, self._interacted
         )
@@ -193,6 +198,7 @@ class Core:
             self.recorder.clock,
             config.language_rule,
             config.default_language,
+            self.devices.capabilities,
         )
         specs = discover_skills()
         self.registry = ToolRegistry(specs)
@@ -223,8 +229,13 @@ class Core:
         self.presence.connected(session, device, None if person is None else person.id)
         return caller_of(person)
 
+    def attach_device(self, session: str, link: DeviceLink) -> None:
+        """Oturumun istemcisine giden komut yolu (§9.7); yazılı kanalın yoktur."""
+        self.devices.attach(session, link)
+
     async def disconnect(self, session: str) -> None:
         self.presence.disconnected(session)
+        self.devices.detach(session)
         await self.sessions.detach(session)
 
     def table(self, session: str) -> PolicyTable:
@@ -286,9 +297,14 @@ class Core:
             return None
         return Wake(ServiceWake(stt.url, stt.wake.threshold), stt.wake.follow_up_s)
 
-    def context(self, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
+    def context(self, session: str, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
         return ToolCtx(
-            self.notes, self.timers, self.recorder.clock, caller, self.defaults[spec.name]
+            self.notes,
+            self.timers,
+            self.recorder.clock,
+            self.devices.get(session),
+            caller,
+            self.defaults[spec.name],
         )
 
 
@@ -393,6 +409,7 @@ def _conversation(
         holds=[lambda: confirmation.awaiting],
         drops=[confirmation.drop],
         device_person=lambda: core.presence.personal(session),
+        capabilities=lambda: core.devices.capabilities(session),
         state=state,
         label=core.label,
         requester=requester,
@@ -410,7 +427,7 @@ def _conversation(
     tools = AuthorizedTools(
         core.registry,
         lambda: core.table(session),
-        core.context,
+        lambda spec, caller: core.context(session, spec, caller),
         confirmation,
         caller,
         TurnFlags,

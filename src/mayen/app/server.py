@@ -3,7 +3,8 @@
 Yazılı kanalda her bağlantı kendi oturumunu alır (§5.2).
 
 Taşıma çerçevenin çok istemcili WebSocket taşımasıdır. Bağlanan cihazın kimliği taşımadan
-okunur (§10.1); istemci kendisi hakkında hiçbir şey beyan etmez.
+okunur (§10.1); istemci kimliğini beyan etmez. Sesli istemcinin bildirdiği yetenekler
+kimlik değildir (§9.7).
 """
 
 import asyncio
@@ -14,6 +15,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
+from pipecat.frames.frames import OutputTransportMessageUrgentFrame
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -22,6 +24,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from mayen.app.panel import add_panel
 from mayen.app.wiring import Core, Session, Voice, text_session, voice_session
+from mayen.core.devices import DeviceLink
 from mayen.pipeline.text import WireSerializer
 from mayen.pipeline.voice import VoiceSerializer
 from mayen.ports.channels import DeviceIdentity, VoiceHello
@@ -124,8 +127,10 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
 
         @app.websocket(VOICE_PATH)
         async def voice(websocket: WebSocket) -> None:
+            # Cihaz komutları sesle aynı bağlantıdan gider (§9.7).
+            link = DeviceLink()
             params = FastAPIWebsocketParams(
-                serializer=VoiceSerializer(VOICE_INPUT_RATE),
+                serializer=VoiceSerializer(VOICE_INPUT_RATE, link.receive),
                 audio_in_enabled=True,
                 audio_in_sample_rate=VOICE_INPUT_RATE,
                 audio_out_enabled=True,
@@ -136,6 +141,15 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
             def build(
                 session: str, transport: FastAPIWebsocketTransport, device: DeviceId | None
             ) -> Session:
+                output = transport.output()
+
+                async def send(message: str) -> None:
+                    await output.send_message(
+                        OutputTransportMessageUrgentFrame(message=message)
+                    )
+
+                link.attach(send)
+                core.attach_device(session, link)
                 stt, tts, vad, turn = core.speech()
                 # Konuşmacı tanıma config'te yoksa söz cihazın kişisinindir.
                 parts = Voice(

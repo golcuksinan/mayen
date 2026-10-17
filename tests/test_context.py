@@ -17,6 +17,7 @@ from mayen.core.presence import Presence
 from mayen.core.timers import SYSTEM
 from mayen.pipeline.llm import StepCap, Steps, count_steps, llm_service, with_block
 from mayen.pipeline.session import UNIDENTIFIED
+from mayen.ports.devices import Capability
 from mayen.ports.models import Endpoint, ModelRole
 from mayen.ports.people import DeviceId
 from mayen.ports.tools import Caller, Role
@@ -58,6 +59,7 @@ def test_known_speaker_gets_their_profile_and_language(people: SqlitePersonStore
         "date/time: Wednesday, 14 October 2026, 20:41\n"
         'speaker: {"name": "Sinan", "role": "owner", "language": "Turkish", '
         '"address_as": "efendim"}\n'
+        'device: {"capabilities": []}\n'
         "Answer in Turkish."
     )
 
@@ -183,3 +185,17 @@ async def test_capped_request_goes_without_tools_and_says_why() -> None:
     assert json.loads(last["content"]) == {"step_cap": {"steps": 2, "corrections": 0}}
     # Tavan notu geçmişe yazılmaz.
     assert len(context.get_messages()) == 5
+
+
+def test_the_session_device_capabilities_are_in_the_block(people: SqlitePersonStore) -> None:
+    clock = FakeClock(datetime(2026, 10, 14, 17, 41, tzinfo=UTC))
+    block = ContextBlock(
+        people,
+        Presence(),
+        clock,
+        RULE,
+        "English",
+        lambda session: {Capability.SPEAKER} if session == "voice" else set(),
+    )
+    assert 'device: {"capabilities": ["speaker"]}' in block.render("voice", SYSTEM)
+    assert 'device: {"capabilities": []}' in block.render("text", SYSTEM)

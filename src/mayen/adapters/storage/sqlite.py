@@ -184,6 +184,7 @@ MIGRATIONS: Sequence[Sequence[str]] = (
             vector BLOB NOT NULL CHECK (length(vector) > 0 AND length(vector) % 4 = 0)
         ) STRICT""",
     ),
+    rebuild_events(),  # status unsupported
 )
 
 

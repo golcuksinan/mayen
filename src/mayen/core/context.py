@@ -5,10 +5,12 @@ Modele giden metin İngilizcedir; kişinin verisi (ad, hitap) verildiği dilde k
 """
 
 import json
+from collections.abc import Callable, Collection
 from datetime import datetime
 
 from mayen.core.presence import Presence
 from mayen.core.profile import speaker
+from mayen.ports.devices import Capability
 from mayen.ports.events import Clock
 from mayen.ports.people import PersonStore
 from mayen.ports.tools import Caller
@@ -44,7 +46,8 @@ def when(moment: datetime) -> str:
 
 
 class ContextBlock:
-    """Bir oturumun bağlam bloğu: tarih/saat, konuşan kişi ve en sonda dil kuralı (§8.6)."""
+    """Bir oturumun bağlam bloğu: tarih/saat, konuşan kişi, cihazın yetenekleri (§9.7) ve en
+    sonda dil kuralı (§8.6)."""
 
     def __init__(
         self,
@@ -53,12 +56,15 @@ class ContextBlock:
         clock: Clock,
         language_rule: str,
         default_language: str,
+        capabilities: Callable[[str], Collection[Capability]] = lambda _: (),
     ) -> None:
         self._people = people
         self._presence = presence
         self._clock = clock
         self._rule = language_rule
         self._default = default_language  # tanınmayan kişinin çıkış dili (§8.6)
+        # Model bilmeseydi, yapamayacak bir cihazda boşa çağrı yapardı (§9.7).
+        self._capabilities = capabilities
 
     def language(self, session: str, requester: Caller) -> str:
         """Turu isteyen kişinin dili; kimse istemediyse (zamanlayıcı) oturumun cihazının
@@ -72,11 +78,13 @@ class ContextBlock:
         # Tanınmayan ya da kimse olmayan (system) çağıranın modele giden tek bilgisi rolüdür.
         facts = {"role": requester.role.value} if person is None else speaker(person)
         rule = self._rule.replace(LANGUAGE_SLOT, self.language(session, requester))
+        device = {"capabilities": sorted(self._capabilities(session))}
         return "\n".join(
             [
                 "[context]",
                 f"date/time: {when(self._clock.now())}",
                 f"speaker: {json.dumps(facts, ensure_ascii=False)}",
+                f"device: {json.dumps(device)}",
                 rule.strip(),
             ]
         )

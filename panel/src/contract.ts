@@ -12,7 +12,8 @@ export type EventKind =
 export type SessionState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'awaiting_confirmation'
 
 // ports/tools.py: Status
-export type Status = 'ok' | 'error' | 'denied' | 'cancelled' | 'timeout' | 'started'
+export type Status =
+  | 'ok' | 'error' | 'denied' | 'unsupported' | 'cancelled' | 'timeout' | 'started'
 
 export type EventMessage = {
   type: 'event'

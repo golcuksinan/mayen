@@ -164,7 +164,12 @@ class Replayer:
         if turn.device_person is not None:
             presence.connected(session, DeviceId("replay"), turn.device_person)
         block = ContextBlock(
-            self._people, presence, FixedClock(turn.time), self._rule, self._default
+            self._people,
+            presence,
+            FixedClock(turn.time),
+            self._rule,
+            self._default,
+            lambda _: turn.capabilities,
         ).render(session, turn.requester)
         tools = openai_tools(self._registry)
         malformed: set[str] = set()

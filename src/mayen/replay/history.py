@@ -23,6 +23,7 @@ from typing import Any
 from mayen.core.policy import PolicyTable, filter_records
 from mayen.core.timers import local
 from mayen.pipeline.tools import AWAITING_CONFIRMATION, to_model
+from mayen.ports.devices import Capability
 from mayen.ports.events import Event, EventKind, ref
 from mayen.ports.timers import TimerState, TimerStore
 from mayen.ports.tools import Caller, Record, Role, Sensitivity, Status, ToolResult, Verdict
@@ -47,6 +48,7 @@ class TurnInfo:
     priority: Priority
     requester: Caller
     device_person: str | None  # oturumun cihazının kişisi; kimse istemediyse dinleyen
+    capabilities: tuple[Capability, ...] = ()  # oturumun cihazının yetenekleri (§9.7)
 
 
 def utterance_ref(utterance: Utterance) -> str:
@@ -127,6 +129,7 @@ class Records:
                 Priority(e.body["priority"]),
                 caller_of(role, person),
                 e.body.get("device_person"),
+                tuple(Capability(c) for c in e.body.get("capabilities", ())),
             )
 
     def history(self, table: TableOf, until: datetime | None = None) -> list[Message]:

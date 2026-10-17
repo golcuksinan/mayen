@@ -14,7 +14,7 @@ yeniden söylenir. Susturma Pipecat'in kullanıcı susturma stratejisiyle yapıl
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -42,6 +42,7 @@ from mayen.core.state import StateTracker
 from mayen.core.turns import Interrupt, Start, Turn, Turns
 from mayen.pipeline.events import UTTERANCE, SessionTranscript
 from mayen.pipeline.speaker import score
+from mayen.ports.devices import Capability
 from mayen.ports.events import EventKind, ref
 from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource, TurnId
@@ -153,6 +154,7 @@ class TriggerGate(FrameProcessor):
         holds: Sequence[Callable[[], bool]] = (),
         drops: Sequence[Callable[[], Awaitable[None]]] = (),
         device_person: Callable[[], str | None] = lambda: None,
+        capabilities: Callable[[], Collection[Capability]] = lambda: (),
         state: StateTracker | None = None,
         label: Callable[[Caller], str] | None = None,
         requester: RequesterSource | None = None,
@@ -172,6 +174,8 @@ class TriggerGate(FrameProcessor):
         self._drops = drops  # kesilen turla düşen başka işler; bekleyen onay planı gibi (§5.3)
         # Oturumun cihazı kimin kişisel cihazı; kimse istemeden açılan turu o dinler (§8.6).
         self._device_person = device_person
+        # Cihazın yetenekleri bağlam bloğundadır (§9.7); replay bloğu turun başındakiyle kurar.
+        self._capabilities = capabilities
         # Oturumun durumu (§5.4): kapı turu, sözü ve sesi bildirir.
         self._state = state or StateTracker(lambda _, __: None)
         # Yazılı sözün başına konuşanın adı (§8.1); sesli sözünkini `SpeakerLabel` yazar.
@@ -231,6 +235,7 @@ class TriggerGate(FrameProcessor):
                 # (`turn.finished` / `turn.interrupted`) yazılır.
                 "requester": {"role": requester.role.value, "person_id": requester.person_id},
                 "device_person": self._device_person(),
+                "capabilities": sorted(self._capabilities()),
             },
             related=turn.trigger.records,
         )

@@ -3,7 +3,8 @@
 Sesli kanal: çekirdek bağlantı açılınca bir JSON selam (`VoiceHello`) yollar; ardından iki
 yönde de ikili mesajlar ham PCM'dir (16 bit, tek kanal, little-endian): istemciden
 `input_sample_rate`, çekirdekten `output_sample_rate` hızında. Çekirdek sesi çalınma hızında
-gönderir; istemci geldikçe çalar. Ses sürekli akar (§6, sürekli STT).
+gönderir; istemci geldikçe çalar. Ses sürekli akar (§6, sürekli STT). Selamdan sonraki metin
+mesajları cihaz komutlarıdır (`ports.devices`).
 
 İstemciler ayrı süreçlerdir ve yalnızca `ports`'u görür (§4); mesaj biçimi bu yüzden burada
 durur, çekirdeğin serileştiricisi de istemci de aynı tanımı kullanır.
@@ -40,7 +41,7 @@ class WireMessage:
             raise ValueError(f"malformed message: {e}") from e
 
 
-VOICE_SCHEMA_VERSION = 1
+VOICE_SCHEMA_VERSION = 2  # 2: sesin yanında cihaz komutları (§9.7)
 
 
 @dataclass(frozen=True)
