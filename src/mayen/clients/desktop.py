@@ -4,8 +4,9 @@ Bir yetenek ancak cihazda çalışıyorsa bildirilir: aracı bulunmayan yetenek 
 Komutlar argv dizisidir, tek dize değil (§9.4); model değeri yalnızca doğrulanmış argümanda,
 argv'nin ayrı bir öğesi olarak durur.
 
-Hoparlör, varsayılan çıkış cihazıdır; `pactl` ile (PipeWire'da da çalışır). Okumalar JSON
-çıktısından yapılır: düz metin çıktısı yerel ayara göre değişir.
+Hoparlör, varsayılan çıkış cihazıdır; `pactl` ile (PipeWire'da da çalışır). Medya, MPRIS
+arayüzünü sunan oynatıcılardır; `busctl` ile oturum veri yolundan. Okumalar JSON çıktısından
+yapılır: düz metin çıktısı yerel ayara göre değişir.
 """
 
 import asyncio
@@ -103,13 +104,107 @@ class Speaker:
         return None
 
 
+MPRIS = "org.mpris.MediaPlayer2"
+MPRIS_PATH = "/org/mpris/MediaPlayer2"
+PLAYER = f"{MPRIS}.Player"
+MEDIA_METHODS = {
+    "play": "Play",
+    "pause": "Pause",
+    "toggle": "PlayPause",
+    "next": "Next",
+    "previous": "Previous",
+}
+
+
+class Media:
+    """Oynatıcı verilmezse çalan; çalan yoksa tek olan. Birden çoğu çalmıyorsa seçmez:
+    rastgele bir seçim, kişinin istemediği oynatıcıyı çalıştırabilirdi."""
+
+    def __init__(self, run: Run = run_argv) -> None:
+        self._run = run
+
+    def available(self) -> bool:
+        return shutil.which("busctl") is not None
+
+    async def _json(self, *args: str) -> Any:  # noqa: ANN401
+        return json.loads(await self._run(["busctl", "--user", "--json=short", *args]))
+
+    async def _property(self, bus: str, interface: str, name: str) -> Any:  # noqa: ANN401
+        return (await self._json("get-property", bus, MPRIS_PATH, interface, name))["data"]
+
+    async def _players(self) -> list[dict[str, Any]]:
+        names = await self._json(
+            "call",
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "ListNames",
+        )
+        players = []
+        for bus in sorted(n for n in names["data"][0] if n.startswith(f"{MPRIS}.")):
+            identity = await self._property(bus, MPRIS, "Identity")
+            status = await self._property(bus, PLAYER, "PlaybackStatus")
+            players.append(
+                {
+                    "id": bus.removeprefix(f"{MPRIS}."),
+                    "name": identity,
+                    "status": status.lower(),
+                }
+            )
+        return players
+
+    async def _track(self, bus: str) -> dict[str, str]:
+        """Şarkı ve sanatçı; adres verilmez: gereksiz, kişisel olabilir."""
+        metadata = await self._property(bus, PLAYER, "Metadata")
+        track = {}
+        title = metadata.get("xesam:title", {}).get("data")
+        if title:
+            track["title"] = str(title)
+        artists = metadata.get("xesam:artist", {}).get("data") or []
+        if artists:
+            track["artist"] = ", ".join(map(str, artists))
+        return track
+
+    async def handle(self, action: str, args: Mapping[str, Any]) -> CommandResult | None:
+        if action != "status" and action not in MEDIA_METHODS:
+            return None
+        players = await self._players()
+        if action == "status":
+            for player in players:
+                player.update(await self._track(f"{MPRIS}.{player['id']}"))
+            return CommandResult("", Status.OK, {"players": players})
+        wanted = args.get("player")
+        if wanted is not None:
+            chosen = [p for p in players if p["id"] == wanted]
+            if not chosen:
+                return CommandResult(
+                    "", Status.ERROR, {"players": players}, f"no player with id {wanted!r}"
+                )
+        else:
+            chosen = [p for p in players if p["status"] == "playing"] or players
+        if not chosen:
+            return CommandResult("", Status.ERROR, error="no media player is open")
+        if len(chosen) > 1:
+            return CommandResult(
+                "", Status.ERROR, {"players": players}, "several players; say which one"
+            )
+        [player] = chosen
+        bus = f"{MPRIS}.{player['id']}"
+        method = MEDIA_METHODS[action]
+        await self._run(["busctl", "--user", "call", bus, MPRIS_PATH, PLAYER, method])
+        data = {"player": player["name"], "id": player["id"], **await self._track(bus)}
+        return CommandResult("", Status.OK, data)
+
+
 class Desktop:
     """Bu makinenin yürütücüleri; yetenek, yürütücüsü çalışabiliyorsa bildirilir."""
 
     def __init__(self, executors: Mapping[Capability, Executor] | None = None) -> None:
-        self._executors = (
-            dict(executors) if executors is not None else {Capability.SPEAKER: Speaker()}
-        )
+        default: dict[Capability, Executor] = {
+            Capability.SPEAKER: Speaker(),
+            Capability.MEDIA: Media(),
+        }
+        self._executors = default if executors is None else dict(executors)
 
     def capabilities(self) -> frozenset[Capability]:
         return frozenset(c for c, e in self._executors.items() if e.available())

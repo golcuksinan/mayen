@@ -9,12 +9,12 @@ import pytest
 
 from fakes import FakeClock
 from mayen.app.wiring import ToolCtx
-from mayen.clients.desktop import CommandError, Desktop, Speaker
+from mayen.clients.desktop import CommandError, Desktop, Media, Speaker
 from mayen.clients.mic import respond
 from mayen.core.devices import NO_DEVICE, DeviceLink, Devices
 from mayen.ports.devices import Capabilities, Capability, Command, CommandResult, decode_client
 from mayen.ports.tools import Caller, Role, Status, ToolResult
-from mayen.skills import audio_output, volume
+from mayen.skills import audio_output, media, volume
 
 OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
 
@@ -243,3 +243,81 @@ async def test_audio_output_lists_or_switches() -> None:
     await audio_output.run(audio_output.Args(), ctx(device))
     await audio_output.run(audio_output.Args(output="usb"), ctx(device))
     assert device.calls == [("list_outputs", {}), ("set_output", {"output": "usb"})]
+
+
+class Bus:
+    """`busctl`'ın sahte hâli: oynatıcılar ve çağrılar."""
+
+    def __init__(self, players: Mapping[str, tuple[str, str]]) -> None:
+        self.players = players  # kimlik → (ad, durum)
+        self.called: list[list[str]] = []
+
+    async def __call__(self, argv: list[str]) -> str:
+        if "ListNames" in argv:
+            names = [f"org.mpris.MediaPlayer2.{p}" for p in self.players] + [":1.5"]
+            return json.dumps({"type": "as", "data": [names]})
+        if "get-property" in argv:
+            player = argv[argv.index("get-property") + 1].removeprefix(
+                "org.mpris.MediaPlayer2."
+            )
+            name, status = self.players[player]
+            value: Any = {
+                "Identity": name,
+                "PlaybackStatus": status,
+                "Metadata": {
+                    "xesam:title": {"data": f"{name} song"},
+                    "xesam:artist": {"data": ["A", "B"]},
+                    "xesam:url": {"data": "https://example.com/private"},
+                },
+            }[argv[-1]]
+            return json.dumps({"data": value})
+        self.called.append(argv)
+        return ""
+
+
+async def test_media_acts_on_the_playing_player_and_never_returns_the_address() -> None:
+    bus = Bus({"spotify": ("Spotify", "Paused"), "firefox": ("Firefox", "Playing")})
+    result = await Media(bus).handle("pause", {})
+    assert result is not None and result.status is Status.OK
+    assert result.data == {
+        "player": "Firefox",
+        "id": "firefox",
+        "title": "Firefox song",
+        "artist": "A, B",
+    }
+    assert bus.called == [
+        [
+            "busctl",
+            "--user",
+            "call",
+            "org.mpris.MediaPlayer2.firefox",
+            "/org/mpris/MediaPlayer2",
+            "org.mpris.MediaPlayer2.Player",
+            "Pause",
+        ]
+    ]
+    status = await Media(bus).handle("status", {})
+    assert status is not None
+    assert "private" not in json.dumps(status.data)
+    assert [p["status"] for p in status.data["players"]] == ["playing", "paused"]
+
+
+async def test_media_does_not_guess_between_players_that_are_not_playing() -> None:
+    bus = Bus({"spotify": ("Spotify", "Paused"), "vlc": ("VLC", "Stopped")})
+    result = await Media(bus).handle("play", {})
+    assert result is not None and result.status is Status.ERROR
+    assert len(result.data["players"]) == 2 and bus.called == []
+    chosen = await Media(bus).handle("play", {"player": "vlc"})
+    assert chosen is not None and chosen.data["player"] == "VLC"
+    missing = await Media(bus).handle("play", {"player": "nope"})
+    assert missing is not None and missing.status is Status.ERROR
+    nothing = await Media(Bus({})).handle("next", {})
+    assert nothing is not None and nothing.error == "no media player is open"
+    assert await Media(bus).handle("explode", {}) is None
+
+
+async def test_media_skill_sends_the_action_and_the_player() -> None:
+    device = Device({"next": ToolResult(Status.OK), "status": ToolResult(Status.OK)})
+    await media.run(media.Args(action=media.Action.NEXT, player="vlc"), ctx(device))
+    await media.run(media.Args(action=media.Action.STATUS), ctx(device))
+    assert device.calls == [("next", {"player": "vlc"}), ("status", {})]

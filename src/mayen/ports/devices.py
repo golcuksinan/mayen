@@ -19,6 +19,7 @@ class Capability(StrEnum):
     """Bir istemcinin yapabildiği iş alanı; tool adı değil, birden çok tool'u kapsar."""
 
     SPEAKER = "speaker"
+    MEDIA = "media"
 
 
 class MessageType(StrEnum):
