@@ -9,12 +9,20 @@ import pytest
 
 from fakes import FakeClock
 from mayen.app.wiring import ToolCtx
-from mayen.clients.desktop import Apps, CommandError, Desktop, Media, Speaker
+from mayen.clients.desktop import (
+    Apps,
+    CommandError,
+    Desktop,
+    Media,
+    Speaker,
+    Windows,
+    kwin_script,
+)
 from mayen.clients.mic import respond
 from mayen.core.devices import NO_DEVICE, DeviceLink, Devices
 from mayen.ports.devices import Capabilities, Capability, Command, CommandResult, decode_client
 from mayen.ports.tools import Caller, Role, SkillConfig, Status, ToolResult
-from mayen.skills import apps, audio_output, media, volume
+from mayen.skills import apps, audio_output, media, volume, window, window_close
 
 OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
 
@@ -362,3 +370,96 @@ async def test_apps_skill_sends_the_name_and_its_entry() -> None:
     device = Device({"open": ToolResult(Status.OK)})
     await spec.run(spec.args(app="Dolphin"), ctx(device))
     assert device.calls == [("open", {"app": "Dolphin", "entry": "org.kde.dolphin"})]
+
+
+A = "{a43f4b8f-1d87-4986-ae60-5e99af05d4b8}"
+B = "{57b571dc-9890-476d-a7c1-4be040f50ec9}"
+C = "{c9f780c5-ecda-4c91-8fc3-38127a627cce}"
+
+
+class KWin:
+    """KWin betiğinin sahte hâli: açık pencereler ve çalışan betikler."""
+
+    def __init__(self, *ids: str) -> None:
+        self.open = list(ids)
+        self.ran: list[tuple[str, str]] = []
+
+    async def __call__(self, action: str, window: str) -> Any:  # noqa: ANN401
+        self.ran.append((action, window))
+        if action == "list":
+            return [
+                {"id": i, "title": f"t{i[1]}", "app": "a", "active": False} for i in self.open
+            ]
+        found = window in self.open
+        if found and action == "close":
+            self.open.remove(window)
+        return {"found": found, "title": "t" if found else None, "app": "a" if found else None}
+
+
+async def test_a_window_keeps_its_number_and_a_number_never_moves_to_another_window() -> None:
+    kwin = KWin(A, B)
+    windows = Windows(kwin)
+    first = await windows.handle("list", {})
+    assert first is not None
+    assert [w["window"] for w in first.data["windows"]] == [1, 2]
+    closed = await windows.handle("close", {"window": 1})
+    assert closed is not None and closed.data == {"window": 1, "title": "t", "app": "a"}
+    kwin.open.append(C)
+    again = await windows.handle("list", {})
+    assert again is not None
+    assert [(w["window"], w["title"]) for w in again.data["windows"]] == [(2, "t5"), (3, "tc")]
+    stale = await windows.handle("focus", {"window": 1})
+    assert stale is not None and stale.status is Status.ERROR
+    assert kwin.ran[-1] == ("list", "")
+
+
+async def test_a_window_closed_meanwhile_is_an_error_and_loses_its_number() -> None:
+    kwin = KWin(A)
+    windows = Windows(kwin)
+    await windows.handle("list", {})
+    kwin.open.clear()
+    gone = await windows.handle("minimize", {"window": 1})
+    assert gone is not None and gone.status is Status.ERROR
+    unknown = await windows.handle("minimize", {"window": 1})
+    assert unknown is not None and "list" in (unknown.error or "")
+    assert await windows.handle("explode", {}) is None
+
+
+class Journal:
+    """`busctl` ve `journalctl`'ın sahte hâli; betik çıktısını günlüğe işaretiyle yazar."""
+
+    def __init__(self, output: Any) -> None:  # noqa: ANN401
+        self.output = output
+        self.argv: list[list[str]] = []
+        self.source = ""
+
+    async def __call__(self, argv: list[str]) -> str:
+        self.argv.append(argv)
+        if "loadScript" in argv:
+            with open(argv[-2]) as f:
+                self.source = f.read()
+            return json.dumps({"type": "i", "data": [7]})
+        if argv[0] == "journalctl":
+            mark = json.loads(self.source.splitlines()[0].split("= ", 1)[1].rstrip(";"))
+            return f"noise\n{mark}{json.dumps(self.output)}\n"
+        return ""
+
+
+async def test_the_kwin_script_comes_from_the_table_and_the_id_is_a_json_value() -> None:
+    run = Journal({"found": True})
+    assert await kwin_script("close", A, run) == {"found": True}
+    assert f"const ID = {json.dumps(A)};" in run.source
+    assert "closeWindow" in run.source
+    methods = [a[a.index("call") + 4] for a in run.argv if a[0] == "busctl"]
+    assert methods == ["loadScript", "run", "unloadScript"]
+    assert run.argv[1][4] == "/Scripting/Script7"
+
+
+async def test_window_skills_send_the_number_and_list_needs_none() -> None:
+    device = Device({a: ToolResult(Status.OK) for a in ("list", "focus", "minimize", "close")})
+    await window.run(window.Args(action=window.Action.LIST), ctx(device))
+    await window.run(window.Args(action=window.Action.FOCUS, window=2), ctx(device))
+    missing = await window.run(window.Args(action=window.Action.MINIMIZE), ctx(device))
+    await window_close.run(window_close.Args(window=3), ctx(device))
+    assert missing.status is Status.ERROR
+    assert device.calls == [("list", {}), ("focus", {"window": 2}), ("close", {"window": 3})]

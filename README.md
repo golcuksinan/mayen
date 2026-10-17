@@ -105,7 +105,11 @@ Working today:
 - An STT service (faster-whisper, voice activity detection) and a TTS service (Kokoro and Piper, with
   optional audio effects). Names the model marks as another language are read with that language's
   pronunciation.
-- Skills: current time, notes (add, search, delete), reminders (add, list, delete).
+- Skills: current time, notes (add, search, delete), reminders (add, list, delete), weather
+  (with a default location in the person's profile).
+- Actions on the device the person is talking to, run by its client: volume and audio output,
+  media players, opening apps from a configured table, and windows (list, focus, minimize, close;
+  KDE). A device that lacks one says so instead of refusing.
 - Permission checks, the confirmation gate, a trigger queue with priorities and interruption.
   Reminders that come due while Mayen is off still fire if they are within a tolerance.
 - An event log and transcript in SQLite. Recorded turns can be replayed against today's prompt and
@@ -117,7 +121,7 @@ Working today:
   who is not recognized gets the rights of an unknown speaker.
 
 Not there yet: enrolling people by voice, the sandboxed `bash` skill,
-forget/delete, do-not-disturb, long-term memory, vision, and desktop and phone clients. The choice of
+forget/delete, do-not-disturb, long-term memory, vision, and a phone client. The choice of
 language model is still open and will be settled by measurement. The full list of open questions is
 in ARCHITECTURE §16.
 

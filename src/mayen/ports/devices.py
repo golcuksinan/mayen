@@ -21,6 +21,7 @@ class Capability(StrEnum):
     SPEAKER = "speaker"
     MEDIA = "media"
     APPS = "apps"
+    WINDOWS = "windows"
 
 
 class MessageType(StrEnum):

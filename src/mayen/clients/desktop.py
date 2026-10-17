@@ -10,11 +10,20 @@ yapılır: düz metin çıktısı yerel ayara göre değişir.
 
 Uygulamalar, çekirdeğin gönderdiği `.desktop` kimliğiyle, sistemin kendi tanımından
 `gtk-launch` ile açılır; tablo çekirdeğin config'indedir (§9.4).
+
+Pencereler KWin'in betik arayüzüyle yönetilir: Wayland pencere listesini istemcilere vermez,
+KDE'de onu veren tek yol pencere yöneticisinin kendisidir. Betikler koddaki bir tablodadır
+(§9.4); betiğin çıktısı oturum günlüğünden, her çalıştırmaya özel bir işaretle okunur.
 """
 
 import asyncio
 import json
+import os
+import re
 import shutil
+import tempfile
+import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
@@ -232,6 +241,164 @@ class Apps:
         return CommandResult("", Status.OK, {"opened": str(args.get("app", entry))})
 
 
+KWIN = "org.kde.KWin"
+SCRIPTING = "org.kde.kwin.Scripting"
+KWIN_UUID = re.compile(r"\{[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\}")
+JOURNAL_WAIT_S = 2.0
+
+# Betik başına iki sabit eklenir: `MARK` (çıktının işareti) ve `ID` (pencerenin KWin kimliği).
+# İkisi de JSON değeri olarak girer, kod olarak değil; kimlik ayrıca biçiminden doğrulanır.
+_FIND = "const w = workspace.windowList().find(w => w.internalId.toString() === ID);\n"
+_FOUND = "{found: !!w, title: w ? w.caption : null, app: w ? w.resourceClass : null}"
+WINDOW_SCRIPTS = {
+    "list": "print(MARK + JSON.stringify(workspace.windowList()"
+    ".filter(w => w.normalWindow && !w.skipTaskbar).map(w => ({id: w.internalId.toString(), "
+    "title: w.caption, app: w.resourceClass, active: w === workspace.activeWindow, "
+    "minimized: w.minimized}))));",
+    "focus": _FIND + f"const r = {_FOUND};\n"
+    "if (w) { w.minimized = false; workspace.activeWindow = w; }\n"
+    "print(MARK + JSON.stringify(r));",
+    "minimize": _FIND + f"const r = {_FOUND};\nif (w) {{ w.minimized = true; }}\n"
+    "print(MARK + JSON.stringify(r));",
+    "close": _FIND + f"const r = {_FOUND};\nif (w) {{ w.closeWindow(); }}\n"
+    "print(MARK + JSON.stringify(r));",
+}
+
+
+type Script = Callable[[str, str], Awaitable[Any]]
+
+
+async def kwin_script(action: str, window: str, run: Run = run_argv) -> Any:  # noqa: ANN401
+    """Tablodaki betiği KWin'e yükler, çalıştırır ve çıktısını günlükten okur."""
+    mark = f"MAYEN-{uuid.uuid4().hex}:"
+    source = f"const MARK = {json.dumps(mark)};\nconst ID = {json.dumps(window)};\n"
+    source += WINDOW_SCRIPTS[action]
+    since = int(time.time()) - 1
+    name = mark.removesuffix(":").lower()
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".js", dir=os.environ.get("XDG_RUNTIME_DIR")
+    ) as f:
+        f.write(source)
+        f.flush()
+        loaded = await run(
+            [
+                "busctl",
+                "--user",
+                "--json=short",
+                "call",
+                KWIN,
+                "/Scripting",
+                SCRIPTING,
+                "loadScript",
+                "ss",
+                f.name,
+                name,
+            ]
+        )
+        number = json.loads(loaded)["data"][0]
+        try:
+            await run(
+                [
+                    "busctl",
+                    "--user",
+                    "call",
+                    KWIN,
+                    f"/Scripting/Script{number}",
+                    "org.kde.kwin.Script",
+                    "run",
+                ]
+            )
+            return await _journal(mark, since, run)
+        finally:
+            await run(
+                [
+                    "busctl",
+                    "--user",
+                    "call",
+                    KWIN,
+                    "/Scripting",
+                    SCRIPTING,
+                    "unloadScript",
+                    "s",
+                    name,
+                ]
+            )
+
+
+async def _journal(mark: str, since: int, run: Run) -> Any:  # noqa: ANN401
+    deadline = time.monotonic() + JOURNAL_WAIT_S
+    while True:
+        try:
+            out = await run(
+                [
+                    "journalctl",
+                    "--user",
+                    "-o",
+                    "cat",
+                    "-q",
+                    "--no-pager",
+                    f"--since=@{since}",
+                    f"--grep={mark}",
+                ]
+            )
+        except CommandError:
+            out = ""  # eşleşme yokken çıkış kodu sıfır değildir
+        for line in out.splitlines():
+            if mark in line:
+                return json.loads(line.split(mark, 1)[1])
+        if time.monotonic() > deadline:
+            raise CommandError("the window manager did not answer")
+        await asyncio.sleep(0.1)
+
+
+class Windows:
+    """Pencereye numara verir; numara pencere açık kaldıkça aynıdır ve başka pencereye geçmez.
+    Böylece eski bir listedeki numara, sonradan açılmış başka bir pencereye dokunamaz; kısa
+    olduğu için de onay cümlesinde aynen okunabilir (§10.5)."""
+
+    def __init__(self, script: Script = kwin_script) -> None:
+        self._script = script
+        self._numbers: dict[str, int] = {}
+        self._next = 1
+
+    def available(self) -> bool:
+        tools = ("busctl", "journalctl")
+        kwin = shutil.which("kwin_wayland") or shutil.which("kwin_x11")
+        return bool(kwin) and all(shutil.which(t) for t in tools)
+
+    def _number(self, kwin_id: str) -> int:
+        if kwin_id not in self._numbers:
+            self._numbers[kwin_id] = self._next
+            self._next += 1
+        return self._numbers[kwin_id]
+
+    async def handle(self, action: str, args: Mapping[str, Any]) -> CommandResult | None:
+        if action not in WINDOW_SCRIPTS:
+            return None
+        if action == "list":
+            windows = await self._script("list", "")
+            open_now = {w["id"] for w in windows}
+            self._numbers = {k: n for k, n in self._numbers.items() if k in open_now}
+            listed = [{"window": self._number(w.pop("id")), **w} for w in windows]
+            return CommandResult("", Status.OK, {"windows": sorted(listed, key=_by_number)})
+        number = int(args["window"])
+        kwin_id = next((k for k, n in self._numbers.items() if n == number), None)
+        if kwin_id is None:
+            return CommandResult("", Status.ERROR, error=f"no window {number}; list them again")
+        if not KWIN_UUID.fullmatch(kwin_id):
+            raise CommandError(f"unexpected window id {kwin_id!r}")
+        found = await self._script(action, kwin_id)
+        if not found["found"]:
+            del self._numbers[kwin_id]
+            return CommandResult("", Status.ERROR, error=f"window {number} is no longer open")
+        data = {"window": number, "title": found["title"], "app": found["app"]}
+        return CommandResult("", Status.OK, data)
+
+
+def _by_number(window: Mapping[str, Any]) -> int:
+    return int(window["window"])
+
+
 class Desktop:
     """Bu makinenin yürütücüleri; yetenek, yürütücüsü çalışabiliyorsa bildirilir."""
 
@@ -240,6 +407,7 @@ class Desktop:
             Capability.SPEAKER: Speaker(),
             Capability.MEDIA: Media(),
             Capability.APPS: Apps(),
+            Capability.WINDOWS: Windows(),
         }
         self._executors = default if executors is None else dict(executors)
 

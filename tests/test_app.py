@@ -138,6 +138,8 @@ def test_skills_are_discovered_from_the_folder() -> None:
         "reminder_list",
         "time",
         "volume",
+        "window",
+        "window_close",
     ]
 
 
