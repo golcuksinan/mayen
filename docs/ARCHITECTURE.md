@@ -928,9 +928,13 @@ Hangi onayın isteneceğine yetki kararı bakar (§10.3); burada iki türün nas
 4. Sonraki segment yalnızca onay çözümleyicisine gider. Çözümleyici kısıtlı bir çıktıyla üç
    sonuçtan birini üretir: onay / red / belirsiz. Kısıt dışı bir cevap belirsiz sayılmaz,
    hata yükseltir.
-   **Segmentin konuşmacısı turu açan kişiyle eşleşmiyorsa sonuç, söylenenden bağımsız olarak
-   belirsizdir** (eşleşme eşiği §16.5). Yoksa odadaki başka birinin "evet"i, sorulan kişinin
-   onayı yerine geçerdi.
+   **Segmentin konuşmacısı turu açan kişiden başka, tanınan bir kişiyse sonuç, söylenenden
+   bağımsız olarak belirsizdir** (eşleşme eşiği §16.5). Yoksa odadaki başka birinin "evet"i,
+   sorulan kişinin onayı yerine geçerdi. **Tanınmayan ses onay verebilir:** kısa bir cevap
+   konuşanı ayıracak kadar ses taşımaz; tanınmak şart olsaydı sorulan kişinin kendi "evet"i de
+   çoğu zaman belirsiz kalır ve sesli onay işlemezdi. **Kabul edilen risk:** tanınmayan birinin
+   cevabı onay sayılabilir; turu açan söz ise isteyenin sesiyle tanınmış olmalıdır ve niyet
+   onayı zaten kimliği kanıtlamaz, kimlik isteyen iş kişisel cihazdan onaylanır.
 5. Belirsizse bir kez daha sorulur; yine belirsizse iptal edilir.
 6. **Zaman aşımı reddir.**
 
