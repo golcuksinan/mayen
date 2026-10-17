@@ -23,8 +23,10 @@ from mayen.ports.tools import (
     ToolSpec,
 )
 from mayen.ports.transcript import Party, Utterance, UtteranceId
+from mayen.ports.triggers import TurnId
 
 NOW = datetime(2026, 10, 17, 22, 0, tzinfo=UTC)
+TURN = TurnId(uuid.uuid4())
 
 
 class Empty(BaseModel):
@@ -58,9 +60,9 @@ def state(session: str, value: SessionState) -> Event:
     return Event(header, {"state": value.value, "previous": "idle"})
 
 
-def said(session: str, text: str) -> Utterance:
+def said(session: str, text: str, turn: TurnId | None = TURN) -> Utterance:
     return Utterance(
-        UtteranceId(uuid.uuid4()), NOW, session, None, Party.PERSON, None, None, text
+        UtteranceId(uuid.uuid4()), NOW, session, turn, Party.PERSON, None, None, text
     )
 
 
@@ -80,7 +82,7 @@ async def test_a_personal_result_reaches_only_a_personal_device() -> None:
     assert message["records"] == [{"sensitivity": "GENERAL", "data": {"a": 1}}]
 
 
-async def test_only_this_sessions_state_and_words_are_followed() -> None:
+async def test_only_this_sessions_state_and_words_said_in_a_turn_are_followed() -> None:
     feed, sent = Feed(), Sent()
     following = asyncio.create_task(Screen("s1", sent, lambda: True).follow(feed))
     await asyncio.sleep(0)
@@ -89,6 +91,7 @@ async def test_only_this_sessions_state_and_words_are_followed() -> None:
         said("s2", "başkası"),
         state("s1", SessionState.LISTENING),
         Event(Header(EventId(uuid.uuid4()), EventKind.TOOL_FINISHED, "x", NOW, "s1"), {}),
+        said("s1", "televizyondaki ses", turn=None),
         said("s1", "hava nasıl"),
     ):
         feed.publish(item)

@@ -19,6 +19,7 @@ dependencies = [
 mayen = "mayen.app.main:main"
 mayen-terminal = "mayen.clients.terminal:main"
 mayen-mic = "mayen.clients.mic:main"
+mayen-desktop = "mayen.clients.screen:main"
 mayen-turns = "mayen.clients.turns:main"
 
 [build-system]

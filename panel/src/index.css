@@ -1,13 +1,13 @@
 /* Logodan gelen dil: koyu zemin, kırık beyaz, tek vurgu rengi. Gölge, parlama, gradyan yok.
    Çerçeveler tam kenarlık değil, yalnızca köşeler: logodaki "eksik çizgi" kuralı. */
 :root {
-  --zemin: #0E0E10;
-  --yuzey: #141417;
-  --kagit: #EDEAE3;
-  --kagit-2: rgb(237 234 227 / 0.62);
-  --kagit-3: rgb(237 234 227 / 0.34);
-  --kagit-4: rgb(237 234 227 / 0.12);
-  --vurgu: #E5482B;
+  --zemin: #0B0D11;
+  --yuzey: #10141A;
+  --kagit: #E3E8EF;
+  --kagit-2: rgb(227 232 239 / 0.62);
+  --kagit-3: rgb(227 232 239 / 0.34);
+  --kagit-4: rgb(227 232 239 / 0.12);
+  --vurgu: #F04664;
   /* Yoğunluğa bağlı olanlar theme.ts'ten kök öğeye yazılır */
   --yazi: 'Archivo Variable', system-ui, sans-serif;
   --sayi: 'IBM Plex Mono', ui-monospace, monospace;
@@ -20,7 +20,7 @@
 html, body, #root { height: 100%; }
 
 body {
-  background: #0E0E10;
+  background: #0B0D11;
   color: var(--kagit);
   font-family: var(--yazi);
   font-stretch: 100%;

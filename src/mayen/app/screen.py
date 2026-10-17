@@ -1,6 +1,7 @@
 """Sesli oturumun ekran yayını (§7): istemciye oturumun durumu, sözleri ve tool sonuçları.
 
-Durum ve sözler kaydın canlı yayınından, yalnızca bu oturumunkiler alınır. Tool sonucu
+Durum ve sözler kaydın canlı yayınından, yalnızca bu oturumunkiler alınır; sözlerden yalnızca
+bir turun içindekiler. Tool sonucu
 olaydan alınmaz: olaydaki sonuç yetki süzgecinden öncedir (§5.5); ekrana modele giden hâli
 gider. Ortak cihazda `PERSONAL` bir tool'un sonucu ekrana gitmez: önünde kimin olduğu
 bilinmez.
@@ -54,7 +55,9 @@ class Screen:
 
     def _message(self, item: Event | Utterance) -> str | None:
         if isinstance(item, Utterance):
-            return encode_utterance(item) if item.session == self._session else None
+            # Tur dışında duyulan söz kayda girer (§6, sürekli STT) ama Mayen'e söylenmemiştir.
+            mine = item.session == self._session and item.turn_id is not None
+            return encode_utterance(item) if mine else None
         header = item.header
         if header.session != self._session or header.kind is not EventKind.STATE_CHANGED:
             return None

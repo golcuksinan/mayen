@@ -21,6 +21,7 @@ from pipecat.frames.frames import (
     FunctionCallResultFrame,
     FunctionCallsStartedFrame,
     InterimTranscriptionFrame,
+    LLMAssistantPushAggregationFrame,
     LLMMessagesAppendFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
@@ -196,6 +197,10 @@ class ConfirmationGateProcessor(FrameProcessor):
             if self._plan is plan:
                 # Zaman aşımı reddir ve konuşulmaz: karşıda kimse yok (§5.4, §10.5).
                 await self._finish(plan, Outcome.TIMED_OUT, speak=False)
+                # Okunan soru Mayen'in açık sözüdür ve onu bir sonraki model cevabı kapatırdı;
+                # model çalışmayacağı için burada kapanır, yoksa tur bitmeyi hiç bitmeyen bir
+                # cevabı bekleyerek takılı kalırdı.
+                await self.push_frame(LLMAssistantPushAggregationFrame())
 
     async def _answer(self, plan: Plan, answer: Answer) -> None:
         async with self._lock:

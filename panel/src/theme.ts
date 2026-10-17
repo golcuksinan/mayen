@@ -1,45 +1,45 @@
-// Yoğunluğa göre renk değerleri (insta-llm panelinin dili). Yoğunluk değişince App bunları kök
+// Yoğunluğa göre renk değerleri (insta-llm panelinin dili, soğuk paleti). Yoğunluk değişince App bunları kök
 // öğede yayla canlandırır; bileşenler yalnızca CSS değişkenlerini okur, yoğunluğu bilmez.
 import type { Level } from './model'
 
 export const THEME: Record<Level, Record<string, string>> = {
-  // Nötr, düşük kontrast: bakmasan da olur
+  // Nötr, düşük kontrast, mavimsi: bakmasan da olur
   calm: {
-    '--zemin': '#0E0E10',
-    '--kagit': '#EDEAE3',
-    '--yuzey': '#131316',
-    '--yuzey-vurgu': '#18181C',
-    '--cerceve': 'rgba(237, 234, 227, 0.26)',
-    '--cerceve-vurgu': 'rgba(237, 234, 227, 0.62)',
-    '--kagit-2': 'rgba(237, 234, 227, 0.56)',
-    '--kagit-3': 'rgba(237, 234, 227, 0.30)',
-    '--kagit-4': 'rgba(237, 234, 227, 0.10)',
-    '--isaret': 'rgba(237, 234, 227, 0.56)',
+    '--zemin': '#0B0D11',
+    '--kagit': '#E3E8EF',
+    '--yuzey': '#10141A',
+    '--yuzey-vurgu': '#141A22',
+    '--cerceve': 'rgba(227, 232, 239, 0.24)',
+    '--cerceve-vurgu': 'rgba(227, 232, 239, 0.60)',
+    '--kagit-2': 'rgba(227, 232, 239, 0.56)',
+    '--kagit-3': 'rgba(227, 232, 239, 0.30)',
+    '--kagit-4': 'rgba(227, 232, 239, 0.10)',
+    '--isaret': 'rgba(227, 232, 239, 0.56)',
   },
-  // Sıcak ve daha kontrastlı: bir şey oluyor
+  // Buz mavisi, daha kontrastlı: bir şey oluyor
   active: {
-    '--zemin': '#15100A',
-    '--kagit': '#FBE5C8',
-    '--yuzey': '#21170D',
-    '--yuzey-vurgu': '#2B1C0E',
-    '--cerceve': 'rgba(255, 176, 92, 0.62)',
-    '--cerceve-vurgu': 'rgba(255, 176, 92, 1)',
-    '--kagit-2': 'rgba(251, 229, 200, 0.76)',
-    '--kagit-3': 'rgba(251, 229, 200, 0.46)',
-    '--kagit-4': 'rgba(251, 229, 200, 0.18)',
-    '--isaret': 'rgba(255, 176, 92, 0.95)',
+    '--zemin': '#08111A',
+    '--kagit': '#D6ECFA',
+    '--yuzey': '#0D1A26',
+    '--yuzey-vurgu': '#112233',
+    '--cerceve': 'rgba(92, 190, 255, 0.55)',
+    '--cerceve-vurgu': 'rgba(92, 190, 255, 1)',
+    '--kagit-2': 'rgba(214, 236, 250, 0.76)',
+    '--kagit-3': 'rgba(214, 236, 250, 0.46)',
+    '--kagit-4': 'rgba(214, 236, 250, 0.18)',
+    '--isaret': 'rgba(92, 190, 255, 0.95)',
   },
-  // Vurgu rengi her yerde: bak
+  // Vurgu rengi her yerde: bak. Soğuk zeminde tek sıcak renk
   alert: {
-    '--zemin': '#120D0D',
-    '--kagit': '#F2E2DD',
-    '--yuzey': '#1A1111',
-    '--yuzey-vurgu': '#261312',
-    '--cerceve': 'rgba(229, 72, 43, 0.50)',
-    '--cerceve-vurgu': 'rgba(229, 72, 43, 1)',
-    '--kagit-2': 'rgba(240, 226, 222, 0.66)',
-    '--kagit-3': 'rgba(240, 226, 222, 0.38)',
-    '--kagit-4': 'rgba(240, 226, 222, 0.13)',
-    '--isaret': 'rgba(229, 72, 43, 1)',
+    '--zemin': '#120C10',
+    '--kagit': '#F0E1E4',
+    '--yuzey': '#1A1016',
+    '--yuzey-vurgu': '#26121B',
+    '--cerceve': 'rgba(240, 70, 100, 0.50)',
+    '--cerceve-vurgu': 'rgba(240, 70, 100, 1)',
+    '--kagit-2': 'rgba(240, 225, 228, 0.66)',
+    '--kagit-3': 'rgba(240, 225, 228, 0.38)',
+    '--kagit-4': 'rgba(240, 225, 228, 0.13)',
+    '--isaret': 'rgba(240, 70, 100, 1)',
   },
 }

@@ -130,7 +130,17 @@ class Commands:
                 print(f"[could not send a command result: {e}]", file=sys.stderr)
 
 
-async def run(url: str, traffic: Traffic) -> None:
+type OnScreen = Callable[[dict[str, Any]], None]
+
+
+async def run(
+    url: str,
+    traffic: Traffic,
+    on_screen: OnScreen | None = None,
+    on_live: Callable[[], None] | None = None,
+) -> None:
+    """Bağlantı kopana kadar sürer. Ekranı olan istemci (`mayen-desktop`) ekran mesajlarını
+    `on_screen`'den, bağlantının kurulduğunu `on_live`'dan alır."""
     loop = asyncio.get_running_loop()
     microphone: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -160,13 +170,17 @@ async def run(url: str, traffic: Traffic) -> None:
         commands = Commands(ws, desktop)
 
         def on_text(raw: str) -> None:
-            # Ekran mesajları (§7) ekranı olmayan bu istemcide gösterilmez.
-            if screen_message(raw) is None:
+            message = screen_message(raw)
+            if message is None:
                 commands(raw)
+            elif on_screen is not None:  # ekranı olmayan istemcide gösterilmez (§7)
+                on_screen(message)
 
         receiving = asyncio.create_task(_receive(ws, playback, traffic, on_text))
         traffic.started = time.monotonic()
         print("listening (Ctrl+C to stop)", file=sys.stderr)
+        if on_live is not None:
+            on_live()
         with source, sink:
             try:
                 while not receiving.done():

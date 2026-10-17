@@ -13,6 +13,7 @@ from pipecat.frames.frames import (
     FunctionCallResultFrame,
     FunctionCallsStartedFrame,
     InterruptionFrame,
+    LLMAssistantPushAggregationFrame,
     LLMMessagesAppendFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
@@ -338,6 +339,13 @@ async def test_timeout_rejects_silently() -> None:
     assert not speak
     assert executed.order == []
     assert awaiting == [True, False]
+    # Model çalışmayacak: okunan sorunun açık sözü kapanır, tur onu beklemez
+    kinds = [
+        type(f)
+        for f in down
+        if isinstance(f, LLMMessagesAppendFrame | LLMAssistantPushAggregationFrame)
+    ]
+    assert kinds == [LLMMessagesAppendFrame, LLMAssistantPushAggregationFrame]
 
 
 async def test_plan_of_an_interrupted_turn_is_cancelled_silently() -> None:
