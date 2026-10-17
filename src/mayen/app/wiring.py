@@ -87,7 +87,7 @@ from mayen.pipeline.speech import (
     TurnEndToStt,
 )
 from mayen.pipeline.text import TextInput, TextOutput
-from mayen.pipeline.tools import AuthorizedTools
+from mayen.pipeline.tools import AuthorizedTools, Shown
 from mayen.pipeline.wake import ServiceWake, WakeStart
 from mayen.ports.devices import DeviceControl
 from mayen.ports.events import Clock
@@ -390,6 +390,7 @@ def _conversation(
     sound: ToolSound | None = None,
     follow_up_s: float | None = None,
     requester: RequesterSource | None = None,
+    shown: Shown | None = None,
 ) -> _Conversation:
     config = core.config
     endpoint = config.models.endpoint(CONVERSATION_ROLE)
@@ -452,6 +453,7 @@ def _conversation(
         TurnFlags,
         events,
         None if sound is None else sound.play,
+        shown,
     )
     llm = llm_service(
         endpoint,
@@ -492,7 +494,9 @@ def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Ses
     return Session(worker, conversation.gate, conversation.confirmation, observers)
 
 
-def voice_session(core: Core, session: str, voice: Voice) -> Session:
+def voice_session(
+    core: Core, session: str, voice: Voice, shown: Shown | None = None
+) -> Session:
     requester = core.connect(session, voice.device)
     speaker = voice.caller or (lambda _: requester)
     # Tool bitince sözsüz ses (§8.8); yazılı oturumda ses yok.
@@ -500,7 +504,15 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
     wake = voice.wake
     follow_up_s = None if wake is None else wake.follow_up_s
     c = _conversation(
-        core, session, speaker, voice.vad, voice.turn, sound, follow_up_s, voice.requester
+        core,
+        session,
+        speaker,
+        voice.vad,
+        voice.turn,
+        sound,
+        follow_up_s,
+        voice.requester,
+        shown,
     )
     pipeline = Pipeline(
         [

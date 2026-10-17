@@ -34,6 +34,8 @@ from mayen.ports.tools import (
 
 AWAITING_CONFIRMATION = "awaiting_confirmation"
 
+type Shown = Callable[[ToolSpec[Any], Mapping[str, Any], ToolResult], Awaitable[None]]
+
 
 class ConfirmationGate(Protocol):
     """Onay kapısı (§10.5): planı tutar, soruyu sorar, sonucu kendisi modele ekler."""
@@ -121,6 +123,7 @@ class AuthorizedTools:
         flags: Callable[[], TurnFlags],
         events: SessionEvents,
         ran: Callable[[], Awaitable[None]] | None = None,
+        shown: Shown | None = None,
     ) -> None:
         self._registry = registry
         # Tablo, bağlam, çağıran ve işaretler çağrı anında oturum durumundan okunur (§8.1):
@@ -133,6 +136,8 @@ class AuthorizedTools:
         self._events = events
         # Gövde çalışınca (sonucu ne olursa olsun) çağrılır: sesli oturumda sözsüz ses (§8.8).
         self._ran = ran
+        # Modele giden sonuç, süzgeçten sonra: sesli oturumda istemcinin ekranına (§7).
+        self._shown = shown
         self._malformed: set[str] = set()  # argümanı doğrulanamayan çağrılar (§9.1)
 
     def schema(self) -> ToolsSchema:
@@ -174,9 +179,10 @@ class AuthorizedTools:
         decision = decide(spec, caller, table, self._flags())
         self._requested(spec, dict(raw), call_id, decision.verdict)
         if decision.verdict is Verdict.DENY:
-            return to_model(
-                self._refused(spec, arguments, call_id, Status.DENIED, decision.reason)
-            ), None
+            # Ret ekranda da görünür: işin neden yapılmadığı sesten kaçırılmış olabilir.
+            denied = self._refused(spec, arguments, call_id, Status.DENIED, decision.reason)
+            await self._show(spec, arguments, denied)
+            return to_model(denied), None
 
         if decision.verdict is Verdict.CONFIRM:
             assert decision.confirmation is not None
@@ -235,7 +241,15 @@ class AuthorizedTools:
         )
         if self._ran is not None:
             await self._ran()
-        return filter_records(result, caller, table)
+        shown = filter_records(result, caller, table)
+        await self._show(spec, args.model_dump(mode="json"), shown)
+        return shown
+
+    async def _show(
+        self, spec: ToolSpec[Any], arguments: Mapping[str, Any], result: ToolResult
+    ) -> None:
+        if self._shown is not None:
+            await self._shown(spec, arguments, result)
 
     def _refused(
         self,

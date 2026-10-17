@@ -1,4 +1,4 @@
-"""Çekirdeğin sunucusu (§7, §13, §14): yazılı kanal ve panelin ucu.
+"""Çekirdeğin sunucusu (§7, §13, §14): yazılı ve sesli kanal, panelin ucu.
 
 Yazılı kanalda her bağlantı kendi oturumunu alır (§5.2).
 
@@ -11,8 +11,9 @@ import asyncio
 import ipaddress
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, WebSocket
 from pipecat.frames.frames import OutputTransportMessageUrgentFrame
@@ -23,6 +24,7 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat.workers.runner import WorkerRunner
 
 from mayen.app.panel import add_panel
+from mayen.app.screen import Screen
 from mayen.app.wiring import Core, Session, Voice, text_session, voice_session
 from mayen.core.devices import DeviceLink
 from mayen.pipeline.text import WireSerializer
@@ -79,6 +81,7 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
         params: FastAPIWebsocketParams,
         build: Callable[[str, FastAPIWebsocketTransport, DeviceId | None], Session],
         hello: str | None = None,
+        alongside: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         if "origin" in websocket.headers:
             # Tarayıcı her isteğe Origin ekler; sahibin tarayıcısında açık herhangi bir sayfa
@@ -102,9 +105,13 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
         log.info("%s session %s from device %s", kind, session, device or "unverified")
         runner = WorkerRunner(handle_sigint=False)
         await runner.add_workers(built.worker)
+        # Oturumla birlikte yaşayan iş (sesli kanalda ekran yayını); oturum bitince kesilir.
+        beside = None if alongside is None else asyncio.create_task(alongside())
         try:
             await runner.run()
         finally:
+            if beside is not None:
+                beside.cancel()
             await core.disconnect(session)
 
     @app.websocket(TEXT_PATH)
@@ -127,8 +134,9 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
 
         @app.websocket(VOICE_PATH)
         async def voice(websocket: WebSocket) -> None:
-            # Cihaz komutları sesle aynı bağlantıdan gider (§9.7).
+            # Cihaz komutları ve ekran mesajları sesle aynı bağlantıdan gider (§9.7, §7).
             link = DeviceLink()
+            screens: list[Screen] = []  # oturum kurulunca tek ekran
             params = FastAPIWebsocketParams(
                 serializer=VoiceSerializer(VOICE_INPUT_RATE, link.receive),
                 audio_in_enabled=True,
@@ -150,6 +158,9 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
 
                 link.attach(send)
                 core.attach_device(session, link)
+                screens.append(
+                    Screen(session, send, lambda: core.presence.personal(session) is not None)
+                )
                 stt, tts, vad, turn = core.speech()
                 # Konuşmacı tanıma config'te yoksa söz cihazın kişisinindir.
                 parts = Voice(
@@ -164,9 +175,12 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
                     core.wake(),
                     core.turn_recognizer(),
                 )
-                return voice_session(core, session, parts)
+                return voice_session(core, session, parts, screens[0].tool)
+
+            async def follow() -> None:
+                await screens[0].follow(core.feed)
 
             hello = VoiceHello(VOICE_INPUT_RATE, VOICE_OUTPUT_RATE).encode()
-            await serve(websocket, "voice", params, build, hello)
+            await serve(websocket, "voice", params, build, hello, follow)
 
     return app

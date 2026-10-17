@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from enum import StrEnum
 from typing import Any, cast
 
@@ -13,7 +13,7 @@ from mayen.core.events import Recorder
 from mayen.core.policy import ROLE_TABLE, system_table
 from mayen.core.registry import ToolRegistry
 from mayen.pipeline.events import SessionEvents
-from mayen.pipeline.tools import AWAITING_CONFIRMATION, AuthorizedTools, tools_schema
+from mayen.pipeline.tools import AWAITING_CONFIRMATION, AuthorizedTools, Shown, tools_schema
 from mayen.ports.events import EventKind
 from mayen.ports.tools import (
     Caller,
@@ -114,6 +114,7 @@ def tools(
     caller: Caller = OWNER,
     log: MemoryEventLog | None = None,
     ran: Callable[[], Awaitable[None]] | None = None,
+    shown: Shown | None = None,
 ) -> tuple[AuthorizedTools, Ctx, Gate]:
     ctx, gate = Ctx(), Gate()
 
@@ -125,7 +126,15 @@ def tools(
     events = SessionEvents(Recorder(log or MemoryEventLog(), FakeClock()), "s1", lambda: None)
     return (
         AuthorizedTools(
-            registry, lambda: ROLE_TABLE, context, gate, lambda: caller, TurnFlags, events, ran
+            registry,
+            lambda: ROLE_TABLE,
+            context,
+            gate,
+            lambda: caller,
+            TurnFlags,
+            events,
+            ran,
+            shown,
         ),
         ctx,
         gate,
@@ -193,6 +202,30 @@ async def test_guest_gets_general_records_and_a_count() -> None:
     result, _ = await t.call(SEARCH, {})
     assert [r["body"] for r in result["records"]] == ["çöpü çıkar"]
     assert result["withheld_records"] == 1
+
+
+async def test_the_screen_gets_what_the_model_gets_and_refusals() -> None:
+    # Olaydaki sonuç süzgeçten öncedir (§5.5); ekrana süzülmüş hâli gider (§7).
+    seen: list[tuple[str, dict[str, Any], ToolResult]] = []
+
+    async def shown(spec: ToolSpec[Any], arguments: Mapping[str, Any], r: ToolResult) -> None:
+        seen.append((spec.name, dict(arguments), r))
+
+    t, _, gate = tools(GUEST, shown=shown)
+    await t.call(SEARCH, {})
+    await t.call(DELETE, {"id": 1})
+    (name, _, searched), (refused, arguments, denied) = seen
+    assert name == "note_search" and [r.data["body"] for r in searched.records] == [
+        "çöpü çıkar"
+    ]
+    assert searched.withheld == 1
+    assert (refused, arguments, denied.status) == ("note_delete", {"id": 1}, Status.DENIED)
+    t, _, gate = tools(shown=shown)
+    await t.call(DELETE, {"id": 2})
+    assert len(seen) == 2  # onay bekleyen çağrının sonucu henüz yok
+    assert gate.execute is not None
+    await gate.execute()
+    assert seen[-1][0] == "note_delete" and seen[-1][2].data == {"deleted": 2}
 
 
 async def test_denied_call_does_not_run() -> None:

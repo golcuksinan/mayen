@@ -28,6 +28,7 @@ from websockets.exceptions import WebSocketException
 from mayen.clients.desktop import Desktop
 from mayen.ports.channels import VoiceHello
 from mayen.ports.devices import Capabilities, Command, CommandResult
+from mayen.ports.screen import screen_message
 from mayen.ports.tools import Status
 
 DEFAULT_URL = "ws://127.0.0.1:8765/voice"
@@ -156,7 +157,14 @@ async def run(url: str, traffic: Traffic) -> None:
             dtype="int16",
             callback=playback.fill,
         )
-        receiving = asyncio.create_task(_receive(ws, playback, traffic, Commands(ws, desktop)))
+        commands = Commands(ws, desktop)
+
+        def on_text(raw: str) -> None:
+            # Ekran mesajları (§7) ekranı olmayan bu istemcide gösterilmez.
+            if screen_message(raw) is None:
+                commands(raw)
+
+        receiving = asyncio.create_task(_receive(ws, playback, traffic, on_text))
         traffic.started = time.monotonic()
         print("listening (Ctrl+C to stop)", file=sys.stderr)
         with source, sink:
