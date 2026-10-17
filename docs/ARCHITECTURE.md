@@ -341,7 +341,7 @@ kuralına uyar (§8.8).
 |---|---|
 | **Ses girişi** | Çok tüketicili akış (STT + kayıt + konuşmacı tanıma). Çalınan sesi referans olarak alabilir |
 | **Echo cancellation** | Donanımda, istemcide ya da yazılımda; hattın ses girişinden önce. AEC yoksa istemci yarım dubleks çalışır (asistan konuşurken mikrofon kapalı); bu söz kesmeyi öldürür, yani bir kaçış yolu, çözüm değil |
-| **Sürekli STT** | STT sürekli çalışır, transkript her zaman kaydedilir. Sunucuya sürekli ses akar; taşıma biçimi **AÇIK** (§16.9) |
+| **Sürekli STT** | STT sürekli çalışır, transkript her zaman kaydedilir. Sunucuya sürekli ses akar; taşıma biçimi **AÇIK** (§16.9). Yazıya dökme ve konuşmacı tanıma, sözün bitişini bulmak için kesilen parçalarla değil turun bütün sesiyle yapılır: kısa parçada ikisi de yanılır |
 | **Wake word** | Bir tetikleyici adaptörü; sunucuda, ses girişinden beslenir: ses zaten sürekli sunucuya akar, istemci her cihaz için yeniden yazılmaz. Model ve eşik config'tedir; söz, eğitilmiş modelin kendisidir |
 | **Konuşmacı tanıma** | Bir adaptör. Sonucu bir **skordur**, iddia değil; skor bir eşleşme seviyesine çevrilir. Bağlamda `speaker` alanı olur ve yetkilendirmede profile eşlenir. Model SpeechBrain ECAPA-TDNN, kendi sürecinde (§3); servis yalnızca sesin izini çıkarır. İz kişi deposundadır; puanı (kosinüs) çekirdek hesaplar ve config'teki eşikle karar verir: eşiği geçen en yüksek puanlı kişi konuşandır, geçen yoksa konuşan tanınmamıştır. Başka modelle çıkarılmış iz karşılaştırılmaz, yüksek sesle hatadır |
 | **Genel medya** | Duyu girişi sese özel değil. Kayıt deposu medya türünden bağımsız, `media_id` referansı, LLM mesajında medya parçası |
