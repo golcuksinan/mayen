@@ -111,8 +111,12 @@ Working today:
 - An event log and transcript in SQLite. Recorded turns can be replayed against today's prompt and
   model, with mocked tools.
 - A read-only web panel that shows events and session states live.
+- A wake word ("hey Mayen") on the server, and Whisper's own rule for dropping non-speech.
+- Speaker recognition (ECAPA-TDNN in its own service): each turn is transcribed and recognized
+  from its whole audio, not from the short pieces voice activity detection cuts it into. A person
+  who is not recognized gets the rights of an unknown speaker.
 
-Not there yet: wake word, input filtering, speaker recognition, the sandboxed `bash` skill,
+Not there yet: enrolling people by voice, the sandboxed `bash` skill,
 forget/delete, do-not-disturb, long-term memory, vision, and desktop and phone clients. The choice of
 language model is still open and will be settled by measurement. The full list of open questions is
 in ARCHITECTURE §16.

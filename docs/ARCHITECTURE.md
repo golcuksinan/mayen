@@ -343,7 +343,7 @@ kuralına uyar (§8.8).
 | **Echo cancellation** | Donanımda, istemcide ya da yazılımda; hattın ses girişinden önce. AEC yoksa istemci yarım dubleks çalışır (asistan konuşurken mikrofon kapalı); bu söz kesmeyi öldürür, yani bir kaçış yolu, çözüm değil |
 | **Sürekli STT** | STT sürekli çalışır, transkript her zaman kaydedilir. Sunucuya sürekli ses akar; taşıma biçimi **AÇIK** (§16.9). Yazıya dökme ve konuşmacı tanıma, sözün bitişini bulmak için kesilen parçalarla değil turun bütün sesiyle yapılır: kısa parçada ikisi de yanılır |
 | **Wake word** | Bir tetikleyici adaptörü; sunucuda, ses girişinden beslenir: ses zaten sürekli sunucuya akar, istemci her cihaz için yeniden yazılmaz. Model ve eşik config'tedir; söz, eğitilmiş modelin kendisidir |
-| **Konuşmacı tanıma** | Bir adaptör. Sonucu bir **skordur**, iddia değil; skor bir eşleşme seviyesine çevrilir. Bağlamda `speaker` alanı olur ve yetkilendirmede profile eşlenir. Model SpeechBrain ECAPA-TDNN, kendi sürecinde (§3); servis yalnızca sesin izini çıkarır. İz kişi deposundadır; puanı (kosinüs) çekirdek hesaplar ve config'teki eşikle karar verir: eşiği geçen en yüksek puanlı kişi konuşandır, geçen yoksa konuşan tanınmamıştır. Başka modelle çıkarılmış iz karşılaştırılmaz, yüksek sesle hatadır |
+| **Konuşmacı tanıma** | Bir adaptör. Sonucu bir **skordur**, iddia değil; skor bir eşleşme seviyesine çevrilir. Bağlamda `speaker` alanı olur ve yetkilendirmede profile eşlenir. Model SpeechBrain ECAPA-TDNN, kendi sürecinde (§3); servis yalnızca sesin izini çıkarır. İz kişi deposundadır; puanı (kosinüs) çekirdek hesaplar ve config'teki eşikle karar verir: eşiği geçen en yüksek puanlı kişi konuşandır, geçen yoksa konuşan tanınmamıştır. Eşiğin değeri kurulumun kendi mikrofonunda, sahibin kayıtları ve yabancı seslerle ölçülerek seçilir: modelin hazır değeri başka dil ve mikrofonlarda bulunmuştur, yabancıyı ayırmayabilir. Başka modelle çıkarılmış iz karşılaştırılmaz, yüksek sesle hatadır |
 | **Genel medya** | Duyu girişi sese özel değil. Kayıt deposu medya türünden bağımsız, `media_id` referansı, LLM mesajında medya parçası |
 | **Kamera ve vision** | Medya hattının adaptörleri |
 | **Girdi eleme** | Metin seviyesinde: boş metin ve düşük STT skoru (Whisper'ın kendi kuralı, iki sinyal birlikte: `no_speech_prob` > 0.6 ve `avg_logprob` < -1). Uzunluk kuralı kaynağı bulunana kadar yoktur; tek kelimelik cevap onayda gereklidir. Asıl süzgeç wake word'dür (§5.1): uyanık değilken duyulan modele gitmez. Karar modelini kabul edecek şekilde tasarlıdır |
@@ -413,7 +413,7 @@ eklemez.
   Etiket yalnızca modele giden istektedir; kayıttaki metin değişmez. Tek kişilik oturumda da
   konur: kural tek kalır, ikinci kişi geldiğinde geçmişin biçimi değişmez. Etiket olmadan model,
   konuşanı bloktan bilse de geçmişte kimin ne dediğini ayıramaz; çok kişili bir oturumda
-  başkasının sözünü konuşana mal eder. Konuşanı konuşmacı tanıma bulur (§16.5).
+  başkasının sözünü konuşana mal eder. Konuşanı konuşmacı tanıma bulur (§6).
 - **Başkasının yazdığı içerik oturumun durumunda işaretlenir, mesajda değil.** Bu işareti
   okuyan model değil yetki kararıdır (§10.6); böyle bir içerik getiren tool sonucu bunu
   bildirir ve oturum, içerik bağlamda kaldıkça işareti taşır.
@@ -908,7 +908,7 @@ tek başına konuşmak istemez.
   karışır ve profil kayar.
 - Kayıt bitince sahibe bildirim gider: "X kaydoldu, rolü ne olsun?". Rol verilene kadar
   kişinin rolü `unknown`'dur.
-- Gereken ses süresi, eşikler ve "güçlü eşleşme"nin tanımı **AÇIK** (§16.5).
+- Gereken ses süresi ve "güçlü eşleşme"nin tanımı **AÇIK** (§16.5).
 
 ### 10.5 Onay
 
@@ -929,7 +929,7 @@ Hangi onayın isteneceğine yetki kararı bakar (§10.3); burada iki türün nas
    sonuçtan birini üretir: onay / red / belirsiz. Kısıt dışı bir cevap belirsiz sayılmaz,
    hata yükseltir.
    **Segmentin konuşmacısı turu açan kişiden başka, tanınan bir kişiyse sonuç, söylenenden
-   bağımsız olarak belirsizdir** (eşleşme eşiği §16.5). Yoksa odadaki başka birinin "evet"i,
+   bağımsız olarak belirsizdir** (tanınmanın eşiği §6). Yoksa odadaki başka birinin "evet"i,
    sorulan kişinin onayı yerine geçerdi. **Tanınmayan ses onay verebilir:** kısa bir cevap
    konuşanı ayıracak kadar ses taşımaz; tanınmak şart olsaydı sorulan kişinin kendi "evet"i de
    çoğu zaman belirsiz kalır ve sesli onay işlemezdi. **Kabul edilen risk:** tanınmayan birinin
@@ -1217,9 +1217,8 @@ Cevaplanmadan uygulanmaz; yerine varsayım konmaz (§0). Numaralar sabittir.
 2. **STT modeli**, nerede çalıştığı ve sözün bittiğine nasıl karar verildiği.
 3. **Her çıkış dili için TTS sesi.** Profillerdeki her çıkış dili için bir ses gerekir.
 4. ✅ §7
-5. **Konuşmacı tanıma:** eşiğin değeri (adaylar: SpeechBrain'in varsayılanı 0,25 ve v1'in
-   0,65; sahibin kayıtlarıyla seçilecek), kayıt için gereken ses süresi, "güçlü eşleşme"nin
-   tanımı. Karar verilen kısım §6'da.
+5. **Konuşmacı tanıma:** kayıt için gereken ses süresi, "güçlü eşleşme"nin tanımı (§10.4).
+   Karar verilen kısım (model, eşiğin yeri ve nasıl seçildiği) §6'da.
 6. ✅ §10.3
 7. ✅ §10.3
 8. ✅ §6
