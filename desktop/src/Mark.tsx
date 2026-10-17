@@ -5,7 +5,8 @@
 import { motion, type Transition } from 'motion/react'
 import type { SessionState } from './contract'
 
-export type MarkState = SessionState | 'failed'
+// offline: çekirdeğe bağlantı yok (sunucu kapalı, ağ koptu, mikrofon açılamadı)
+export type MarkState = SessionState | 'failed' | 'offline'
 
 const W = 67.06
 const H = 58
@@ -14,6 +15,9 @@ const V = 'M19.94,5.04L33.53,23.96L47.12,5.04L47.12,25.04L33.53,43.96L19.94,25.0
 
 /** Geçiş: hedefi aşmadan yavaşlayarak durur (köşe çiziminin eğrisi). */
 const EASE: Transition = { duration: 0.45, ease: [0.2, 0.7, 0.2, 1] }
+
+/** Dağılma ve toparlanma: aynı eğri, daha ağır. */
+const SLOW: Transition = { duration: 0.9, ease: [0.2, 0.7, 0.2, 1] }
 
 const loop = (duration: number, delay = 0): Transition =>
   ({ duration, delay, repeat: Infinity, ease: 'easeInOut' })
@@ -43,6 +47,12 @@ const POSES: Record<MarkState, Poses> = {
     v: { ...REST, y: [0, 4, 0] },
     tv: { duration: 0.7, ease: [0.2, 0.7, 0.2, 1] },
   },
+  // Bağlantı yok: M dağılır; parçalar ayrılıp söner, bağlantı gelince yerine oturur
+  offline: {
+    left: { ...REST, x: -12, opacity: 0.35 }, right: { ...REST, x: 12, opacity: 0.35 },
+    v: { ...REST, y: 10, opacity: 0.35 },
+    tl: SLOW, tr: SLOW, tv: SLOW,
+  },
 }
 
 // M'nin beyazı temayla değişmez: temanın kağıt rengi yoğunlukla tonlanır, dikmeler her durumda
@@ -57,6 +67,7 @@ const BAR_FILL: Record<MarkState, string> = {
   speaking: WHITE,
   awaiting_confirmation: 'var(--vurgu)',
   failed: WHITE,
+  offline: WHITE,
 }
 
 // V boştayken gri, düşünürken beyaz, öteki her durumda logodaki kırmızısı
@@ -67,6 +78,7 @@ const V_FILL: Record<MarkState, string> = {
   speaking: 'var(--vurgu)',
   awaiting_confirmation: 'var(--vurgu)',
   failed: 'var(--vurgu)',
+  offline: 'var(--kagit-3)',
 }
 
 function Brackets({ state, size }: { state: MarkState; size: number }) {
@@ -74,13 +86,17 @@ function Brackets({ state, size }: { state: MarkState; size: number }) {
   const half = size / 2
   const scale = state === 'listening' ? 0.9 : 1
   const color = state === 'awaiting_confirmation' || state === 'failed' ? 'var(--vurgu)'
-    : state === 'idle' ? 'var(--cerceve)' : 'var(--cerceve-vurgu)'
+    : state === 'idle' || state === 'offline' ? 'var(--cerceve)' : 'var(--cerceve-vurgu)'
+  // Bağlantı yokken köşeler yavaşça belirip kaybolur: yeniden deneniyor
+  const offline = state === 'offline'
   const corner = (d: string, i: number) => (
     <motion.path key={i} d={d} fill="none" strokeWidth={1.5}
       initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ ...EASE, delay: i * 0.05 }} />
   )
   return (
-    <motion.g style={{ originX: '50%', originY: '50%' }} animate={{ scale }} transition={EASE}>
+    <motion.g style={{ originX: '50%', originY: '50%' }}
+      animate={{ scale, opacity: offline ? [0.15, 0.7, 0.15] : 1 }}
+      transition={{ scale: EASE, opacity: offline ? loop(2.4) : EASE }}>
       <g style={{ stroke: color, transition: 'stroke .5s' }}>
       {corner(`M${-half} ${-half + r} V${-half} H${-half + r}`, 0)}
       {corner(`M${half - r} ${-half} H${half} V${-half + r}`, 1)}
@@ -99,7 +115,8 @@ function Ring({ state, radius }: { state: MarkState; radius: number }) {
     <motion.circle r={radius} fill="none" strokeWidth={1}
       style={{ stroke: 'var(--kagit-3)', originX: '50%', originY: '50%' }}
       strokeDasharray={`${c * 0.86} ${c * 0.14}`}
-      animate={spinning ? { rotate: [0, 360], opacity: 0.8 } : { opacity: state === 'idle' ? 0.35 : 0.7 }}
+      animate={spinning ? { rotate: [0, 360], opacity: 0.8 }
+        : { opacity: state === 'offline' ? 0 : state === 'idle' ? 0.35 : 0.7 }}
       transition={spinning ? { rotate: { duration: 2.4, repeat: Infinity, ease: 'linear' }, opacity: EASE } : EASE} />
   )
 }

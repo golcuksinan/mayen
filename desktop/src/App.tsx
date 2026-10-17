@@ -21,6 +21,7 @@ const CONNECTION: Record<Connection, string> = {
 
 const STATE: Record<MarkState, string> = {
   failed: 'failed',
+  offline: 'no connection',
   idle: 'idle',
   listening: 'listening',
   thinking: 'thinking',
@@ -42,7 +43,7 @@ function useNow(ms: number) {
 const FAIL_MS = 1600
 
 // Deneme kipi (D tuşu): konuşmadan bütün durumları sırayla gösterir
-const DEMO: MarkState[] = ['idle', 'listening', 'thinking', 'speaking', 'awaiting_confirmation', 'failed']
+const DEMO: MarkState[] = ['idle', 'listening', 'thinking', 'speaking', 'awaiting_confirmation', 'failed', 'offline']
 
 function useDemo() {
   const [on, setOn] = useState(false)
@@ -62,6 +63,7 @@ function useDemo() {
 }
 
 function markState(screen: Screen, now: number): MarkState {
+  if (screen.connection !== 'live') return 'offline'
   const last = screen.cards[0]
   if (last && failed(last) && now - last.at < FAIL_MS) return 'failed'
   return screen.state
@@ -114,7 +116,7 @@ export default function App() {
   const demo = useDemo()
   const mark = demo ?? markState(screen, now)
   const lvl = demo
-    ? (demo === 'awaiting_confirmation' || demo === 'failed' ? 'alert' : demo === 'idle' ? 'calm' : 'active')
+    ? (demo === 'awaiting_confirmation' || demo === 'failed' || demo === 'offline' ? 'alert' : demo === 'idle' ? 'calm' : 'active')
     : level(screen, now)
 
   return (
@@ -145,8 +147,8 @@ export default function App() {
                             alignItems: 'center', justifyContent: 'center', gap: 28, minHeight: 0 }}>
             <Mark state={mark} size={320} />
             <motion.span key={mark} className="etiket" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-              style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' ? 'var(--vurgu)' : 'var(--isaret)' }}>
-              {STATE[mark]}
+              style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' || mark === 'offline' ? 'var(--vurgu)' : 'var(--isaret)' }}>
+              {mark === 'offline' && !demo ? CONNECTION[screen.connection] : STATE[mark]}
             </motion.span>
           </section>
           <div style={{ gridColumn: 3, gridRow: '1 / 4', minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
