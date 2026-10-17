@@ -680,9 +680,9 @@ Ortak `ToolSpec`. Her skill şunları bildirir:
   - **Çekirdeğin doldurduğu kısım:** olay başlığı (§5.5) ve ona ek olarak çağıran kişi, tool
     adı, etki sınıfı, hassasiyet ve doğrulanmış argümanlar. Skill bu alanlara
     dokunmaz; ortak alanları her skill kendisi yazsaydı biri unutur ya da farklı biçimde yazardı.
-  - **Skill'in doldurduğu kısım:** durum (`ok` | `error` | `denied` | `timeout` |
-    `cancelled` | `started`), yapılandırılmış veri, varsa hata nedeni ve geri alma için gereken
-    bilgi (§9.6).
+  - **Skill'in doldurduğu kısım:** durum (`ok` | `error` | `denied` | `unsupported` |
+    `timeout` | `cancelled` | `started`), yapılandırılmış veri, varsa hata nedeni ve geri alma
+    için gereken bilgi (§9.6).
 
   Olay kaydı, eylem geçmişi, tool bitti sesi (§8.8) ve panel aynı zarfı okur. Modele zarfın
   kısaltılmış bir görünümü gider; gereksiz alanlar bağlamda yer kaplamaz. Aynı tool birden
@@ -762,7 +762,7 @@ değil (tek dize kabuk bölmesi ister, kaçış hataları da oradan sızar).
 | **Uzun süren tool'lar** | Sonuçta `started` durumu. Bitince sonuç yeni bir tetikleyici olarak turu başlatır. Durumları kalıcı iş deposunda tutulur |
 | **Görüntü** | Kamera ve vision hattı üzerinden |
 | **Profil** | Kişiye özel tercih ve notları okur (§11.1) |
-| **Makine denetimi** | Bir adaptörün arkasındadır; tool *ne* istendiğini bilir, *nasıl* yapıldığını bilmez |
+| **Makine denetimi** | Bir adaptörün arkasındadır; tool *ne* istendiğini bilir, *nasıl* yapıldığını bilmez. Eylem cihazda çalışır (§9.7) |
 | **Eylem geçmişi** | Olay kaydının görünümüdür (§11) |
 
 ### 9.6 Geri alma
@@ -784,6 +784,29 @@ bir tool'dur ve kullanıcı ondan yalnızca "geri al" diye isteyebilmelidir.
 - **Tersi olmayan eylem geri alınamaz ve bu modele tool sonucu olarak söylenir.**
   `IRREVERSIBLE` sınıfının tanım gereği tersi yoktur. `WRITE` ve `EXTERNAL` için tersi zorunlu
   değildir: tersi tanımsız bir tool'un geri alınamadığı modele ve kullanıcıya zaten söylenir.
+
+### 9.7 Cihazda çalışan eylemler
+
+Makine denetimi (ses, medya, uygulama, pencere) bir cihazın üstünde iş yapar; çekirdek o
+cihazda olmayabilir.
+
+- **Eylemin hedefi oturumun cihazıdır.** Kişi hangi cihaza konuşuyorsa onun önündedir; başka
+  bir hedef, modelin cihazı tahmin etmesini gerektirirdi.
+- **Eylemi cihazdaki istemci çalıştırır; çekirdek komutu istemcinin açık bağlantısından
+  gönderir.** Cihazda ayrı bir servis, ikinci bir açık kapı ve ikinci bir kimlik doğrulaması
+  isterdi.
+- **Çekirdekle istemci aynı makinedeyken de yol aynıdır.** İki yol olsaydı, istemci başka bir
+  makineye geçtiğinde yalnızca biri sınanmış olurdu.
+- **İstemci bağlanırken yeteneklerini bildirir; istemci tipi tanımlanmaz.** Tipler her yeni
+  cihazla çoğalır, yetenek cihazda olanı söyler.
+- **Yetenek beyanı kimlik değildir; yetki kararı ona bakmaz.** Yalan bir yetenek yetki
+  kazandırmaz, yalnızca o cihaza bir komut gitmesini mümkün kılar.
+- **Katalog cihaza göre değişmez; yeteneği olmayan cihazda çağrının sonucu `unsupported`
+  durumudur.** Katalog sabit önekin parçasıdır (§8.3). Sonuç `denied` olsaydı model yapılamayan
+  bir işi yetki eksikliği diye anlatırdı.
+- **Oturumun cihazının yetenekleri bağlam bloğuna girer.** Model bilmeseydi, yapamayacak bir
+  cihazda boşa çağrı yapardı.
+- **İstemci cevap vermezse sonuç `timeout` durumudur.** Bağlantı koptuğunda tur takılı kalmaz.
 
 ---
 
@@ -1237,15 +1260,8 @@ Cevaplanmadan uygulanmaz; yerine varsayım konmaz (§0). Numaralar sabittir.
     İlk ses süresi ölçülür ve raporlanır, ama ona bir hedef sayı önerilmez.
 19. **`bash`'in alanı dışında sistemi değiştiren işler** (ekran parlaklığı, çalışan bir
     programı kapatma, zamanlı kapatma gibi) tool'u yoksa nasıl yapılır; `DANGEROUS` sınıfına
-    girecek bir skill olacak mı. Gerçek bir ihtiyaçla karar verilir.
-    Konuşulmuş yön (karar değil): eylemin hedefi oturumun cihazıdır ve cihazı taşıma zaten
-    bildirir (§10.1); tarayıcı sistemi değiştiremez, bu yüzden eylem cihazdaki yerel bir parçada
-    (telefon uygulaması, masaüstü ajanı) çalışır. Komut ya istemcinin açık bağlantısından gider
-    ya da cihazdaki bir servise ağ üzerinden. İstemci tipi yerine istemci bağlanırken
-    yeteneklerini bildirir: tipler her yeni cihazda çoğalır, yetenek cihazda olanı söyler; beyan
-    kimlik değildir, yalan bir yetenek yetki kazandırmaz. Katalog sabit kalır (§8.3, §9); yeteneği
-    olmayan cihazda çağrı, ret gibi tool sonucu olarak döner. Cihazın yetenekleri bağlam
-    bloğuna girebilir.
+    girecek bir skill olacak mı. Gerçek bir ihtiyaçla karar verilir. Tool'u olan cihaz
+    eylemlerinin nerede ve nasıl çalıştığı §9.7'de.
 20. **Tool sonucu boyut sınırının değeri** (§8.8): tool başına mı, tek değer mi.
 21. **Düşünmenin (reasoning) yönetimi:** hangi adımda açık olduğu, bütçesi, kimin karar verdiği. Modele özgü değil, genel bir politika olarak.
 22. **Onay promptlarının dile bağlılığı** (§10.5, §8.6, §2.1). Bugünkü gerçekleme sahibin
