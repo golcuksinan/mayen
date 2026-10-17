@@ -26,7 +26,7 @@ from mayen.core.confirmation import (
     missing_values,
     next_step,
     resolve_answer,
-    speaker_matches,
+    someone_else,
 )
 from mayen.core.events import Recorder
 from mayen.pipeline.confirmation import ConfirmationGateProcessor
@@ -84,20 +84,22 @@ def test_missing_values_checks_every_leaf() -> None:
     assert missing_values(calls, "Delete note 2 and add Gülşen, tagged iş?") == []
 
 
-def test_unknown_or_other_speaker_does_not_match() -> None:
-    assert speaker_matches(OWNER, Answer("evet", "p1"))
-    assert not speaker_matches(OWNER, Answer("evet", "p2"))
-    assert not speaker_matches(OWNER, Answer("evet", None))
+def test_only_another_recognized_person_is_someone_else() -> None:
+    assert not someone_else(OWNER, Answer("evet", "p1"))
+    assert someone_else(OWNER, Answer("evet", "p2"))
+    # Tanınmayan ses başkası sayılmaz: kısa cevap konuşanı ayırmaya yetmez (kabul edilen risk).
+    assert not someone_else(OWNER, Answer("evet", None))
     nobody = Caller(Role.UNKNOWN, None, has_personal_device=False)
-    assert not speaker_matches(nobody, Answer("evet", None))
+    assert someone_else(nobody, Answer("evet", "p1"))
 
 
 async def test_other_speaker_is_unclear_without_asking_the_resolver() -> None:
-    resolver = Resolver(Resolution.CONFIRM)
+    resolver = Resolver(Resolution.CONFIRM, Resolution.CONFIRM)
     plan = Plan(OWNER, question="Delete note 1?")
     assert await resolve_answer(plan, Answer("evet", "p2"), resolver) is Resolution.UNCLEAR
     assert resolver.asked == []
     assert await resolve_answer(plan, Answer("evet", "p1"), resolver) is Resolution.CONFIRM
+    assert await resolve_answer(plan, Answer("evet", None), resolver) is Resolution.CONFIRM
 
 
 def test_unclear_is_asked_once_more_then_cancelled() -> None:

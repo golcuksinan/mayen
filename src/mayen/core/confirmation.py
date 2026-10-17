@@ -19,7 +19,7 @@ class Entry:
 class Plan:
     """Bir cevaptaki onay gerektiren bütün çağrılar; kullanıcıya tek soru gider (§9.3)."""
 
-    requester: Caller  # turu açan kişi; cevabı yalnızca o verebilir (§10.5 adım 4)
+    requester: Caller  # turu açan kişi; tanınan başka biri cevap veremez (§10.5 adım 4)
     entries: list[Entry] = field(default_factory=list)
     question: str = ""
     asked_again: bool = False
@@ -53,18 +53,21 @@ def missing_values(calls: Sequence[PlannedCall], question: str) -> list[str]:
     return [v for c in calls for v in _leaves(c.arguments) if v not in question]
 
 
-def speaker_matches(requester: Caller, answer: Answer) -> bool:
-    """Kimliği bilinmeyen bir konuşmacı turu açan kişiyle eşleşmiş sayılamaz."""
-    return answer.speaker is not None and answer.speaker == requester.person_id
+def someone_else(requester: Caller, answer: Answer) -> bool:
+    """Cevabı turu açan kişiden başka, tanınan biri verdi (§10.5 adım 4).
+
+    Tanınmayan ses başkası sayılmaz: kısa bir cevap konuşanı ayıracak kadar ses taşımaz.
+    """
+    return answer.speaker is not None and answer.speaker != requester.person_id
 
 
 async def resolve_answer(plan: Plan, answer: Answer, resolver: AnswerResolver) -> Resolution:
-    """Eşleşmeyen konuşmacının cevabı, söylenenden bağımsız olarak belirsizdir (§10.5 adım 4).
+    """Başka bir kişinin cevabı, söylenenden bağımsız olarak belirsizdir (§10.5 adım 4).
 
     Bu durumda çözümleyici hiç çağrılmaz: odadaki başka birinin "evet"i ne derse desin
     sorulan kişinin onayı yerine geçmez.
     """
-    if not speaker_matches(plan.requester, answer):
+    if someone_else(plan.requester, answer):
         return Resolution.UNCLEAR
     return await resolver.resolve(plan.question, answer.text)
 
