@@ -1,6 +1,7 @@
 """Oturumun cihazındaki pencereler: listele, öne getir, küçült (§9.7).
 
 Pencere numarası listeden gelir; numarayı istemci verir ve pencere açık kaldıkça değişmez.
+Numara yoksa ya da bilinmiyorsa sonuç, açık pencerelerin listesiyle birlikte hatadır.
 Kapatma geri alınamaz, bu yüzden ayrı tool'dur (`window_close`, §9.1). Pencere başlıkları
 açık olan içeriği (sayfa, belge, ileti konusu) söyler; hassasiyet bu yüzden `PERSONAL`'dır.
 """
@@ -10,7 +11,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from mayen.ports.devices import Capability
-from mayen.ports.tools import Effect, Sensitivity, Status, ToolContext, ToolResult, ToolSpec
+from mayen.ports.tools import Effect, Sensitivity, ToolContext, ToolResult, ToolSpec
 
 
 class Action(StrEnum):
@@ -25,11 +26,9 @@ class Args(BaseModel):
 
 
 async def run(args: Args, ctx: ToolContext) -> ToolResult:
-    if args.action is Action.LIST:
-        return await ctx.device.run(Capability.WINDOWS, "list", {})
-    if args.window is None:
-        return ToolResult(Status.ERROR, error="no window number; list the windows first")
-    return await ctx.device.run(Capability.WINDOWS, args.action.value, {"window": args.window})
+    # Numarasız ya da bilinmeyen numaralı istek, istemciden açık pencerelerin listesiyle döner.
+    params = {} if args.window is None else {"window": args.window}
+    return await ctx.device.run(Capability.WINDOWS, args.action.value, params)
 
 
 SPEC = ToolSpec(

@@ -372,25 +372,36 @@ class Windows:
             self._next += 1
         return self._numbers[kwin_id]
 
+    async def _list(self) -> list[dict[str, Any]]:
+        windows = await self._script("list", "")
+        open_now = {w["id"] for w in windows}
+        self._numbers = {k: n for k, n in self._numbers.items() if k in open_now}
+        listed = [{"window": self._number(w.pop("id")), **w} for w in windows]
+        return sorted(listed, key=_by_number)
+
     async def handle(self, action: str, args: Mapping[str, Any]) -> CommandResult | None:
         if action not in WINDOW_SCRIPTS:
             return None
         if action == "list":
-            windows = await self._script("list", "")
-            open_now = {w["id"] for w in windows}
-            self._numbers = {k: n for k, n in self._numbers.items() if k in open_now}
-            listed = [{"window": self._number(w.pop("id")), **w} for w in windows]
-            return CommandResult("", Status.OK, {"windows": sorted(listed, key=_by_number)})
-        number = int(args["window"])
+            return CommandResult("", Status.OK, {"windows": await self._list()})
+        number = args.get("window")
         kwin_id = next((k for k, n in self._numbers.items() if n == number), None)
-        if kwin_id is None:
-            return CommandResult("", Status.ERROR, error=f"no window {number}; list them again")
-        if not KWIN_UUID.fullmatch(kwin_id):
-            raise CommandError(f"unexpected window id {kwin_id!r}")
-        found = await self._script(action, kwin_id)
-        if not found["found"]:
-            del self._numbers[kwin_id]
-            return CommandResult("", Status.ERROR, error=f"window {number} is no longer open")
+        found = None
+        if action == "close" and kwin_id is not None:
+            # Kapatma geri alınamaz: numara, onaylanan uygulamanın penceresi değilse dokunulmaz.
+            app = next((w["app"] for w in await self._list() if w["window"] == number), None)
+            if app != args.get("app"):
+                kwin_id = None
+        if kwin_id is not None:
+            if not KWIN_UUID.fullmatch(kwin_id):
+                raise CommandError(f"unexpected window id {kwin_id!r}")
+            found = await self._script(action, kwin_id)
+        if found is None or not found["found"]:
+            # Liste hatayla döner (medyadaki gibi): model numarayı bir sonraki adımda seçer,
+            # kişiye "listeleyeyim mi" diye sormaz.
+            error = "no window number given" if number is None else f"no open window {number}"
+            windows = await self._list()
+            return CommandResult("", Status.ERROR, {"windows": windows}, f"{error}; pick one")
         data = {"window": number, "title": found["title"], "app": found["app"]}
         return CommandResult("", Status.OK, data)
 

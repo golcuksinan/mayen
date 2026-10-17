@@ -402,7 +402,7 @@ async def test_a_window_keeps_its_number_and_a_number_never_moves_to_another_win
     first = await windows.handle("list", {})
     assert first is not None
     assert [w["window"] for w in first.data["windows"]] == [1, 2]
-    closed = await windows.handle("close", {"window": 1})
+    closed = await windows.handle("close", {"window": 1, "app": "a"})
     assert closed is not None and closed.data == {"window": 1, "title": "t", "app": "a"}
     kwin.open.append(C)
     again = await windows.handle("list", {})
@@ -410,18 +410,35 @@ async def test_a_window_keeps_its_number_and_a_number_never_moves_to_another_win
     assert [(w["window"], w["title"]) for w in again.data["windows"]] == [(2, "t5"), (3, "tc")]
     stale = await windows.handle("focus", {"window": 1})
     assert stale is not None and stale.status is Status.ERROR
+    assert [w["window"] for w in stale.data["windows"]] == [2, 3]
     assert kwin.ran[-1] == ("list", "")
 
 
-async def test_a_window_closed_meanwhile_is_an_error_and_loses_its_number() -> None:
+async def test_close_needs_the_number_and_the_app_of_the_same_window() -> None:
+    kwin = KWin(A)
+    windows = Windows(kwin)
+    await windows.handle("list", {})
+    for args in ({"window": 1, "app": "konsole"}, {"window": 1}):
+        wrong = await windows.handle("close", args)
+        assert wrong is not None and wrong.status is Status.ERROR
+        assert wrong.data == {
+            "windows": [{"window": 1, "title": "ta", "app": "a", "active": False}]
+        }
+    assert kwin.open == [A] and all(a != "close" for a, _ in kwin.ran)
+
+
+async def test_a_missing_or_stale_number_is_an_error_that_carries_the_list() -> None:
     kwin = KWin(A)
     windows = Windows(kwin)
     await windows.handle("list", {})
     kwin.open.clear()
     gone = await windows.handle("minimize", {"window": 1})
-    assert gone is not None and gone.status is Status.ERROR
-    unknown = await windows.handle("minimize", {"window": 1})
-    assert unknown is not None and "list" in (unknown.error or "")
+    assert gone is not None and gone.status is Status.ERROR and gone.data == {"windows": []}
+    kwin.open.append(B)
+    unnamed = await windows.handle("minimize", {})
+    assert unnamed is not None and unnamed.status is Status.ERROR
+    assert [w["window"] for w in unnamed.data["windows"]] == [2]
+    assert ("minimize", A) in kwin.ran and ("minimize", B) not in kwin.ran
     assert await windows.handle("explode", {}) is None
 
 
@@ -455,11 +472,15 @@ async def test_the_kwin_script_comes_from_the_table_and_the_id_is_a_json_value()
     assert run.argv[1][4] == "/Scripting/Script7"
 
 
-async def test_window_skills_send_the_number_and_list_needs_none() -> None:
+async def test_window_skills_send_the_number_when_there_is_one() -> None:
     device = Device({a: ToolResult(Status.OK) for a in ("list", "focus", "minimize", "close")})
     await window.run(window.Args(action=window.Action.LIST), ctx(device))
     await window.run(window.Args(action=window.Action.FOCUS, window=2), ctx(device))
-    missing = await window.run(window.Args(action=window.Action.MINIMIZE), ctx(device))
-    await window_close.run(window_close.Args(window=3), ctx(device))
-    assert missing.status is Status.ERROR
-    assert device.calls == [("list", {}), ("focus", {"window": 2}), ("close", {"window": 3})]
+    await window.run(window.Args(action=window.Action.MINIMIZE), ctx(device))
+    await window_close.run(window_close.Args(window=3, app="dolphin"), ctx(device))
+    assert device.calls == [
+        ("list", {}),
+        ("focus", {"window": 2}),
+        ("minimize", {}),
+        ("close", {"window": 3, "app": "dolphin"}),
+    ]
