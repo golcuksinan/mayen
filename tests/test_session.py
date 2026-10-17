@@ -284,7 +284,8 @@ async def test_requester_is_found_from_all_words_until_mayen_answers() -> None:
         heard.append([f.text for f in frames])
         return OWNER if len(frames) == 2 else UNIDENTIFIED
 
-    sessions, gate = make(requester=requester)
+    log = MemoryEventLog()
+    sessions, gate = make(requester=requester, log=log)
     seen: list[Caller | None] = []
 
     def look() -> None:
@@ -303,8 +304,14 @@ async def test_requester_is_found_from_all_words_until_mayen_answers() -> None:
         TranscriptionFrame("evet", "u", "t"),  # cevaptan sonra: isteyen değişmez
         Call(look),
     ]
-    await run(gate, frames)
+    end: list[Frame] = [UserStoppedSpeakingFrame(), BotStoppedSpeakingFrame()]
+    await run(gate, [*frames, *end, SleepFrame(TIMEOUT_S + SETTLE_S * 3)])
     assert seen == [UNIDENTIFIED, OWNER, OWNER]
+    # Tur açılırken isteyen bilinmez; turun sonunda kim sayıldığı bitiş olayındadır.
+    [started] = [e for e in log.events if e.header.kind is EventKind.TURN_STARTED]
+    [finished] = [e for e in log.events if e.header.kind is EventKind.TURN_FINISHED]
+    assert started.body["requester"]["role"] == "unknown"
+    assert finished.body["requester"] == {"role": "owner", "person_id": "p1"}
     assert heard == [["Hey Mayen."], ["Hey Mayen.", "dişçi notunu sil"]]
 
 
@@ -373,10 +380,12 @@ async def test_turn_events_carry_session_turn_and_duration() -> None:
     first, cut, second, done = (e.header for e in log.events)
     assert {h.session for h in (first, cut, second, done)} == {"s1"}
     assert cut.turn_id == first.turn_id != second.turn_id == done.turn_id
-    assert cut.status is Status.CANCELLED and log.events[1].body == {"fate": "cancel"}
+    system = {"role": "system", "person_id": "p1"}
+    assert cut.status is Status.CANCELLED
+    assert log.events[1].body == {"fate": "cancel", "requester": system}
     assert done.status is Status.OK and done.duration_s is not None
     assert done.duration_s >= SETTLE_S
-    assert log.events[3].body == {"unanswered": False}
+    assert log.events[3].body == {"unanswered": False, "requester": system}
 
 
 async def test_unanswered_turn_says_so_in_the_finish_event() -> None:
@@ -388,7 +397,7 @@ async def test_unanswered_turn_says_so_in_the_finish_event() -> None:
     ]
     await run(gate, frames)
     [done] = log.of(EventKind.TURN_FINISHED)
-    assert done.body == {"unanswered": True}
+    assert done.body == {"unanswered": True, "requester": {"role": "system", "person_id": "p1"}}
 
 
 async def test_speech_answered_before_it_is_heard_to_end_expects_nothing() -> None:
@@ -405,7 +414,7 @@ async def test_speech_answered_before_it_is_heard_to_end_expects_nothing() -> No
     ]
     await run(gate, frames)
     [done] = log.of(EventKind.TURN_FINISHED)
-    assert done.body == {"unanswered": False}
+    assert done.body["unanswered"] is False
     assert done.header.duration_s is not None and done.header.duration_s < TIMEOUT_S
 
 

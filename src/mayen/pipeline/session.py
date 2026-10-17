@@ -227,7 +227,8 @@ class TriggerGate(FrameProcessor):
                 "source": source.value,
                 "priority": turn.trigger.priority.value,
                 "fresh": fresh,
-                # Sesli turun isteyeni sözler geldikçe tanınır; burada henüz bilinmez.
+                # Sesli turun isteyeni sözler geldikçe tanınır; burada henüz bilinmez, bitişte
+                # (`turn.finished` / `turn.interrupted`) yazılır.
                 "requester": {"role": requester.role.value, "person_id": requester.person_id},
                 "device_person": self._device_person(),
             },
@@ -268,7 +269,7 @@ class TriggerGate(FrameProcessor):
         self._emit(
             EventKind.TURN_INTERRUPTED,
             turn,
-            {"fate": fate.value},
+            {"fate": fate.value, "requester": self._requester_of(turn)},
             duration_s=self._elapsed(turn),
             status=Status.CANCELLED,
         )
@@ -365,6 +366,14 @@ class TriggerGate(FrameProcessor):
             return None
         return self._recorder.clock.monotonic() - self._started_at
 
+    def _requester_of(self, turn: Turn) -> dict[str, object]:
+        """Turun sonunda kim sayıldığı (replay buradan okur): sesli turun isteyeni tur
+        açılırken bilinmez, sözler geldikçe bulunur (`identify`)."""
+        running = self._sessions.running(self.session)
+        current = running if running is not None and running.id == turn.id else turn
+        requester = current.trigger.requester
+        return {"role": requester.role.value, "person_id": requester.person_id}
+
     def _emit(
         self,
         kind: EventKind,
@@ -419,7 +428,7 @@ class TriggerGate(FrameProcessor):
                 self._emit(
                     EventKind.TURN_FINISHED,
                     turn,
-                    {"unanswered": self._unanswered},
+                    {"unanswered": self._unanswered, "requester": self._requester_of(turn)},
                     duration_s=self._elapsed(turn),
                     status=Status.OK,
                 )

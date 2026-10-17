@@ -111,7 +111,8 @@ class Turns:
         return current.trigger.source is TriggerSource.VOICE or interrupts(current, voice)
 
     def identify(self, session: str, requester: Caller) -> None:
-        """Sesli turun sahibi ancak ilk segment tanınınca bilinir; kesme kuralı ona bakar."""
+        """Sesli turun sahibi sözler geldikçe tanınır (§6: turun bütün sözlerinden); kesme
+        kuralı ona bakar."""
         current = self._running.get(session)
         if current is not None and current.trigger.source is TriggerSource.VOICE:
             trigger = replace(current.trigger, requester=requester)

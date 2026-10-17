@@ -90,15 +90,25 @@ class Records:
         return utterance_ref(utterance) in self._muted
 
     def _turns(self, caller_of: CallerOf) -> Iterator[TurnInfo]:
+        # Sesli turun isteyeni tur açılırken bilinmez; bitiş olayı turun sonunda kim
+        # sayıldığını taşır (§6: turun bütün sözlerinden).
+        ended = {
+            e.header.turn_id: e.body["requester"]
+            for e in self.events
+            if e.header.kind in (EventKind.TURN_FINISHED, EventKind.TURN_INTERRUPTED)
+            and isinstance(e.body.get("requester"), dict)
+        }
         for e in self.events:
             h = e.header
             if h.kind is not EventKind.TURN_STARTED or h.turn_id is None or h.session is None:
                 continue
             source = TriggerSource(e.body["source"])
             requester = e.body.get("requester", {})
+            if source is TriggerSource.VOICE and h.turn_id in ended:
+                requester = ended[h.turn_id]
             role, person = Role(requester.get("role", Role.UNKNOWN)), requester.get("person_id")
-            if source is TriggerSource.VOICE:
-                # Sesli turun sahibi ilk segmentte tanınır (§10.4).
+            if source is TriggerSource.VOICE and h.turn_id not in ended:
+                # Bitiş olayında isteyen yoksa (eski kayıt) ilk sözün konuşanıdır.
                 first = next(
                     (
                         u

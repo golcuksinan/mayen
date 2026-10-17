@@ -334,6 +334,34 @@ async def test_turns_are_listed_and_found_by_prefix() -> None:
     assert p.find(str(TEXT_TURN)).requester.role is Role.OWNER
 
 
+def test_voice_turn_requester_is_who_the_turn_ended_with() -> None:
+    log = Log()
+    turn, old = TurnId(uuid.uuid4()), TurnId(uuid.uuid4())
+    unknown = {"role": "unknown", "person_id": None}
+    started = {"source": "voice", "priority": "normal", "fresh": True, "requester": unknown}
+    for t, seconds in ((turn, 0), (old, 10)):
+        # "Hey Mayen" tek başına tanınmadı; komut sahibin sesiydi.
+        log.transcript.append(
+            Utterance(
+                UtteranceId(uuid.uuid4()),
+                at(seconds),
+                "s1",
+                t,
+                Party.PERSON,
+                Role.UNKNOWN,
+                None,
+                "Hey Mayen",
+            )
+        )
+        log.event(EventKind.TURN_STARTED, seconds, t, started)
+    owner = {"role": "owner", "person_id": "1"}
+    log.event(EventKind.TURN_FINISHED, 5, turn, {"unanswered": False, "requester": owner})
+    log.event(EventKind.TURN_FINISHED, 15, old, {"unanswered": False})  # eski kayıt
+    records = Records(log.events.events, log.transcript.utterances, Timers(), caller)  # type: ignore[arg-type]
+    assert records.turns[turn].requester.role is Role.OWNER
+    assert records.turns[old].requester.role is Role.UNKNOWN  # ilk sözün konuşanı
+
+
 def test_restarted_text_turn_brings_its_message_again() -> None:
     log = Log()
     first, again = TurnId(uuid.uuid4()), TurnId(uuid.uuid4())
