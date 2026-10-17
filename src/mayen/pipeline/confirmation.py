@@ -212,7 +212,12 @@ class ConfirmationGateProcessor(FrameProcessor):
                 await self._finish(plan, Outcome.ERROR, error=str(e))
                 return
             log.info("confirmation answer resolved: %s", resolution)
-            match next_step(plan, resolution):
+            step = next_step(plan, resolution)
+            if plan.asked_again and step is not Step.ASK_AGAIN:
+                # Tekrar sorusu henüz okunuyor ya da sırada olabilir: cevap ondan önce gelmiş
+                # bir sözün devamıdır. Kesilmezse soru, iş bittikten sonra okunurdu.
+                await self.broadcast_interruption()
+            match step:
                 case Step.EXECUTE:
                     # Yan etkili çağrılar sırayla çalışır (§9.3).
                     results = [to_model(await e.execute()) for e in plan.entries]

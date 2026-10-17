@@ -12,6 +12,7 @@ from pipecat.frames.frames import (
     FunctionCallFromLLM,
     FunctionCallResultFrame,
     FunctionCallsStartedFrame,
+    InterruptionFrame,
     LLMMessagesAppendFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
@@ -272,6 +273,30 @@ async def test_other_speakers_yes_never_confirms() -> None:
     assert len(of(down, TTSSpeakFrame)) == 2  # bir kez daha soruldu
     content, _ = closed(down)
     assert content["confirmation"] == "cancelled"
+
+
+async def test_an_answer_after_the_question_was_asked_again_cuts_that_question() -> None:
+    resolver = Resolver(Resolution.UNCLEAR, Resolution.CONFIRM)
+    g, executed = gate(Writer("Delete note 1?"), resolver), Executed()
+    await request(g, executed, 1)
+
+    down, _ = await run_test(
+        g,
+        frames_to_send=[
+            started("a"),
+            result("a"),
+            SleepFrame(0.05),
+            said("hey Mayen ka"),
+            SleepFrame(0.05),
+            said("pat"),
+            SleepFrame(0.05),
+        ],
+    )
+
+    assert executed.order == [1]
+    kinds = [type(f) for f in down if isinstance(f, TTSSpeakFrame | InterruptionFrame)]
+    assert kinds == [TTSSpeakFrame, TTSSpeakFrame, InterruptionFrame]
+    assert closed(down)[0]["confirmation"] == "confirmed"
 
 
 async def test_reject_runs_nothing() -> None:
