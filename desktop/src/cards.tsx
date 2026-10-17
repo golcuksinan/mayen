@@ -5,7 +5,19 @@ import { Row } from '../../panel/src/parts'
 import { DEGER } from '../../panel/src/hareket'
 import type { Card } from './screen'
 
-const FAILED = new Set(['denied', 'error', 'unsupported', 'timeout', 'cancelled'])
+// Başarısız sonucun ekrandaki adı; ayrıntısı (tool'un hata metni) altında soluk durur
+const FAILED: Record<string, string> = {
+  denied: 'not allowed',
+  unsupported: 'not available on this device',
+  timeout: 'timed out',
+  error: 'failed',
+  cancelled: 'cancelled',
+}
+
+const ACTION: Record<string, string> = {
+  focus: 'brought to front',
+  minimize: 'minimized',
+}
 
 export const TITLE: Record<string, string> = {
   media: 'Media',
@@ -24,7 +36,7 @@ export const TITLE: Record<string, string> = {
   reminder_delete: 'Reminders',
 }
 
-export const failed = (card: Card) => FAILED.has(card.status)
+export const failed = (card: Card) => card.status in FAILED
 
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v))
 
@@ -34,7 +46,7 @@ function Big({ children }: { children: React.ReactNode }) {
 
 function Failure({ card }: { card: Card }) {
   return <>
-    <Big><span className="vurgu">{card.status}</span></Big>
+    <Big><span className="vurgu">{FAILED[card.status]}</span></Big>
     {card.error && <div className="soluk" style={{ fontSize: 13 }}>{card.error}</div>}
   </>
 }
@@ -58,7 +70,7 @@ function Media({ d }: { d: Record<string, unknown> }) {
 
 function Weather({ d }: { d: Record<string, unknown> }) {
   return <>
-    <div className="etiket soluk">{str(d.place)}{d.default_location ? ' · default' : ''}</div>
+    <div className="etiket soluk">{str(d.place)}{d.default_location ? ' · default location' : ''}</div>
     <Big><span className="sayi">{str(d.temperature_c)}°</span> <span style={{ fontSize: 18, fontWeight: 400 }}>{str(d.condition)}</span></Big>
     <Row name="feels like">{str(d.feels_like_c)}°</Row>
     <Row name="humidity">{str(d.humidity_percent)}%</Row>
@@ -79,7 +91,7 @@ function Windows({ card }: { card: Card }) {
       </div>
     ))}</>
   }
-  const action = card.tool === 'window_close' ? 'closed' : str(card.arguments.action)
+  const action = card.tool === 'window_close' ? 'closed' : ACTION[str(card.arguments.action)] ?? str(card.arguments.action)
   return <>
     <div className="etiket soluk">{action}</div>
     <Big>{str(d.title)}</Big>
@@ -107,7 +119,7 @@ function Generic({ card }: { card: Card }) {
         {str(r.data.text ?? r.data.body ?? Object.values(r.data)[0])}
       </div>
     ))}
-    {card.withheld > 0 && <div className="etiket soluk">{card.withheld} withheld</div>}
+    {card.withheld > 0 && <div className="etiket soluk">{card.withheld} not shown</div>}
   </>
 }
 

@@ -23,7 +23,7 @@ const STATE: Record<Screen['state'], string> = {
   listening: 'listening',
   thinking: 'thinking',
   speaking: 'speaking',
-  awaiting_confirmation: 'waiting for yes or no',
+  awaiting_confirmation: 'awaiting confirmation',
 }
 
 const ALERT_MS = 8000
@@ -70,7 +70,7 @@ function useEnd(count: number) {
 function CardPanel({ card, order, first }: { card: Card; order: number; first: boolean }) {
   return (
     <Panel id={`card-${card.tool}`} title={TITLE[card.tool] ?? card.tool.replace(/_/g, ' ')}
-      right={card.status === 'ok' ? undefined : card.status} accent={first} order={order}>
+      accent={first} order={order}>
       <motion.div key={card.at} initial={{ opacity: 0.4 }} animate={{ opacity: 1 }}>
         <CardBody card={card} />
       </motion.div>
