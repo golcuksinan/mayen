@@ -3,9 +3,10 @@
 import { LayoutGroup, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import logo from '../../panel/src/mayen-yazi.svg?raw'
-import { Panel, StateMark } from '../../panel/src/parts'
+import { Panel } from '../../panel/src/parts'
 import { THEME } from '../../panel/src/theme'
 import { CardBody, failed, TITLE } from './cards'
+import { Mark, type MarkState } from './Mark'
 import { useScreen, type Card, type Connection, type Screen } from './screen'
 
 const LOGO = logo
@@ -18,7 +19,8 @@ const CONNECTION: Record<Connection, string> = {
   lost: 'reconnecting',
 }
 
-const STATE: Record<Screen['state'], string> = {
+const STATE: Record<MarkState, string> = {
+  failed: 'failed',
   idle: 'idle',
   listening: 'listening',
   thinking: 'thinking',
@@ -35,6 +37,34 @@ function useNow(ms: number) {
     return () => clearInterval(i)
   }, [ms])
   return now
+}
+
+const FAIL_MS = 1600
+
+// Deneme kipi (D tuşu): konuşmadan bütün durumları sırayla gösterir
+const DEMO: MarkState[] = ['idle', 'listening', 'thinking', 'speaking', 'awaiting_confirmation', 'failed']
+
+function useDemo() {
+  const [on, setOn] = useState(false)
+  const [i, setI] = useState(0)
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === 'd' || e.key === 'D') setOn(v => !v) }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+  useEffect(() => {
+    if (!on) return
+    setI(0)
+    const t = setInterval(() => setI(k => (k + 1) % DEMO.length), 3500)
+    return () => clearInterval(t)
+  }, [on])
+  return on ? DEMO[i] : null
+}
+
+function markState(screen: Screen, now: number): MarkState {
+  const last = screen.cards[0]
+  if (last && failed(last) && now - last.at < FAIL_MS) return 'failed'
+  return screen.state
 }
 
 function level(screen: Screen, now: number) {
@@ -80,9 +110,12 @@ function CardPanel({ card, order, first }: { card: Card; order: number; first: b
 
 export default function App() {
   const screen = useScreen()
-  const now = useNow(1000)
-  const lvl = level(screen, now)
-  const busy = screen.state !== 'idle'
+  const now = useNow(200)
+  const demo = useDemo()
+  const mark = demo ?? markState(screen, now)
+  const lvl = demo
+    ? (demo === 'awaiting_confirmation' || demo === 'failed' ? 'alert' : demo === 'idle' ? 'calm' : 'active')
+    : level(screen, now)
 
   return (
     <motion.div initial={THEME.calm} animate={THEME[lvl]} transition={{ duration: 0.9, ease: 'easeInOut' }}
@@ -90,34 +123,35 @@ export default function App() {
       <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, flex: 'none' }}>
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6 }}
           style={{ display: 'flex' }} dangerouslySetInnerHTML={{ __html: LOGO }} />
-        <motion.span key={screen.connection} className="etiket" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
-          style={{ color: screen.connection === 'live' ? 'var(--isaret)' : 'var(--vurgu)' }}>
-          {CONNECTION[screen.connection]}
-        </motion.span>
+        <div style={{ display: 'flex', gap: 22, alignItems: 'baseline' }}>
+          {demo && <span className="etiket vurgu">demo</span>}
+          <motion.span key={screen.connection} className="etiket" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+            style={{ color: screen.connection === 'live' ? 'var(--isaret)' : 'var(--vurgu)' }}>
+            {CONNECTION[screen.connection]}
+          </motion.span>
+        </div>
       </header>
 
       {screen.error && <div className="etiket vurgu" style={{ marginBottom: 12 }}>{screen.error}</div>}
 
       <LayoutGroup>
         <main style={{ flex: 1, minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
-                       gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)',
-                       gridTemplateRows: 'auto minmax(0,1fr) minmax(0,1fr)' }}>
-          <Panel id="state" title="State" order={0} accent={busy} style={{ gridColumn: 1, gridRow: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-              <StateMark state={screen.state} size={44} />
-              <motion.span key={screen.state} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
-                style={{ fontSize: 22, fontWeight: 560, fontStretch: '112%' }}>
-                {STATE[screen.state]}
-              </motion.span>
-            </div>
-          </Panel>
-          <Panel id="talk" title="Conversation" order={1} style={{ gridColumn: 1, gridRow: '2 / 4' }}>
+                       gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr)',
+                       gridTemplateRows: 'repeat(3, minmax(0,1fr))' }}>
+          <Panel id="talk" title="Conversation" order={1} style={{ gridColumn: 1, gridRow: '1 / 4' }}>
             <Talk screen={screen} />
           </Panel>
-          <div style={{ gridColumn: '2 / 4', gridRow: '1 / 4', minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
-                        gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gridAutoRows: 'minmax(0, 1fr)',
+          <section style={{ gridColumn: 2, gridRow: '1 / 4', display: 'flex', flexDirection: 'column',
+                            alignItems: 'center', justifyContent: 'center', gap: 28, minHeight: 0 }}>
+            <Mark state={mark} size={320} />
+            <motion.span key={mark} className="etiket" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+              style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' ? 'var(--vurgu)' : 'var(--isaret)' }}>
+              {STATE[mark]}
+            </motion.span>
+          </section>
+          <div style={{ gridColumn: 3, gridRow: '1 / 4', minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
                         gridTemplateRows: 'repeat(3, minmax(0,1fr))' }}>
-            {screen.cards.map((card, i) => (
+            {screen.cards.slice(0, 3).map((card, i) => (
               <CardPanel key={card.tool} card={card} order={i + 2} first={i === 0} />
             ))}
           </div>
