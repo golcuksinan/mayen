@@ -3,18 +3,17 @@
 import asyncio
 import json
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from fakes import FakeClock
 from mayen.app.wiring import ToolCtx
-from mayen.clients.desktop import Apps, CommandError, Desktop, Media, Speaker, load_apps
+from mayen.clients.desktop import Apps, CommandError, Desktop, Media, Speaker
 from mayen.clients.mic import respond
 from mayen.core.devices import NO_DEVICE, DeviceLink, Devices
 from mayen.ports.devices import Capabilities, Capability, Command, CommandResult, decode_client
-from mayen.ports.tools import Caller, Role, Status, ToolResult
+from mayen.ports.tools import Caller, Role, SkillTables, Status, ToolResult
 from mayen.skills import apps, audio_output, media, volume
 
 OWNER = Caller(Role.OWNER, "1", has_personal_device=True)
@@ -332,37 +331,34 @@ class Spawned:
         self.argv.append(argv)
 
 
-async def test_apps_open_only_what_the_table_names() -> None:
+async def test_the_client_opens_the_sent_entry_and_never_an_option() -> None:
     spawned = Spawned()
-    table = Apps({"Steam": "steam", "Counter-Strike 2": "Counter-Strike 2"}, spawned)
-    listed = await table.handle("list", {})
-    assert listed is not None and listed.data == {"apps": ["Counter-Strike 2", "Steam"]}
-    opened = await table.handle("open", {"app": "counter-strike 2"})  # büyük-küçük harf önemsiz
+    launcher = Apps(spawned)
+    opened = await launcher.handle(
+        "open", {"app": "Counter-Strike 2", "entry": "Counter-Strike 2"}
+    )
     assert opened is not None and opened.data == {"opened": "Counter-Strike 2"}
-    # Ad argv'nin ayrı bir öğesi; boşluklu kimlik kabukta bölünmez (§9.4).
+    # Kimlik argv'nin ayrı bir öğesi; boşluklu kimlik kabukta bölünmez (§9.4).
     assert spawned.argv == [["gtk-launch", "Counter-Strike 2"]]
-    refused = await table.handle("open", {"app": "konsole; rm -rf ~"})
-    assert refused is not None and refused.status is Status.ERROR
-    assert refused.data["apps"] == ["Counter-Strike 2", "Steam"]
-    unnamed = await table.handle("open", {})
-    assert unnamed is not None and unnamed.status is Status.ERROR
+    option = await launcher.handle("open", {"app": "x", "entry": "--help"})
+    assert option is not None and option.status is Status.ERROR
+    assert await launcher.handle("list", {}) is None
     assert len(spawned.argv) == 1
 
 
-def test_an_empty_table_declares_no_capability(tmp_path: Path) -> None:
-    assert load_apps(tmp_path / "missing.yaml") == {}
-    assert not Apps({}).available()
-    broken = tmp_path / "apps.yaml"
-    broken.write_text("- steam\n- obs\n", encoding="utf-8")
+def test_app_names_are_choices_in_the_catalog_and_an_empty_table_adds_no_tool() -> None:
+    assert apps.spec(SkillTables()) is None
+    spec = apps.spec(SkillTables(apps={"Steam": "steam", "Dolphin": "org.kde.dolphin"}))
+    assert spec is not None
+    schema = spec.args.model_json_schema()
+    assert schema["properties"]["app"]["enum"] == ["Dolphin", "Steam"]
     with pytest.raises(ValueError):
-        load_apps(broken)
-    good = tmp_path / "good.yaml"
-    good.write_text("steam: steam\nobs: com.obsproject.Studio\n", encoding="utf-8")
-    assert load_apps(good) == {"steam": "steam", "obs": "com.obsproject.Studio"}
+        spec.args(app="Dolphina")  # listede olmayan ad doğrulanmaz
 
 
-async def test_apps_skill_sends_the_action_and_the_name() -> None:
-    device = Device({"open": ToolResult(Status.OK), "list": ToolResult(Status.OK)})
-    await apps.run(apps.Args(action=apps.Action.OPEN, app="Steam"), ctx(device))
-    await apps.run(apps.Args(action=apps.Action.LIST), ctx(device))
-    assert device.calls == [("open", {"app": "Steam"}), ("list", {})]
+async def test_apps_skill_sends_the_name_and_its_entry() -> None:
+    spec = apps.spec(SkillTables(apps={"Dolphin": "org.kde.dolphin"}))
+    assert spec is not None
+    device = Device({"open": ToolResult(Status.OK)})
+    await spec.run(spec.args(app="Dolphin"), ctx(device))
+    assert device.calls == [("open", {"app": "Dolphin", "entry": "org.kde.dolphin"})]

@@ -77,6 +77,12 @@ skills:
   reminder_add:
     tolerance_minutes: 30      # Mayen kapalıyken vadesi geçen hatırlatma en çok bu kadar geç çalar (§12)
 
+# Açılabilecek uygulamalar (§9.4): ad → `.desktop` kimliği (dosya adı, uzantısız). Ad katalogda
+# seçenek olur (§9.1); listede olmayan bir şey açılamaz. Boşsa `apps` tool'u kataloğa girmez.
+apps: {}
+#  Steam: steam
+#  Dolphin: org.kde.dolphin
+
 # Model deposu (§8.9, §8.10). Her rol her istekte kendi ayarlarını gönderir.
 models:
   local:

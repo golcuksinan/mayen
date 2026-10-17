@@ -131,6 +131,8 @@ class _File(_Strict):
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     # Skill varsayılanlarının üzerine yazılanlar (§9.1); doğrulaması skill'ler bulununca.
     skills: dict[str, dict[str, Any]] = {}
+    # Açılabilecek uygulamalar (§9.4): ad → `.desktop` kimliği; ad katalogda seçenek olur.
+    apps: dict[str, str] = {}
     models: dict[str, ModelRecord]
 
 
@@ -151,6 +153,7 @@ class Config:
     speaker: SpeakerConfig | None
     system_role: dict[TriggerSource, dict[Effect, list[Sensitivity]]]
     skills: dict[str, dict[str, Any]]
+    apps: dict[str, str]
 
     def turns(self) -> Turns:
         return Turns(self.triggers.fates, self.triggers.max_running)
@@ -194,6 +197,14 @@ def _tts(tts: TtsConfig | None, default_language: str) -> TtsConfig | None:
     return tts
 
 
+def _apps(apps: dict[str, str]) -> dict[str, str]:
+    for name, entry in apps.items():
+        if not entry or entry.startswith("-"):
+            # Kimlik başlatıcının argv'sinde durur; tireyle başlayan değer bir seçenek olurdu.
+            raise ConfigError(f"apps.{name}: {entry!r} is not a desktop entry id")
+    return apps
+
+
 def load(path: Path, env: Mapping[str, str]) -> Config:
     """Bütün config; her hata `ConfigError` olarak, açılışta yükselir."""
     try:
@@ -216,6 +227,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             speaker=file.speaker,
             system_role=file.system_role,
             skills=file.skills,
+            apps=_apps(file.apps),
         )
         config.turns()  # eksik ya da hatta karşılığı olmayan akıbet açılışta görünsün (§5.3)
     except (OSError, yaml.YAMLError, ValidationError, ModelConfigError, TurnConfigError) as e:

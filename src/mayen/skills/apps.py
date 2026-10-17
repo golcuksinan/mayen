@@ -1,42 +1,52 @@
-"""Oturumun cihazında uygulama açma (§9.4, §9.7): sahibin o cihazdaki tablosundan.
+"""Oturumun cihazında uygulama açma (§9.4, §9.7): sahibin config'teki tablosundan.
 
-Model bir komut yazmaz, tablodaki bir adı seçer; tablo cihazda durur ve ondan başka bir şey
-açılamaz. Kapatmak bu tool'un işi değildir.
+Adlar katalogda sabit bir listedir (§9.1): model listedeki bir adı seçer, olmayan bir ad
+yazamaz. Uygulama cihazdaki istemcide, sistemin kendi tanımıyla açılır. Tabloda hiç uygulama
+yoksa tool kataloğa girmez: hiçbir şey açamayan bir tool, modele yapamayacağı bir şeyi vaat
+ederdi. Kapatmak bu tool'un işi değildir.
 """
 
-from enum import StrEnum
+from collections.abc import Mapping
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from mayen.ports.devices import Capability
-from mayen.ports.tools import Effect, Sensitivity, ToolContext, ToolResult, ToolSpec
-
-
-class Action(StrEnum):
-    LIST = "list"
-    OPEN = "open"
-
-
-class Args(BaseModel):
-    action: Action = Field(description="'list' tells which apps can be opened")
-    app: str | None = Field(default=None, description="An app name from the list, for 'open'")
-
-
-async def run(args: Args, ctx: ToolContext) -> ToolResult:
-    params = {} if args.app is None else {"app": args.app}
-    return await ctx.device.run(Capability.APPS, args.action.value, params)
-
-
-SPEC = ToolSpec(
-    name="apps",
-    description="Opens an app (a program or a game) on the device the user is talking to, or "
-    "lists the apps that can be opened there. Names come through speech recognition and may be "
-    "slightly off: if the name you heard is not exactly in the list, list the apps first, then "
-    "open the closest one.",
-    args=Args,
-    effect=Effect.EXTERNAL,
-    sensitivity=Sensitivity.GENERAL,
-    sends_outside=False,
-    timeout_s=10.0,
-    run=run,
+from mayen.ports.tools import (
+    Effect,
+    Sensitivity,
+    SkillTables,
+    ToolContext,
+    ToolResult,
+    ToolSpec,
 )
+
+
+def spec(tables: SkillTables) -> ToolSpec[Any] | None:
+    table: Mapping[str, str] = dict(tables.apps)
+    if not table:
+        return None
+    names = tuple(sorted(table))
+    args: type[BaseModel] = create_model(
+        "Args",
+        app=(Literal[names], Field(description="The app to open")),  # type: ignore[arg-type]
+    )
+
+    async def run(arguments: BaseModel, ctx: ToolContext) -> ToolResult:
+        name = str(arguments.app)  # type: ignore[attr-defined]
+        return await ctx.device.run(
+            Capability.APPS, "open", {"app": name, "entry": table[name]}
+        )
+
+    return ToolSpec(
+        name="apps",
+        description="Opens an app (a program or a game) on the device the user is talking "
+        "to. Names come through speech recognition and may be slightly off: choose the "
+        "closest one in the list.",
+        args=args,
+        effect=Effect.EXTERNAL,
+        sensitivity=Sensitivity.GENERAL,
+        sends_outside=False,
+        timeout_s=10.0,
+        run=run,
+    )

@@ -154,3 +154,13 @@ class ToolSpec[A: BaseModel]:
     run: Callable[[A, ToolContext], Awaitable[ToolResult]]
     defaults: Mapping[str, Any] = field(default_factory=dict)
     requires_confirmation: bool = False  # yalnızca onay ekler, hiç kaldırmaz (§10.3)
+
+
+@dataclass(frozen=True)
+class SkillTables:
+    """Sahibin config'teki tabloları; seçenekleri bunlardan gelen skill tanımını açılışta
+    kurar. Seçenek katalogda görünür (§9.1): liste yalnızca gövdede olsaydı model hangi
+    değerlerin var olduğunu bilmez, olmayan bir değer de yazabilirdi."""
+
+    # Açılabilecek uygulamalar (§9.4): ad → cihazdaki `.desktop` kimliği.
+    apps: Mapping[str, str] = field(default_factory=dict)

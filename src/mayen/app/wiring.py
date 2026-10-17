@@ -94,7 +94,7 @@ from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
 from mayen.ports.people import DeviceId
 from mayen.ports.timers import TimerStore
-from mayen.ports.tools import Caller, Role, ToolSpec, TurnFlags
+from mayen.ports.tools import Caller, Role, SkillTables, ToolSpec, TurnFlags
 from mayen.ports.triggers import TriggerSource
 from mayen.replay.run import Replayer
 
@@ -106,12 +106,20 @@ class SkillLoadError(Exception):
     pass
 
 
-def discover_skills() -> list[ToolSpec[Any]]:
-    """`skills/` klasöründeki her modülün `SPEC`'i; katalog açılışta bir kez kurulur (§9.2)."""
+def discover_skills(tables: SkillTables | None = None) -> list[ToolSpec[Any]]:
+    """`skills/` klasöründeki her modülün `SPEC`'i, ya da config'in tablolarından kurulan
+    `spec(tables)`'ı; katalog açılışta bir kez kurulur (§9.2). Tablosu boş skill `None` verir
+    ve kataloğa girmez."""
+    tables = tables or SkillTables()
     specs: list[ToolSpec[Any]] = []
     for info in sorted(pkgutil.iter_modules(mayen.skills.__path__), key=lambda m: m.name):
         module = importlib.import_module(f"mayen.skills.{info.name}")
         spec = getattr(module, "SPEC", None)
+        build = getattr(module, "spec", None)
+        if spec is None and callable(build):
+            spec = build(tables)
+            if spec is None:
+                continue
         if not isinstance(spec, ToolSpec):
             # Sessizce atlanan bir skill, modelin hiç görmediği bir skill demektir.
             raise SkillLoadError(f"mayen.skills.{info.name} has no SPEC")
@@ -200,7 +208,7 @@ class Core:
             config.default_language,
             self.devices.capabilities,
         )
-        specs = discover_skills()
+        specs = discover_skills(SkillTables(apps=config.apps))
         self.registry = ToolRegistry(specs)
         self.defaults = skill_defaults(specs, config.skills)
         self.notes = SqliteNoteStore(db)

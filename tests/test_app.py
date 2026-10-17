@@ -40,7 +40,7 @@ from mayen.pipeline.speech import ServiceTurn
 from mayen.ports.channels import VoiceHello
 from mayen.ports.devices import Capabilities, Capability, Command, CommandResult
 from mayen.ports.people import LOCAL_DEVICE, DeviceId
-from mayen.ports.tools import Caller, Effect, Role, Sensitivity, Status
+from mayen.ports.tools import Caller, Effect, Role, Sensitivity, SkillTables, Status
 from mayen.ports.triggers import Fate, Priority, TriggerSource
 from mayen.skills import (
     note_add,
@@ -128,7 +128,6 @@ def test_main_exits_with_the_config_code(
 
 def test_skills_are_discovered_from_the_folder() -> None:
     assert sorted(s.name for s in discover_skills()) == [
-        "apps",
         "audio_output",
         "media",
         "note_add",
@@ -525,3 +524,15 @@ async def test_this_machine_is_the_local_device_and_the_rest_is_verified() -> No
     assert await identity.device("::1") == LOCAL_DEVICE
     assert await identity.device("100.64.0.7") is None
     assert inner.asked == ["100.64.0.7"]
+
+
+def test_app_entries_cannot_look_like_options(tmp_path: Path) -> None:
+    path = config_dir(tmp_path)
+    body = path.read_text(encoding="utf-8").replace("apps: {}", "apps: {Steam: --help}")
+    path.write_text(body, encoding="utf-8")
+    with pytest.raises(ConfigError, match="desktop entry"):
+        load(path, {"MAYEN_MODEL": "local"})
+    path.write_text(body.replace("--help", "steam"), encoding="utf-8")
+    config = load(path, {"MAYEN_MODEL": "local"})
+    assert config.apps == {"Steam": "steam"}
+    assert "apps" in {s.name for s in discover_skills(SkillTables(apps=config.apps))}
