@@ -24,9 +24,9 @@ type Poses = { left: Pose; right: Pose; v: Pose; tl?: Transition; tr?: Transitio
 const REST: Pose = { x: 0, y: 0, scaleY: 1, opacity: 1 }
 
 const POSES: Record<MarkState, Poses> = {
-  idle: { left: { ...REST, opacity: 0.8 }, right: { ...REST, opacity: 0.8 }, v: REST },
+  idle: { left: REST, right: REST, v: REST },
   listening: { left: { ...REST, x: -3 }, right: { ...REST, x: 3 }, v: { ...REST, y: -2 } },
-  thinking: { left: { ...REST, opacity: 0.75 }, right: { ...REST, opacity: 0.75 }, v: REST },
+  thinking: { left: REST, right: REST, v: REST },
   speaking: {
     left: { ...REST, scaleY: [1, 0.9, 1] },
     right: { ...REST, scaleY: [1, 0.9, 1] },
@@ -34,7 +34,7 @@ const POSES: Record<MarkState, Poses> = {
     tl: loop(1.1), tr: loop(1.1, 0.35),
   },
   awaiting_confirmation: {
-    left: { ...REST, opacity: 0.55 }, right: { ...REST, opacity: 0.55 },
+    left: REST, right: REST,
     v: { ...REST, opacity: [1, 0.35, 1] },
     tv: loop(1.6),
   },
@@ -45,11 +45,25 @@ const POSES: Record<MarkState, Poses> = {
   },
 }
 
+// M'nin beyazı temayla değişmez: temanın kağıt rengi yoğunlukla tonlanır, dikmeler her durumda
+// aynı kalsın; durumu V'nin rengi ve hareket söyler
+const WHITE = '#E3E8EF'
+
+// Dikmeler beyaz; onay beklenirken onlar da kırmızı: karar kişide
+const BAR_FILL: Record<MarkState, string> = {
+  idle: WHITE,
+  listening: WHITE,
+  thinking: WHITE,
+  speaking: WHITE,
+  awaiting_confirmation: 'var(--vurgu)',
+  failed: WHITE,
+}
+
 // V boştayken gri, düşünürken beyaz, öteki her durumda logodaki kırmızısı
 const V_FILL: Record<MarkState, string> = {
   idle: 'var(--kagit-3)',
   listening: 'var(--vurgu)',
-  thinking: 'var(--kagit)',
+  thinking: WHITE,
   speaking: 'var(--vurgu)',
   awaiting_confirmation: 'var(--vurgu)',
   failed: 'var(--vurgu)',
@@ -62,15 +76,17 @@ function Brackets({ state, size }: { state: MarkState; size: number }) {
   const color = state === 'awaiting_confirmation' || state === 'failed' ? 'var(--vurgu)'
     : state === 'idle' ? 'var(--cerceve)' : 'var(--cerceve-vurgu)'
   const corner = (d: string, i: number) => (
-    <motion.path key={i} d={d} fill="none" strokeWidth={1.5} style={{ stroke: color, transition: 'stroke .5s' }}
+    <motion.path key={i} d={d} fill="none" strokeWidth={1.5}
       initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ ...EASE, delay: i * 0.05 }} />
   )
   return (
     <motion.g style={{ originX: '50%', originY: '50%' }} animate={{ scale }} transition={EASE}>
+      <g style={{ stroke: color, transition: 'stroke .5s' }}>
       {corner(`M${-half} ${-half + r} V${-half} H${-half + r}`, 0)}
       {corner(`M${half - r} ${-half} H${half} V${-half + r}`, 1)}
       {corner(`M${half} ${half - r} V${half} H${half - r}`, 2)}
       {corner(`M${-half + r} ${half} H${-half} V${half - r}`, 3)}
+      </g>
     </motion.g>
   )
 }
@@ -96,12 +112,16 @@ export function Mark({ state, size = 300 }: { state: MarkState; size?: number })
       <Ring state={state} radius={size * 0.4} />
       <Brackets state={state} size={size * 0.62} />
       <g transform={`scale(${scale}) translate(${-W / 2} ${-H / 2})`}>
-        <motion.rect width={BAR} height={H} style={{ fill: 'var(--kagit)', originY: '50%' }}
-          animate={p.left} transition={p.tl ?? EASE} />
-        <motion.rect x={W - BAR} width={BAR} height={H} style={{ fill: 'var(--kagit)', originY: '50%' }}
-          animate={p.right} transition={p.tr ?? EASE} />
-        <motion.path d={V} style={{ fill: V_FILL[state], originX: '50%', originY: '50%', transition: 'fill .4s' }}
-          animate={p.v} transition={p.tv ?? EASE} />
+        <g style={{ fill: BAR_FILL[state], transition: 'fill .4s' }}>
+          <motion.rect width={BAR} height={H} style={{ originY: '50%' }}
+            animate={p.left} transition={p.tl ?? EASE} />
+          <motion.rect x={W - BAR} width={BAR} height={H} style={{ originY: '50%' }}
+            animate={p.right} transition={p.tr ?? EASE} />
+        </g>
+        {/* Renkler sade gruplarda: Motion bileşeninin style'ındaki renk ilk çizimden sonra güncellenmiyordu */}
+        <g style={{ fill: V_FILL[state], transition: 'fill .4s' }}>
+          <motion.path d={V} style={{ originX: '50%', originY: '50%' }} animate={p.v} transition={p.tv ?? EASE} />
+        </g>
       </g>
     </svg>
   )

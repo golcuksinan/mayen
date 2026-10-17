@@ -33,7 +33,14 @@ class Screen:
     ) -> None:
         if spec.sensitivity is Sensitivity.PERSONAL and not self._personal():
             return
-        await self._send(encode_tool(spec.name, arguments, result))
+        await self._show(encode_tool(spec.name, arguments, result))
+
+    async def _show(self, message: str) -> None:
+        """Ekran hatası turu bozmaz (§13): yazılır, mesaj düşer."""
+        try:
+            await self._send(message)
+        except Exception as e:  # gönderim taşımanın içindedir, türü bilinmez
+            log.warning("screen of %s: %s: %s", self._session, type(e).__name__, e)
 
     async def follow(self, feed: Feed) -> None:
         """Bağlantı kapanana kadar sürer. Geride kalan istemci kaydı bekletmez: aboneliği
@@ -49,7 +56,7 @@ class Screen:
                     continue
                 message = self._message(item)
                 if message is not None:
-                    await self._send(message)
+                    await self._show(message)
         finally:
             subscription.close()
 

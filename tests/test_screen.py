@@ -2,13 +2,18 @@
 
 import asyncio
 import json
+import threading
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
+import pytest
+import sounddevice as sd  # type: ignore[import-untyped]  # tip bilgisi yok
 from pydantic import BaseModel
 
 from mayen.app.screen import Screen
+from mayen.clients import screen as desktop_screen
 from mayen.core.feed import Feed
 from mayen.ports.devices import Capability, Command
 from mayen.ports.events import Event, EventId, EventKind, Header, SessionState
@@ -108,3 +113,67 @@ def test_a_command_is_not_a_screen_message() -> None:
     assert screen_message(command) is None
     assert screen_message("not json") is None
     assert screen_message(json.dumps({"type": "state", "state": "idle"})) is not None
+
+
+async def test_a_screen_that_cannot_send_never_breaks_the_turn() -> None:
+    async def broken(message: str) -> None:
+        raise RuntimeError("transport closed")
+
+    screen = Screen("s1", broken, lambda: True)
+    await screen.tool(spec(Sensitivity.GENERAL), {}, ToolResult(Status.OK))
+    feed = Feed()
+    following = asyncio.create_task(screen.follow(feed))
+    await asyncio.sleep(0)
+    feed.publish(state("s1", SessionState.THINKING))
+    await asyncio.sleep(0.01)
+    assert not following.done()  # takip sürer; düşen yalnızca o mesaj
+    following.cancel()
+
+
+class FakePage:
+    def __init__(self) -> None:
+        self.connections: list[str] = []
+
+    def screen(self, message: dict[str, Any]) -> None:
+        pass
+
+    def connection(self, state: str) -> None:
+        self.connections.append(state)
+
+
+def test_any_failure_of_a_connection_attempt_reaches_the_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for error in (OSError("refused"), sd.PortAudioError("no microphone"), RuntimeError("bug")):
+
+        async def failing(*_: Any, error: BaseException = error) -> None:  # noqa: ANN401
+            raise error
+
+        monkeypatch.setattr(desktop_screen, "run", failing)
+        page = FakePage()
+        desktop_screen.attempt("ws://x", cast(desktop_screen.Page, page))
+        assert page.connections == ["lost"]
+
+
+class FakeWindow:
+    def __init__(self) -> None:
+        self.events = SimpleNamespace(loaded=threading.Event())
+        self.ran: list[str] = []
+        self.done = threading.Event()
+
+    def evaluate_js(self, script: str) -> None:
+        self.ran.append(script)
+        if len(self.ran) == 2:
+            self.done.set()
+        if len(self.ran) == 1:
+            raise RuntimeError("page threw")
+
+
+def test_a_failing_page_call_does_not_stop_the_screen() -> None:
+    window = FakeWindow()
+    page = desktop_screen.Page(cast(Any, window))
+    page.connection("live")
+    page.screen({"type": "state", "state": "idle"})
+    window.events.loaded.set()
+    assert window.done.wait(2)
+    assert window.ran[1].startswith("window.mayenScreen(")

@@ -57,7 +57,9 @@ export function useScreen(): Screen {
   const [screen, setScreen] = useState(EMPTY)
   useEffect(() => {
     window.mayenScreen = raw => setScreen(s => apply(s, raw))
-    window.mayenConnection = connection => setScreen(s => ({ ...s, connection }))
+    // Kopunca durum boşa döner: yeni oturum boşta başlar ve bunu ayrıca bildirmez
+    window.mayenConnection = connection =>
+      setScreen(s => ({ ...s, connection, state: connection === 'live' ? s.state : 'idle' }))
     const queued = early.splice(0)
     const connection = earlyConnection
     setScreen(s => queued.reduce(apply, connection ? { ...s, connection } : s))

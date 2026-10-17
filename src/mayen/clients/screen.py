@@ -15,9 +15,11 @@ import json
 import queue
 import sys
 import threading
+import traceback
 from pathlib import Path
 from typing import Any
 
+import sounddevice as sd  # type: ignore[import-untyped]  # tip bilgisi yok
 import webview
 from websockets.exceptions import WebSocketException
 
@@ -47,17 +49,29 @@ class Page:
     def _send(self) -> None:
         self._window.events.loaded.wait()
         while True:
-            self._window.evaluate_js(self._calls.get())
+            call = self._calls.get()
+            try:
+                self._window.evaluate_js(call)
+            except Exception as e:  # ölen gönderici ekranı sessizce dondururdu
+                print(f"[screen: {type(e).__name__}: {e}]", file=sys.stderr)
+
+
+def attempt(url: str, page: Page) -> None:
+    """Bir bağlantı denemesi; nasıl biterse bitsin ekran kopukluğu görür. Bu iş parçacığında
+    yükselen bir hata onu öldürür ve istemci sessizce sağırlaşırdı (§13); her hata yazılır ve
+    yeniden denenir."""
+    try:
+        asyncio.run(run(url, Traffic(), page.screen, lambda: page.connection("live")))
+    except (OSError, ValueError, WebSocketException, sd.PortAudioError) as e:
+        print(f"[{e}]", file=sys.stderr)
+    except Exception:  # beklenmeyen her hata: iş parçacığı ölmesin
+        traceback.print_exc()
+    page.connection("lost")
 
 
 def _connect(url: str, page: Page) -> None:
     while True:
-        traffic = Traffic()
-        try:
-            asyncio.run(run(url, traffic, page.screen, lambda: page.connection("live")))
-        except (OSError, ValueError, WebSocketException) as e:
-            print(f"[{e}]", file=sys.stderr)
-        page.connection("lost")
+        attempt(url, page)
         threading.Event().wait(RETRY_S)
 
 
