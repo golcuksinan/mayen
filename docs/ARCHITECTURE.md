@@ -381,6 +381,12 @@ yoksa en yakın birime çevrilir; atılan bir birim, sesi sessizce bozar.
 **Cevabın metni istemciye sesten ayrı gider**, cümle başına ve o cümlenin sesinden önce. Metin
 gitmezse istemci cevabı yalnızca sesten öğrenebilir ve bir metin arayüzünde hiç gösteremez.
 
+**İstemci kendi oturumunun ekranını çizer; ekranı durum ve tool sonuçları sürer, model ekrana
+yazmaz.** Sesli bağlantıda istemciye sesin yanında oturumunun durumu, sözler, cevabın metni ve
+tool sonuçları gider; ekran yalnızca bunlardan çizilir. Model ekrana yazsaydı, gösterilen veri
+depodan değil modelden gelirdi ve uydurulabilirdi. Ortak cihazda `PERSONAL` bir tool sonucu
+ekrana da gitmez.
+
 **`PERSONAL` içerik ortak cihazda verilmez, kişinin kendi cihazına gider.** Ortak bir cihazda
 istenen kişisel bir cevap, içeriğin ait olduğu kişinin kişisel cihazına (§10.1) gönderilir ve
 konuşma o cihazdaki oturumda sürer; ortak cihaz yalnızca nereye gönderildiğini söyler.

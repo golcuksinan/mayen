@@ -15,6 +15,7 @@
 /config/*
 !/config/mayen.yaml.example
 !/panel/
+!/desktop/
 !/services/
 /services/*
 !/services/stt/
