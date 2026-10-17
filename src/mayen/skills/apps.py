@@ -30,7 +30,9 @@ async def run(args: Args, ctx: ToolContext) -> ToolResult:
 SPEC = ToolSpec(
     name="apps",
     description="Opens an app (a program or a game) on the device the user is talking to, or "
-    "lists the apps that can be opened there.",
+    "lists the apps that can be opened there. Names come through speech recognition and may be "
+    "slightly off: if the name you heard is not exactly in the list, list the apps first, then "
+    "open the closest one.",
     args=Args,
     effect=Effect.EXTERNAL,
     sensitivity=Sensitivity.GENERAL,
