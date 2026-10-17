@@ -28,7 +28,13 @@ from fakes import MemoryEventLog, MemoryTranscript, session_transcript
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.state import StateTracker
 from mayen.core.turns import Turns
-from mayen.pipeline.session import HeardOnly, Sessions, TriggerGate
+from mayen.pipeline.session import (
+    UNIDENTIFIED,
+    HeardOnly,
+    RequesterSource,
+    Sessions,
+    TriggerGate,
+)
 from mayen.ports.events import EventKind, SessionState
 from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource
@@ -65,6 +71,7 @@ def make(
     store: MemoryTranscript | None = None,
     state: StateTracker | None = None,
     label: Callable[[Caller], str] | None = None,
+    requester: RequesterSource | None = None,
 ) -> tuple[Sessions, TriggerGate]:
     turns = Turns(fates or dict.fromkeys(TriggerSource, Fate.CANCEL))
     sessions = Sessions(turns, Priority.NORMAL)
@@ -82,6 +89,7 @@ def make(
         holds=holds,
         state=state,
         label=label,
+        requester=requester,
     )
     return sessions, gate
 
@@ -267,6 +275,37 @@ async def test_identified_owner_is_cut_only_by_urgent() -> None:
     ]
     down, _ = await run(gate, frames)
     assert appended(down) == []
+
+
+async def test_requester_is_found_from_all_words_until_mayen_answers() -> None:
+    heard: list[list[str]] = []
+
+    def requester(frames: Sequence[TranscriptionFrame]) -> Caller:
+        heard.append([f.text for f in frames])
+        return OWNER if len(frames) == 2 else UNIDENTIFIED
+
+    sessions, gate = make(requester=requester)
+    seen: list[Caller | None] = []
+
+    def look() -> None:
+        turn = sessions.running("s1")
+        seen.append(turn.trigger.requester if turn else None)
+
+    frames: list[Frame] = [
+        UserStartedSpeakingFrame(),
+        TranscriptionFrame("Hey Mayen.", "u", "t"),
+        Call(look),
+        SleepFrame(0.05),
+        TranscriptionFrame("dişçi notunu sil", "u", "t"),
+        Call(look),
+        SleepFrame(0.05),  # sistem karesi sıradaki sözlerin önüne geçmesin
+        BotStartedSpeakingFrame(),
+        TranscriptionFrame("evet", "u", "t"),  # cevaptan sonra: isteyen değişmez
+        Call(look),
+    ]
+    await run(gate, frames)
+    assert seen == [UNIDENTIFIED, OWNER, OWNER]
+    assert heard == [["Hey Mayen."], ["Hey Mayen.", "dişçi notunu sil"]]
 
 
 async def test_speech_over_a_lower_turn_is_not_cut_twice() -> None:

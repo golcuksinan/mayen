@@ -6,14 +6,14 @@ yeniden tanımaz, hepsi aynı kişiyi görür.
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from mayen.core.profile import caller
-from mayen.core.speakers import Identified, SpeakerMatcher, VoiceprintModelError
-from mayen.pipeline.speech import VOICE
+from mayen.core.speakers import Identified, SpeakerMatcher, VoiceprintModelError, mean
+from mayen.pipeline.speech import VOICE, VOICE_S
 from mayen.ports.people import PersonStore
 from mayen.ports.speech import Embedding
 from mayen.ports.tools import Caller
@@ -48,6 +48,40 @@ def recognized(
 
     def source(frame: TranscriptionFrame) -> Caller:
         person_id = identified(frame, matcher).person_id
+        return caller(None if person_id is None else people.get(person_id))
+
+    return source
+
+
+def turn_voice(frames: Sequence[TranscriptionFrame]) -> Embedding | None:
+    """Turun sözlerinin ortak izi: her sözün izi sesinin süresiyle ağırlanır. "Hey Mayen" ile
+    komut iki söz olarak gelse de turu isteyen ikisinin sesinden birlikte tanınır."""
+    voices = [
+        (e, f.metadata.get(VOICE_S) or 1.0)
+        for f in frames
+        if isinstance(e := f.metadata.get(VOICE), Embedding)
+    ]
+    if not voices:
+        return None
+    model = voices[-1][0].model
+    same = [(e.vector, float(s)) for e, s in voices if e.model == model]
+    return Embedding(model, mean([v for v, _ in same], [s for _, s in same]))
+
+
+def recognized_turn(
+    matcher: SpeakerMatcher, people: PersonStore
+) -> Callable[[Sequence[TranscriptionFrame]], Caller]:
+    """Turu isteyen: turun cevaptan önceki sözlerinin hepsinden (oturum kapısının
+    `RequesterSource`'u)."""
+
+    def source(frames: Sequence[TranscriptionFrame]) -> Caller:
+        embedding = turn_voice(frames)
+        person_id = None
+        if embedding is not None:
+            try:
+                person_id = matcher.identify(embedding).person_id
+            except VoiceprintModelError as e:
+                log.error("speaker: %s", e)
         return caller(None if person_id is None else people.get(person_id))
 
     return source

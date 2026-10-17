@@ -84,6 +84,8 @@ log = logging.getLogger(__name__)
 # Sözün ses izi (`Embedding`) ya da çıkarılamadıysa `None`; konuşmacı servisi bağlıysa her
 # sözün karesinde bulunur. İzden kişiye karar çekirdektedir (`pipeline/speaker.py`).
 VOICE = "mayen.voice"
+# İzin çıkarıldığı sesin süresi (sn); turun sözleri birlikte tanınırken ağırlığıdır.
+VOICE_S = "mayen.voice_s"
 
 TAG = re.compile(r"<(/?)([a-z]{2})>")
 
@@ -424,6 +426,7 @@ class ServiceSTT(STTService):
             async for frame in self._transcribe(audio):
                 if voice is not None and isinstance(frame, TranscriptionFrame):
                     frame.metadata[VOICE] = await voice
+                    frame.metadata[VOICE_S] = len(audio) / 2 / self.sample_rate
                 yield frame
         finally:
             if voice is not None and not voice.done():

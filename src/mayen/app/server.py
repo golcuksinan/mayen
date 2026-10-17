@@ -148,6 +148,7 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
                     core.recognizer(),
                     device,
                     core.wake(),
+                    core.turn_recognizer(),
                 )
                 return voice_session(core, session, parts)
 

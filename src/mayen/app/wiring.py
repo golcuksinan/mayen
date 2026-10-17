@@ -66,9 +66,16 @@ from mayen.pipeline.events import (
     session_state,
 )
 from mayen.pipeline.llm import StepCap, llm_service
-from mayen.pipeline.session import UNIDENTIFIED, CallerSource, HeardOnly, Sessions, TriggerGate
+from mayen.pipeline.session import (
+    UNIDENTIFIED,
+    CallerSource,
+    HeardOnly,
+    RequesterSource,
+    Sessions,
+    TriggerGate,
+)
 from mayen.pipeline.sounds import ToolSound
-from mayen.pipeline.speaker import SpeakerLabel, recognized
+from mayen.pipeline.speaker import SpeakerLabel, recognized, recognized_turn
 from mayen.pipeline.speech import (
     ServiceSpeaker,
     ServiceSTT,
@@ -236,6 +243,10 @@ class Core:
         """Sesten konuşanı bulan kaynak; config'te konuşmacı tanıma yoksa `None`."""
         return None if self.matcher is None else recognized(self.matcher, self.people)
 
+    def turn_recognizer(self) -> RequesterSource | None:
+        """Turu isteyeni turun bütün sözlerinin sesinden bulan kaynak (§6)."""
+        return None if self.matcher is None else recognized_turn(self.matcher, self.people)
+
     def caller(self, role: Role, person_id: str | None) -> Caller:
         """Kayıttaki rol ve kimlikten çağıran; kişisel cihazı profilden (replay, §14)."""
         person = None if person_id is None else self.people.get(person_id)
@@ -304,6 +315,9 @@ class Voice:
     device: DeviceId | None
     # Yoksa her söz tur açar (§5.1).
     wake: Wake | None = None
+    # Turu isteyen, turun sözlerinin hepsinden (`Core.turn_recognizer`); yoksa ilk sözün
+    # konuşanı.
+    requester: RequesterSource | None = None
 
 
 @dataclass
@@ -337,6 +351,7 @@ def _conversation(
     turn: BaseTurnAnalyzer | None,
     sound: ToolSound | None = None,
     follow_up_s: float | None = None,
+    requester: RequesterSource | None = None,
 ) -> _Conversation:
     config = core.config
     endpoint = config.models.endpoint(CONVERSATION_ROLE)
@@ -377,6 +392,7 @@ def _conversation(
         device_person=lambda: core.presence.personal(session),
         state=state,
         label=core.label,
+        requester=requester,
     )
     start = (
         None
@@ -444,7 +460,9 @@ def voice_session(core: Core, session: str, voice: Voice) -> Session:
     sound = ToolSound()
     wake = voice.wake
     follow_up_s = None if wake is None else wake.follow_up_s
-    c = _conversation(core, session, speaker, voice.vad, voice.turn, sound, follow_up_s)
+    c = _conversation(
+        core, session, speaker, voice.vad, voice.turn, sound, follow_up_s, voice.requester
+    )
     pipeline = Pipeline(
         [
             voice.input,

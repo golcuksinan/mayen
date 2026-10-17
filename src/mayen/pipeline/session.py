@@ -49,6 +49,8 @@ from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource, TurnId
 # Segmentin konuşmacısı; hattı kuran bağlar: konuşmacı tanıma (`pipeline/speaker.py`) ya da
 # cihazın kişisi. Onay kapısındaki `SpeakerSource` da bu kaynaktan okur.
 type CallerSource = Callable[[TranscriptionFrame], Caller]
+# Turu isteyen, turun cevaptan önceki bütün sözlerinden (§6: turun bütün sesiyle).
+type RequesterSource = Callable[[Sequence[TranscriptionFrame]], Caller]
 
 # Söz başladığında kimin konuştuğu henüz bilinmez; kesme kuralı onu sahip saymaz.
 UNIDENTIFIED = Caller(Role.UNKNOWN, None, has_personal_device=False)
@@ -153,11 +155,14 @@ class TriggerGate(FrameProcessor):
         device_person: Callable[[], str | None] = lambda: None,
         state: StateTracker | None = None,
         label: Callable[[Caller], str] | None = None,
+        requester: RequesterSource | None = None,
     ) -> None:
         super().__init__()
         self.session = session
         self._sessions = sessions
         self._caller = caller
+        # Verilmezse turu isteyen ilk sözün konuşanıdır (konuşmacı tanıma yokken hepsi aynı).
+        self._requester = requester or (lambda frames: caller(frames[0]))
         self._recorder = recorder
         self._transcript = transcript
         self._started_at = 0.0
@@ -172,7 +177,10 @@ class TriggerGate(FrameProcessor):
         # Yazılı sözün başına konuşanın adı (§8.1); sesli sözünkini `SpeakerLabel` yazar.
         self._label = label
         self._turn: Turn | None = None
-        self._identified = True
+        # Sesli turun isteyeni Mayen konuşana ya da tool çağırana kadar her sözde yeniden
+        # bulunur: "Hey Mayen" ile komut ayrı söz gelse de ikisinin sesi birlikte tanınır.
+        self._identifying = False
+        self._requests: list[TranscriptionFrame] = []
         self._user_speaking = False
         self._bot_speaking = False
         self._responding = False
@@ -208,7 +216,8 @@ class TriggerGate(FrameProcessor):
         self._quiet_since = None
         self._unanswered = False
         source = turn.trigger.source
-        self._identified = source is not TriggerSource.VOICE or not fresh
+        self._identifying = source is TriggerSource.VOICE and fresh
+        self._requests = []
         self._started_at = self._recorder.clock.monotonic()
         requester = turn.trigger.requester
         self._emit(
@@ -218,7 +227,7 @@ class TriggerGate(FrameProcessor):
                 "source": source.value,
                 "priority": turn.trigger.priority.value,
                 "fresh": fresh,
-                # Sesli turun sahibi ilk segmentte tanınır; o segmentin konuşmacısıdır.
+                # Sesli turun isteyeni sözler geldikçe tanınır; burada henüz bilinmez.
                 "requester": {"role": requester.role.value, "person_id": requester.person_id},
                 "device_person": self._device_person(),
             },
@@ -308,16 +317,18 @@ class TriggerGate(FrameProcessor):
             self._state.listening(False)
         elif isinstance(frame, TranscriptionFrame):
             self._heard(frame)
-            if not self._identified:
-                self._identified = True
-                self._sessions.identify(self.session, self._caller(frame))
+            if self._identifying:
+                self._requests.append(frame)
+                self._sessions.identify(self.session, self._requester(self._requests))
         elif isinstance(frame, BotStartedSpeakingFrame):
+            self._identifying = False
             self._bot_speaking = True
             self._state.speaking(True)
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_speaking = False
             self._state.speaking(False)
         elif isinstance(frame, FunctionCallsStartedFrame):
+            self._identifying = False
             self._open_calls |= {c.tool_call_id for c in frame.function_calls}
         elif isinstance(frame, FunctionCallResultFrame | FunctionCallCancelFrame):
             self._open_calls.discard(frame.tool_call_id)

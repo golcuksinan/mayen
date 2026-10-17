@@ -22,8 +22,15 @@ from mayen.core.speakers import (
     label,
     mean,
 )
-from mayen.pipeline.speaker import SPEAKER, SpeakerLabel, recognized, score
-from mayen.pipeline.speech import VOICE
+from mayen.pipeline.speaker import (
+    SPEAKER,
+    SpeakerLabel,
+    recognized,
+    recognized_turn,
+    score,
+    turn_voice,
+)
+from mayen.pipeline.speech import VOICE, VOICE_S
 from mayen.ports.people import Voiceprint
 from mayen.ports.speech import (
     SCHEMA_VERSION,
@@ -133,6 +140,32 @@ def test_without_a_voice_or_with_a_foreign_model_the_speaker_is_unknown(db: Data
     assert source(_frame(None)).role is Role.UNKNOWN
     assert source(_frame(Embedding("other", (1.0, 0.0)))).role is Role.UNKNOWN
     assert source(_frame(Embedding("ecapa", (0.0, 1.0)))).role is Role.UNKNOWN
+
+
+def _said(vector: tuple[float, float], seconds: float) -> TranscriptionFrame:
+    frame = _frame(Embedding("ecapa", vector))
+    frame.metadata[VOICE_S] = seconds
+    return frame
+
+
+def test_weighted_mean_leans_to_the_longer_sample() -> None:
+    assert mean([(1.0, 0.0), (0.0, 1.0)], [3.0, 1.0]) == pytest.approx((0.948683, 0.316228))
+    with pytest.raises(ValueError):
+        mean([(1.0, 0.0)], [0.0])
+
+
+def test_the_turn_is_recognized_from_all_its_words(db: Database) -> None:
+    people, prints = SqlitePersonStore(db), SqliteVoiceprintStore(db)
+    owner = people.create_owner("Sinan", "English", None, ())
+    prints.set(owner.id, "ecapa", (1.0, 0.0))
+    source = recognized_turn(SpeakerMatcher(prints, 0.6), people)
+    wake = _said((0.5, 0.866), 0.8)  # "Hey Mayen" tek başına: 0,5, eşiğin altında
+    command = _said((0.9, 0.436), 2.5)  # komut: 0,9
+    assert source([wake]).role is Role.UNKNOWN
+    assert source([wake, command]).role is Role.OWNER
+    voice = turn_voice([wake, command])
+    assert voice is not None and 0.6 < cosine(voice.vector, (1.0, 0.0)) < 0.9
+    assert source([_frame(None)]).role is Role.UNKNOWN
 
 
 async def test_speaker_label_names_the_speaker_in_front_of_the_words() -> None:

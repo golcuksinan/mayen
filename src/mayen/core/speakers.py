@@ -64,13 +64,20 @@ class SpeakerMatcher:
         return best(embedding, self._store.all(), self.threshold)
 
 
-def mean(vectors: Sequence[Sequence[float]]) -> tuple[float, ...]:
+def mean(
+    vectors: Sequence[Sequence[float]], weights: Sequence[float] | None = None
+) -> tuple[float, ...]:
     """Birden çok örneğin izi (§10.4): birim uzunluğa getirilmiş izlerin ortalaması, birim
-    uzunlukta. Uzun bir örnek kısalarını bastırmasın diye her biri önce normalleştirilir."""
+    uzunlukta. Uzun bir örnek kısalarını bastırmasın diye her biri önce normalleştirilir;
+    ağırlık verilirse (sesin süresi gibi) ortalama ona göredir."""
     if not vectors:
         raise ValueError("no samples")
-    units = [_unit(v) for v in vectors]
-    return _unit([sum(column) / len(units) for column in zip(*units, strict=True)])
+    if weights is None:
+        weights = [1.0] * len(vectors)
+    if len(weights) != len(vectors) or min(weights) < 0 or sum(weights) == 0:
+        raise ValueError(f"weights {list(weights)} do not fit {len(vectors)} samples")
+    units = [[w * x for x in _unit(v)] for v, w in zip(vectors, weights, strict=True)]
+    return _unit([sum(column) for column in zip(*units, strict=True)])
 
 
 def _unit(v: Sequence[float]) -> tuple[float, ...]:
