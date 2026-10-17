@@ -500,7 +500,10 @@ modelini kabul eder (§8.7). Katalog değiştirmez (§8.3).
 
 Çıkış dili kişi profilinde bir tercihtir. Tanınmayan kişiye config'teki varsayılan dille
 konuşulur; kimsenin istemediği turda (zamanlayıcı) dinleyen, oturumun cihazının eşleştiği
-kişidir. Onay sorusu da turu isteyenin dilinde yazılır. Dil kuralı değişken bir değer olduğu
+kişidir. **Tanınmayan kişiye ad ve hitapla seslenilmez, kişisel cihazda da:** kişisel cihazda
+başka biri de konuşabilir (sahibin tanıştırdığı bir arkadaş gibi) ve sahibin adıyla ona
+seslenmek yanlış olurdu. Kim olduğunu model konuşmadan çıkarır; geçmişteki sözler konuşanın
+etiketini taşır (§8.1). Sistem promptu tanınmayana sahip gibi seslenilmemesini söyler. Onay sorusu da turu isteyenin dilinde yazılır. Dil kuralı değişken bir değer olduğu
 için bağlam bloğunun sonunda durur; metni sahibin prompt dosyasındadır, dil yer tutucuyla
 girer.
 
@@ -849,10 +852,16 @@ zaten yapabildiği bir şeyi yasaklayamaz.
 | Rol | Kim | Temel yetki |
 |---|---|---|
 | **owner** (sahip) | Kurulumla atanmış tek kişi | Tümü; onay gerekip gerekmediğine yetki kararı bakar (§10.3) |
-| **acquaintance** (tanıdık) | Sahibin rol verdiği kişi | Sohbet + `READ`·`GENERAL` |
+| **acquaintance** (tanıdık) | Sahibin rol verdiği kişi | Sohbet + `READ`·`GENERAL` + `EXTERNAL`·`GENERAL` |
 | **system** | Kimse konuşmadan, tetikleyiciyle açılan turlar | Sabit değil; tetikleyici başına config'te |
-| **unknown** (tanımsız) | Rolü olmayan herkes: tanınmayan ses, kendini kaydetmiş ama rolü verilmemiş kişi | Sohbet + `READ`·`GENERAL` |
+| **unknown** (tanımsız) | Rolü olmayan herkes: tanınmayan ses, kendini kaydetmiş ama rolü verilmemiş kişi | Sohbet + `READ`·`GENERAL` + `EXTERNAL`·`GENERAL` |
 
+- **Tanınmayan kişi misafirdir: kişisel olmayan ve geri alınabilir işler ona açıktır.** Ses
+  kısa sözde zayıf bir kimliktir ve sahibin kısa komutları da tanınmayabilir; ses seviyesi ya da
+  müzik gibi işler kapalı olsaydı, tanımanın her hatası sahibin günlük işini reddederdi. Bu
+  işlerin en kötü sonucu, mikrofonun yanındaki birinin geri alınabilir bir şeyi değiştirmesidir;
+  kişisel veri ve geri alınamaz işler kapalı kalır. Tanıdığın yetkisi tanınmayanınkinden az
+  olamaz: rol vermek yetkiyi daraltmamalıdır.
 - **Rol ilişkiyi değil yetkiyi anlatır.** Aynı yetkiye sahip iki rol (arkadaş, akraba gibi)
   örnekten çıkmış bir ayrımdır ve her yeni ilişki türü yeni bir rol ister. Kişiler arasındaki
   fark rolde değil, kişi bazlı yetki ayarındadır.
