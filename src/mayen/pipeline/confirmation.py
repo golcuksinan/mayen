@@ -216,7 +216,7 @@ class ConfirmationGateProcessor(FrameProcessor):
             if plan.asked_again and step is not Step.ASK_AGAIN:
                 # Tekrar sorusu henüz okunuyor ya da sırada olabilir: cevap ondan önce gelmiş
                 # bir sözün devamıdır. Kesilmezse soru, iş bittikten sonra okunurdu.
-                await self.broadcast_interruption()
+                await self.broadcast_interruption()  # type: ignore[no-untyped-call]  # Pipecat'te tipsiz
             match step:
                 case Step.EXECUTE:
                     # Yan etkili çağrılar sırayla çalışır (§9.3).
