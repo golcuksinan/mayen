@@ -55,7 +55,8 @@ def spec(
     )
 
 
-# §10.2: sahip her şeye yetkili; tanıdık ve tanımsız yalnızca READ·GENERAL.
+# §10.2: sahip her şeye yetkili; tanıdık ve tanımsız misafirdir: READ·GENERAL ve
+# EXTERNAL·GENERAL (kişisel olmayan, geri alınabilir).
 CELLS = list(
     itertools.product((Role.OWNER, Role.ACQUAINTANCE, Role.UNKNOWN), Effect, Sensitivity)
 )
@@ -64,7 +65,7 @@ CELLS = list(
 @pytest.mark.parametrize(("role", "effect", "sensitivity"), CELLS)
 def test_role_table_cell(role: Role, effect: Effect, sensitivity: Sensitivity) -> None:
     expected = role is Role.OWNER or (
-        effect is Effect.READ and sensitivity is Sensitivity.GENERAL
+        effect in (Effect.READ, Effect.EXTERNAL) and sensitivity is Sensitivity.GENERAL
     )
     assert ROLE_TABLE[(role, effect, sensitivity)] is expected
 

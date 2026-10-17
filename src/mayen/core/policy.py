@@ -41,7 +41,7 @@ ROLE_TABLE: PolicyTable = {
     (Role.ACQUAINTANCE, _E.READ, _S.PERSONAL): False,
     (Role.ACQUAINTANCE, _E.WRITE, _S.GENERAL): False,
     (Role.ACQUAINTANCE, _E.WRITE, _S.PERSONAL): False,
-    (Role.ACQUAINTANCE, _E.EXTERNAL, _S.GENERAL): False,
+    (Role.ACQUAINTANCE, _E.EXTERNAL, _S.GENERAL): True,  # misafir (§10.2)
     (Role.ACQUAINTANCE, _E.EXTERNAL, _S.PERSONAL): False,
     (Role.ACQUAINTANCE, _E.IRREVERSIBLE, _S.GENERAL): False,
     (Role.ACQUAINTANCE, _E.IRREVERSIBLE, _S.PERSONAL): False,
@@ -51,7 +51,7 @@ ROLE_TABLE: PolicyTable = {
     (Role.UNKNOWN, _E.READ, _S.PERSONAL): False,
     (Role.UNKNOWN, _E.WRITE, _S.GENERAL): False,
     (Role.UNKNOWN, _E.WRITE, _S.PERSONAL): False,
-    (Role.UNKNOWN, _E.EXTERNAL, _S.GENERAL): False,
+    (Role.UNKNOWN, _E.EXTERNAL, _S.GENERAL): True,  # misafir (§10.2)
     (Role.UNKNOWN, _E.EXTERNAL, _S.PERSONAL): False,
     (Role.UNKNOWN, _E.IRREVERSIBLE, _S.GENERAL): False,
     (Role.UNKNOWN, _E.IRREVERSIBLE, _S.PERSONAL): False,

@@ -13,7 +13,7 @@ from mayen.core.profile import speaker
 from mayen.ports.devices import Capability
 from mayen.ports.events import Clock
 from mayen.ports.people import PersonStore
-from mayen.ports.tools import Caller
+from mayen.ports.tools import Caller, Role
 
 # Dil kuralı metnindeki yer tutucu; kuralın kendisi sahibin prompt dosyasındadır.
 LANGUAGE_SLOT = "{language}"
@@ -68,8 +68,11 @@ class ContextBlock:
 
     def language(self, session: str, requester: Caller) -> str:
         """Turu isteyen kişinin dili; kimse istemediyse (zamanlayıcı) oturumun cihazının
-        kişisi dinleyendir. İkisi de yoksa config'teki varsayılan."""
-        person_id = requester.person_id or self._presence.personal(session)
+        kişisi dinleyendir. Tanınmayan kişiye ve ikisi de yoksa config'teki varsayılan: kişisel
+        cihazda da başka biri konuşabilir (§8.6)."""
+        person_id = requester.person_id
+        if person_id is None and requester.role is Role.SYSTEM:
+            person_id = self._presence.personal(session)
         person = None if person_id is None else self._people.get(person_id)
         return self._default if person is None else person.language
 

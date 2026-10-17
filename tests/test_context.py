@@ -85,6 +85,11 @@ def test_system_turn_speaks_the_language_of_the_device_person(
     assert block.language("phone-session", SYSTEM) == "Turkish"
     assert block.language("shared-session", SYSTEM) == "English"
     assert 'speaker: {"role": "system"}' in block.render("phone-session", SYSTEM)
+    # Kişisel cihazda konuşan tanınmayan biri cihazın kişisi sayılmaz: sahibin tanıştırdığı
+    # bir arkadaş olabilir (§8.6).
+    assert block.language("phone-session", UNIDENTIFIED) == "English"
+    phone = block.render("phone-session", UNIDENTIFIED)
+    assert 'speaker: {"role": "unknown"}' in phone and "Sinan" not in phone
 
 
 def test_block_goes_before_the_message_that_opened_the_turn() -> None:
