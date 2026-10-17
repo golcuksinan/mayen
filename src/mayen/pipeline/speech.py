@@ -8,6 +8,10 @@ Sözün başı ve sonu olasılıktan Pipecat'in VAD kuralıyla çıkar (eşik, b
 olasılığı veren model STT servisindedir (`ServiceVAD`). Sözün bittiğine dair olasılık da
 oradadır (`ServiceTurn`); eşik ve sessizlik süresi Pipecat'in Smart Turn kuralıdır.
 
+VAD sözü her kısa sessizlikte keser; bu kesim sözün bittiğini anlamak içindir. Yazıya dökme ve
+konuşmacı tanıma kesik parçayla değil turun bütün sesiyle yapılır (§6): `TurnEndSignal` Smart
+Turn'ün kararını STT'ye yayar, `ServiceSTT` turun sesini o ana kadar biriktirir.
+
 TTS'e giden metindeki dil işaretini (`<tr>…</tr>`) model koyar (§7); burada yalnızca okunur ve
 parçalara bölünür, dili yorumlanmaz (§2.1). Ses birimine çevirmek sesin işidir, servistedir.
 """
@@ -35,14 +39,22 @@ from pipecat.frames.frames import (
     EndFrame,
     ErrorFrame,
     Frame,
+    InputAudioRawFrame,
     StartFrame,
+    SystemFrame,
     TranscriptionFrame,
     TTSAudioRawFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.settings import STTSettings, TTSSettings
-from pipecat.services.stt_service import SegmentedSTTService
+from pipecat.services.stt_service import STTService
 from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
+from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.utils.time import time_now_iso8601
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import ClientConnection, connect
@@ -77,6 +89,46 @@ TAG = re.compile(r"<(/?)([a-z]{2})>")
 
 # Akıştaki parça boyutu; ilk sesi geciktirmeyecek kadar küçük.
 _CHUNK = 4096
+
+# Söz başlamadan önce tutulan ses: VAD sözü geç fark eder (Pipecat'in parçalı STT'sindeki pay).
+_PRE_SPEECH_S = 1.0
+# Sesin sonuna eklenen sessizlik; ani biten seste model son kelimeyi düşürür (Pipecat'in payı).
+_TRAILING_SILENCE_S = 0.5
+# Tur dışında biten söz bu kadar bekler: wake word turu sözün bitişinden biraz sonra açar ve
+# "Hey Mayen" parçası turun başı olur.
+_JOIN_TURN_S = 1.0
+
+
+class TurnEndSignal(SystemFrame):
+    """Smart Turn sözün bittiğine karar verdi; STT turun sesini şimdi yazıya döker."""
+
+
+class TurnEndToStt(TurnAnalyzerUserTurnStopStrategy):  # type: ignore[no-untyped-call]  # Pipecat'te tipsiz
+    """Pipecat'in Smart Turn stratejisi; karar verince STT'ye `TurnEndSignal` yayar.
+
+    Strateji turu bitirmek için metni bekler; metin, işareti alan STT'den gelir. Karar
+    Pipecat'in iki yolundan (sessizlik ve model) aynı noktada toplanır.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401
+        super().__init__(**kwargs)
+        self._signalled = False
+
+    async def process_frame(self, frame: Frame) -> Any:  # noqa: ANN401  # ProcessFrameResult
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._signalled = False  # söz sürüyor; önceki karar geçersiz (Pipecat de atar)
+        return await super().process_frame(frame)
+
+    async def handle_user_turn_started(self) -> None:
+        self._signalled = False
+        await super().handle_user_turn_started()  # type: ignore[no-untyped-call]  # tipsiz
+
+    async def _maybe_trigger_user_turn_stopped(self) -> None:
+        # Pipecat 1.12.0'da kararın toplandığı tek yer (sürüm sabit, §3).
+        if self._turn_complete and not self._signalled:
+            self._signalled = True
+            await self.broadcast_frame(TurnEndSignal)
+        await super()._maybe_trigger_user_turn_stopped()  # type: ignore[no-untyped-call]  # tipsiz
 
 
 def split_parts(text: str, open_tag: str | None) -> tuple[list[Part], str | None]:
@@ -237,8 +289,13 @@ class ServiceSpeaker:
             return None
 
 
-class ServiceSTT(SegmentedSTTService):
-    """Sözün sesi bittiğinde STT servisine gider; metin ve skor döner.
+class ServiceSTT(STTService):
+    """Turun sesi bittiğinde STT servisine gider; metin ve skor döner.
+
+    Bir kullanıcı turu sürerken (`UserStartedSpeakingFrame`'den `TurnEndSignal`'a) VAD'ın
+    kestiği parçalar ayrı yazıya dökülmez, ses kesilmeden birikir. Tur yokken (uyanık
+    değilken) biten söz `_JOIN_TURN_S` bekler, tur açılmazsa tek başına yazıya dökülür:
+    sürekli STT her sözü kaydeder (§6).
 
     Konuşmacı servisi verilmişse aynı ses ona da gider, iki istek birlikte yürür; iz karenin
     `VOICE` alanına yazılır.
@@ -249,22 +306,27 @@ class ServiceSTT(SegmentedSTTService):
         url: str,
         language: str | None,
         speaker: ServiceSpeaker | None = None,
+        join_turn_s: float = _JOIN_TURN_S,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         super().__init__(settings=STTSettings(model=None, language=None), **kwargs)
         self._url = url.rstrip("/")
         self._language = language  # dinleme dili; çıkış dilinden bağımsız (§8.6)
+        self._join_turn_s = join_turn_s
         self._speaker = speaker
         self._http: aiohttp.ClientSession | None = None
         self._rate = 0
         self._resampler = create_stream_resampler()
-
-    @property
-    def wants_wav_segments(self) -> bool:
-        return False
+        self._audio = bytearray()  # tur sürerken turun, yoksa sürmekte olan sözün sesi
+        self._speaking = False
+        self._in_turn = False
+        self._loose: list[bytes] = []  # tur dışında bitmiş, bekleyen sözler
+        self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._worker: asyncio.Task[None] | None = None
 
     async def start(self, frame: StartFrame) -> None:
         await super().start(frame)
+        self._worker = self.create_task(self._transcribe_queued())
         self._http = aiohttp.ClientSession()
         try:
             self._rate = (await _health(self._http, self._url)).sample_rate
@@ -274,10 +336,17 @@ class ServiceSTT(SegmentedSTTService):
             await self._speaker.open(self._http)
 
     async def stop(self, frame: EndFrame) -> None:
+        if self._worker is not None:
+            await self._queue.put(None)  # kuyruktakiler yazıya dökülür, sonra biter
+            await self._worker
+            self._worker = None
         await super().stop(frame)
         await self._close()
 
     async def cancel(self, frame: CancelFrame) -> None:
+        if self._worker is not None:
+            await self.cancel_task(self._worker)
+            self._worker = None
         await super().cancel(frame)
         await self._close()
 
@@ -285,6 +354,65 @@ class ServiceSTT(SegmentedSTTService):
         if self._http is not None:
             await self._http.close()
             self._http = None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._speaking = True
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            self._speaking = False
+            if not self._in_turn:
+                self._set_loose(bytes(self._audio))
+                self._audio.clear()
+        elif isinstance(frame, UserStartedSpeakingFrame):
+            self._in_turn = True
+            self._audio[:0] = b"".join(self._loose)
+            self._loose.clear()
+        elif isinstance(frame, TurnEndSignal):
+            await self._release(bytes(self._audio))
+            self._audio.clear()
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            self._in_turn = False
+            if not self._speaking:
+                self._audio = self._audio[-self._pre_speech_bytes() :]
+
+    async def process_audio_frame(
+        self, frame: InputAudioRawFrame, direction: FrameDirection
+    ) -> None:
+        self._audio += frame.audio
+        if not self._speaking and not self._in_turn:
+            del self._audio[: -self._pre_speech_bytes()]
+
+    async def push_frame(
+        self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM
+    ) -> None:
+        if isinstance(frame, TranscriptionFrame):
+            frame.finalized = True  # turun ya da sözün bütün sesi; ardından metin gelmez
+        await super().push_frame(frame, direction)
+
+    def _pre_speech_bytes(self) -> int:
+        return int(self.sample_rate * _PRE_SPEECH_S) * 2
+
+    def _set_loose(self, pcm: bytes) -> None:
+        self._loose.append(pcm)
+        self.create_task(self._release_loose(pcm))
+
+    async def _release_loose(self, pcm: bytes) -> None:
+        await asyncio.sleep(self._join_turn_s)
+        if any(p is pcm for p in self._loose):
+            self._loose = [p for p in self._loose if p is not pcm]
+            await self._release(pcm)
+
+    async def _release(self, pcm: bytes) -> None:
+        if pcm:
+            await self._queue.put(pcm + bytes(int(self.sample_rate * _TRAILING_SILENCE_S) * 2))
+
+    async def _transcribe_queued(self) -> None:
+        while (pcm := await self._queue.get()) is not None:
+            try:
+                await self.process_generator(self.run_stt(pcm))
+            except Exception as e:  # Pipecat'in parçalı STT'si de böyle sürer
+                await self.push_error(f"{self}: transcription failed: {e}", exception=e)
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame]:
         voice = (

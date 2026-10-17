@@ -31,7 +31,6 @@ from pipecat.turns.user_start import (
     TranscriptionUserTurnStartStrategy,
     VADUserTurnStartStrategy,
 )
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies, UserTurnStrategies
 
 import mayen.skills
@@ -76,6 +75,7 @@ from mayen.pipeline.speech import (
     ServiceTTS,
     ServiceTurn,
     ServiceVAD,
+    TurnEndToStt,
 )
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools
@@ -415,9 +415,7 @@ def _conversation(
             user_turn_strategies=(
                 ExternalUserTurnStrategies()
                 if turn is None
-                else UserTurnStrategies(
-                    start=start, stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=turn)]
-                )
+                else UserTurnStrategies(start=start, stop=[TurnEndToStt(turn_analyzer=turn)])
             ),
             user_mute_strategies=[HeardOnly(gate)] if vad is not None else [],
             empty_user_turn=NoRecoveryWhileAwaiting(confirmation),

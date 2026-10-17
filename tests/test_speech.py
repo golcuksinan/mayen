@@ -7,6 +7,11 @@ from typing import Any
 
 import numpy as np
 import pytest
+from pipecat.audio.turn.base_turn_analyzer import (
+    BaseTurnAnalyzer,
+    BaseTurnParams,
+    EndOfTurnState,
+)
 from pipecat.audio.turn.smart_turn.base_smart_turn import (
     SmartTurnParams,
     SmartTurnTimeoutException,
@@ -18,10 +23,19 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     TTSAudioRawFrame,
     TTSSpeakFrame,
+    UserStartedSpeakingFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
+from pipecat.metrics.metrics import MetricsData
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMUserAggregator,
+    LLMUserAggregatorParams,
+)
 from pipecat.tests.utils import SleepFrame, run_test
+from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from fakes import FakeSpeech, speech_service
 from mayen.pipeline.sounds import ToolSound
@@ -32,6 +46,8 @@ from mayen.pipeline.speech import (
     ServiceTTS,
     ServiceTurn,
     ServiceVAD,
+    TurnEndSignal,
+    TurnEndToStt,
     split_parts,
 )
 from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Embedding, Part, Transcription
@@ -64,7 +80,7 @@ def _speech() -> list[Any]:
 async def test_stt_turns_a_segment_into_text(fake: tuple[FakeSpeech, str]) -> None:
     service, url = fake
     down, _ = await run_test(
-        ServiceSTT(url, "en"), frames_to_send=[*_speech(), SleepFrame(0.3)]
+        ServiceSTT(url, "en", join_turn_s=0), frames_to_send=[*_speech(), SleepFrame(0.3)]
     )
     texts = [f for f in down if isinstance(f, TranscriptionFrame)]
     assert [(t.text, str(t.language)) for t in texts] == [("hello", "en")]
@@ -73,11 +89,70 @@ async def test_stt_turns_a_segment_into_text(fake: tuple[FakeSpeech, str]) -> No
     assert service.requests[0][0] == {"language": "en"}
 
 
+_SEGMENT = 2 * 1600 * 2  # `_speech()`'in iki ses karesi, bayt
+
+
+def _transcribed(service: FakeSpeech) -> list[int]:
+    return [n for query, n in service.requests if isinstance(query, dict)]
+
+
+async def test_stt_transcribes_a_turn_as_one_piece(fake: tuple[FakeSpeech, str]) -> None:
+    service, url = fake
+    down, _ = await run_test(
+        ServiceSTT(url, "en", join_turn_s=0),
+        frames_to_send=[
+            UserStartedSpeakingFrame(),
+            *_speech(),
+            SleepFrame(0.1),
+            *_speech(),
+            SleepFrame(0.1),
+            TurnEndSignal(),
+            SleepFrame(0.3),
+        ],
+    )
+    texts = [f for f in down if isinstance(f, TranscriptionFrame)]
+    assert [t.text for t in texts] == ["hello"] and texts[0].finalized
+    [size] = _transcribed(service)
+    assert size > 2 * _SEGMENT  # iki parça ve aralarındaki ses birlikte
+
+
+async def test_a_word_that_ended_just_before_the_turn_opens_its_start(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    down, _ = await run_test(
+        ServiceSTT(url, "en", join_turn_s=0.5),
+        frames_to_send=[
+            *_speech(),  # "Hey Mayen": wake word turu sözün bitişinden sonra açar
+            SleepFrame(0.1),
+            UserStartedSpeakingFrame(),
+            *_speech(),
+            TurnEndSignal(),
+            SleepFrame(0.8),
+        ],
+    )
+    assert len([f for f in down if isinstance(f, TranscriptionFrame)]) == 1
+    [size] = _transcribed(service)
+    assert size > 2 * _SEGMENT
+
+
+async def test_outside_a_turn_each_word_is_still_transcribed(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    down, _ = await run_test(
+        ServiceSTT(url, "en", join_turn_s=0.1),
+        frames_to_send=[*_speech(), SleepFrame(0.3), *_speech(), SleepFrame(0.3)],
+    )
+    assert len([f for f in down if isinstance(f, TranscriptionFrame)]) == 2
+    assert len(_transcribed(service)) == 2
+
+
 async def test_stt_sends_the_same_words_to_the_speaker_service(
     fake: tuple[FakeSpeech, str],
 ) -> None:
     service, url = fake
-    stt = ServiceSTT(url, "en", ServiceSpeaker(url))
+    stt = ServiceSTT(url, "en", ServiceSpeaker(url), join_turn_s=0)
     down, _ = await run_test(stt, frames_to_send=[*_speech(), SleepFrame(0.3)])
     [text] = [f for f in down if isinstance(f, TranscriptionFrame)]
     assert text.metadata[VOICE] == Embedding("ecapa", (0.6, 0.8))
@@ -89,7 +164,7 @@ async def test_unreachable_speaker_service_leaves_the_words_without_a_voice(
     fake: tuple[FakeSpeech, str],
 ) -> None:
     _, url = fake
-    stt = ServiceSTT(url, "en", ServiceSpeaker("http://127.0.0.1:9"))
+    stt = ServiceSTT(url, "en", ServiceSpeaker("http://127.0.0.1:9"), join_turn_s=0)
     down, _ = await run_test(stt, frames_to_send=[*_speech(), SleepFrame(0.3)])
     [text] = [f for f in down if isinstance(f, TranscriptionFrame)]
     assert text.text == "hello" and text.metadata[VOICE] is None
@@ -235,3 +310,40 @@ async def test_tool_sound_is_short_and_at_the_output_rate() -> None:
     [blip] = [f for f in down if isinstance(f, OutputAudioRawFrame)]
     assert blip.sample_rate == 24000  # run_test'in çıkış hızı
     assert len(blip.audio) == 2 * int(24000 * 0.13)
+
+
+class _CompleteAtSilence(BaseTurnAnalyzer):
+    """Her sessizlikte "bitti" der; Smart Turn'ün yerine."""
+
+    @property
+    def speech_triggered(self) -> bool:
+        return False
+
+    @property
+    def params(self) -> BaseTurnParams:
+        return BaseTurnParams()
+
+    def append_audio(self, buffer: bytes, is_speech: bool) -> EndOfTurnState:
+        return EndOfTurnState.INCOMPLETE
+
+    async def analyze_end_of_turn(self) -> tuple[EndOfTurnState, MetricsData | None]:
+        return EndOfTurnState.COMPLETE, None
+
+    def clear(self) -> None:
+        pass
+
+
+async def test_the_turn_decision_reaches_the_stt_once() -> None:
+    user = LLMUserAggregator(
+        LLMContext(),
+        params=LLMUserAggregatorParams(
+            user_turn_strategies=UserTurnStrategies(
+                start=[VADUserTurnStartStrategy()],
+                stop=[TurnEndToStt(turn_analyzer=_CompleteAtSilence())],
+            ),
+        ),
+    )
+    _, up = await run_test(
+        user, frames_to_send=[*_speech(), SleepFrame(0.1)], expected_up_frames=None
+    )
+    assert len([f for f in up if isinstance(f, TurnEndSignal)]) == 1
