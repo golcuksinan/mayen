@@ -44,7 +44,9 @@ def ctx(source: Source, location: str | None) -> ToolCtx:
 
 async def test_a_said_place_wins_over_the_default_location() -> None:
     source = Source()
-    result = await weather.run(weather.Args(place="İzmir"), ctx(source, "Denizli"))
+    result = await weather.run(
+        weather.Args(where=weather.Where.NAMED, place="İzmir"), ctx(source, "Denizli")
+    )
     assert source.asked == ["İzmir"]
     assert result.status is Status.OK
     assert result.data == {
@@ -58,18 +60,25 @@ async def test_a_said_place_wins_over_the_default_location() -> None:
     }
 
 
-async def test_without_a_place_the_callers_own_location_is_used_or_the_model_asks() -> None:
+async def test_the_default_location_is_the_callers_own_or_the_model_asks() -> None:
     source = Source()
-    result = await weather.run(weather.Args(), ctx(source, "Denizli"))
+    default = weather.Where.USER_DEFAULT
+    # Varsayılan seçilince yanına yazılmış bir yer uydurmadır, kullanılmaz.
+    result = await weather.run(
+        weather.Args(where=default, place="London"), ctx(source, "Denizli")
+    )
     assert source.asked == ["Denizli"] and result.data["default_location"] is True
-    nowhere = await weather.run(weather.Args(), ctx(source, None))
+    nowhere = await weather.run(weather.Args(where=default), ctx(source, None))
     assert nowhere.status is Status.ERROR and "ask" in (nowhere.error or "")
+    unnamed = await weather.run(weather.Args(where=weather.Where.NAMED), ctx(source, "Denizli"))
+    assert unnamed.status is Status.ERROR and "ask" in (unnamed.error or "")
     assert source.asked == ["Denizli"]
 
 
 async def test_a_provider_failure_is_a_result_not_an_exception() -> None:
     result = await weather.run(
-        weather.Args(place="x"), ctx(Source(WeatherFailure.NOT_FOUND), None)
+        weather.Args(where=weather.Where.NAMED, place="x"),
+        ctx(Source(WeatherFailure.NOT_FOUND), None),
     )
     assert result.status is Status.ERROR and result.data == {"failure": "not_found"}
 
