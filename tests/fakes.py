@@ -16,7 +16,7 @@ from mayen.core.transcript import Transcript
 from mayen.pipeline.events import SessionTranscript
 from mayen.pipeline.session import Sessions
 from mayen.ports.events import Event, EventKind
-from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, WAKE_FRAME
+from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, WAKE_FRAME, WORD_ENDS
 from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
 
@@ -118,6 +118,7 @@ class FakeSpeech:
     wake_model: bool = True
     embed_model: str = "ecapa"
     embed_vector: list[float] = field(default_factory=lambda: [0.6, 0.8])
+    word_ends: str | None = None  # TTS yanıtının kelime zamanları başlığı; yoksa gönderilmez
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -205,7 +206,8 @@ class FakeSpeech:
 
     async def speak(self, request: web.Request) -> web.StreamResponse:
         self.requests.append(await request.json())
-        response = web.StreamResponse()
+        headers = {} if self.word_ends is None else {WORD_ENDS: self.word_ends}
+        response = web.StreamResponse(headers=headers)
         await response.prepare(request)
         # Tek sayıda bayt: örnek ortadan bölünür, istemci yarımı sonrakine taşımalı.
         await response.write(b"\x01" * 3201)

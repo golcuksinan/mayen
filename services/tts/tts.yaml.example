@@ -5,7 +5,9 @@ port: 8771
 sample_rate: 24000             # sabit çıkış hızı; çekirdek /health'ten okur
 
 kokoro:                        # Kokoro sesi varsa
-  model: ~/models/kokoro-v1.0.onnx
+  # Süre çıkışlı model kesilen cevabın söylenen kadarını bildirir (nasıl hazırlanır: main.py);
+  # süresiz kokoro-v1.0.onnx da çalışır, o zaman cümle ancak bitince söylenmiş sayılır.
+  model: ~/models/kokoro-v1.0-timed.onnx
   voices: ~/models/voices-v1.0.bin
 
 voices:

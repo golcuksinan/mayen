@@ -21,10 +21,14 @@ from pipecat.audio.turn.smart_turn.base_smart_turn import (
 from pipecat.frames.frames import (
     ErrorFrame,
     InputAudioRawFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
     OutputAudioRawFrame,
     TranscriptionFrame,
     TTSAudioRawFrame,
     TTSSpeakFrame,
+    TTSTextFrame,
     UserStartedSpeakingFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -51,6 +55,7 @@ from mayen.pipeline.speech import (
     TurnEndSignal,
     TurnEndToStt,
     split_parts,
+    word_times,
 )
 from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Embedding, Part, Transcription
 
@@ -253,6 +258,81 @@ async def test_tts_with_a_missing_voice_fails_at_start(fake: tuple[FakeSpeech, s
     tts = ServiceTTS(url, {"English": "brian"}, lambda: "English", sample_rate=16000)
     _, up = await run_test(tts, frames_to_send=[SleepFrame(0.1)])
     assert any("brian" in f.error for f in up if isinstance(f, ErrorFrame))
+
+
+def test_word_times_follow_the_groups_one_to_one() -> None:
+    assert word_times("I have opened Dolphin.", [0.32, 0.46, 0.93, 1.75]) == [
+        ("I", 0.32),
+        ("have", 0.46),
+        ("opened", 0.93),
+        ("Dolphin.", 1.75),
+    ]
+
+
+def test_word_times_when_the_voice_joins_words_into_one_group() -> None:
+    # "has been" tek grup okunur: 11 kelimeye 10 grup (canlıda Kokoro'nun verdiği zamanlar).
+    text = "The volume has been decreased and the music has started playing."
+    ends = [0.173, 0.642, 1.074, 1.941, 2.126, 2.21, 2.63, 2.76, 3.219, 3.776]
+    times = word_times(text, ends)
+    assert " ".join(w for w, _ in times) == text
+    assert [t for _, t in times] == sorted(t for _, t in times)
+    assert times[-1] == ("playing.", 3.776)
+
+
+def test_word_times_keep_the_language_tags_but_do_not_count_them() -> None:
+    times = word_times("Saved for <tr>Ayşe</tr>.", [0.3, 0.5, 1.0])
+    assert times == [("Saved", 0.3), ("for", 0.5), ("<tr>Ayşe</tr>.", 1.0)]
+
+
+def test_word_times_without_groups_keep_the_sentence_whole() -> None:
+    assert word_times("Hello.", []) == [("Hello.", 0.0)]
+
+
+async def test_tts_with_word_ends_sends_each_word_on_its_own(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    service.word_ends = "0.05,0.1,0.15"
+    tts = ServiceTTS(url, {"English": "emma"}, lambda: "English", sample_rate=16000)
+    down, _ = await run_test(
+        tts, frames_to_send=[TTSSpeakFrame("I opened Dolphin."), SleepFrame(0.3)]
+    )
+    assert [f.text for f in down if isinstance(f, TTSTextFrame)] == ["I", "opened", "Dolphin."]
+
+
+async def test_tts_without_word_ends_sends_the_sentence_whole(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    _, url = fake
+    tts = ServiceTTS(url, {"English": "emma"}, lambda: "English", sample_rate=16000)
+    down, _ = await run_test(
+        tts, frames_to_send=[TTSSpeakFrame("I opened Dolphin."), SleepFrame(0.3)]
+    )
+    assert [f.text for f in down if isinstance(f, TTSTextFrame)] == ["I opened Dolphin."]
+
+
+async def test_later_sentences_of_an_answer_follow_the_earlier_ones(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    # Bir cevabın cümleleri tek bağlamdadır; ikinci cümlenin zamanları kendi sesinin başından
+    # sayılsaydı kelimeleri birincininkilerle karışırdı (canlıda görüldü).
+    service, url = fake
+    service.word_ends = "0.1,0.2"
+    tts = ServiceTTS(url, {"English": "emma"}, lambda: "English", sample_rate=16000)
+    answer = [LLMTextFrame("One two. "), LLMTextFrame("Three four.")]
+    down, _ = await run_test(
+        tts,
+        frames_to_send=[
+            LLMFullResponseStartFrame(),
+            *answer,
+            LLMFullResponseEndFrame(),
+            SleepFrame(0.6),
+        ],
+    )
+    words = [f for f in down if isinstance(f, TTSTextFrame)]
+    assert [f.text for f in words] == ["One", "two.", "Three", "four."]
+    stamps = [f.pts or 0 for f in words]
+    assert stamps == sorted(set(stamps))  # hepsi damgalı ve sırayla ilerliyor
 
 
 def _frame(level: int) -> bytes:

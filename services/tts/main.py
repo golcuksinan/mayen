@@ -16,18 +16,30 @@ yakınına çevrilir; atılan bir birim sesi sessizce bozar.
 Ayarlanabilir bir hız ile istemcinin bildiği hız sessizce ayrışabilirdi: sonucu "ses tiz/pes"
 diye duyulur.
 
+**Kelime zamanları.** Kokoro modeli süre çıkışı taşıyorsa cümle bir seferde üretilir ve yanıtın
+`X-Word-Ends` başlığı sesin kelime gruplarının bitişlerini taşır: çekirdek kesilen cevabın
+söylenen kadarını bununla bilir. Başlık gövdeden önce gittiği için ses o zaman akmaz; çerçeve
+zaten cümle cümle istediğinden ilk sesin gecikmesi değişmez (ölçüldü). Piper'da başlık yoktur.
+
 **Aynı anda tek sentez.** Model durumları eşzamanlı ileri geçişler için güvenli sayılmaz;
 çerçeve cümleleri zaten sırayla seslendirir.
 
 Çalıştırma:
 
     uv run --project services/tts python services/tts/main.py <config.yaml>
+
+Süre çıkışlı Kokoro modeli (bir kez): onnx-community/Kokoro-82M-v1.0-ONNX-timestamped
+`onnx/model.onnx` aynı ağırlıklarla `durations` çıkışını da verir; kokoro-onnx onu `duration`
+adıyla arar. Ad bir kopya düğümüyle eklenir:
+
+    uv run --project services/tts --with onnx python services/tts/main.py \
+        --timed-model model.onnx kokoro-v1.0-timed.onnx
 """
 
 import asyncio
 import sys
 import unicodedata
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -162,9 +174,26 @@ def _pcm(x: np.ndarray) -> bytes:
 
 
 type Engine = Callable[[Voice, list[PartIn]], AsyncIterator[np.ndarray]]
+# Bütün ses ve kelime gruplarının bitişleri (sn, sesin başından)
+type Timed = Callable[[Voice, list[PartIn]], Awaitable[tuple[np.ndarray, list[float]]]]
 
 
-def kokoro_engine(files: KokoroFiles, rate: int) -> tuple[Engine, set[str]]:
+def group_ends(timings: Iterable[Any]) -> list[float]:
+    """Ses birimi zamanlarından kelime gruplarının bitişleri: boşluk iki grubu ayırır."""
+    ends: list[float] = []
+    inside = False
+    for t in timings:
+        if not t.phoneme.strip():
+            inside = False
+        elif inside:
+            ends[-1] = t.end
+        else:
+            ends.append(t.end)
+            inside = True
+    return ends
+
+
+def kokoro_engine(files: KokoroFiles, rate: int) -> tuple[Engine, Timed | None, set[str]]:
     import phonemizer
     from kokoro_onnx import Kokoro
 
@@ -194,7 +223,20 @@ def kokoro_engine(files: KokoroFiles, rate: int) -> tuple[Engine, set[str]]:
         async for samples, sample_rate in stream:
             yield samples if sample_rate == rate else soxr.resample(samples, sample_rate, rate)
 
-    return speak, set(kokoro.get_voices())
+    async def timed(voice: Voice, parts: list[PartIn]) -> tuple[np.ndarray, list[float]]:
+        text = " ".join(phonemes(voice, p) for p in parts)
+        samples, sample_rate, timings = await asyncio.to_thread(
+            kokoro.create_timed,
+            text,
+            voice=voice.voice or "",
+            lang=voice.language or "en-us",
+            speed=voice.speed,
+            is_phonemes=True,
+        )
+        audio = samples if sample_rate == rate else soxr.resample(samples, sample_rate, rate)
+        return audio, group_ends(timings)
+
+    return speak, timed if kokoro.has_timings else None, set(kokoro.get_voices())
 
 
 def piper_engine(voices: dict[str, Voice], rate: int) -> Engine:
@@ -238,11 +280,14 @@ def piper_engine(voices: dict[str, Voice], rate: int) -> Engine:
 def build(settings: Settings) -> FastAPI:
     rate = settings.sample_rate
     engines: dict[str, Engine] = {}
+    timed: dict[str, Timed] = {}
     kokoro_voices: set[str] = set()
     if any(v.engine == "kokoro" for v in settings.voices.values()):
         if settings.kokoro is None:
             raise ValueError("a kokoro voice needs the kokoro files")
-        engines["kokoro"], kokoro_voices = kokoro_engine(settings.kokoro, rate)
+        engines["kokoro"], kokoro_timed, kokoro_voices = kokoro_engine(settings.kokoro, rate)
+        if kokoro_timed is not None:
+            timed["kokoro"] = kokoro_timed
     if any(v.engine == "piper" for v in settings.voices.values()):
         engines["piper"] = piper_engine(settings.voices, rate)
     for name, v in settings.voices.items():
@@ -274,6 +319,17 @@ def build(settings: Settings) -> FastAPI:
             raise HTTPException(404, f"no voice {body.voice!r}")
         effect = None if voice.effect is None else Radio(settings.effects[voice.effect], rate)
         engine = engines[voice.engine]
+        headers = {"X-Schema-Version": str(SCHEMA_VERSION), "X-Sample-Rate": str(rate)}
+        timer = timed.get(voice.engine)
+        if timer is not None:
+            # Ses bütünüyle üretilir; kilit yanıt gitmeden bırakılır, kopan bağlantı tutamaz.
+            async with lock:
+                samples, ends = await timer(voice, body.parts)
+            headers["X-Word-Ends"] = ",".join(f"{t:.3f}" for t in ends)
+            pcm = _pcm(samples if effect is None else effect(samples))
+            return StreamingResponse(
+                iter([pcm]), media_type="application/octet-stream", headers=headers
+            )
 
         async def audio() -> AsyncIterator[bytes]:
             async with lock:
@@ -281,17 +337,31 @@ def build(settings: Settings) -> FastAPI:
                     yield _pcm(samples if effect is None else effect(samples))
 
         return StreamingResponse(
-            audio(),
-            media_type="application/octet-stream",
-            headers={"X-Schema-Version": str(SCHEMA_VERSION), "X-Sample-Rate": str(rate)},
+            audio(), media_type="application/octet-stream", headers=headers
         )
 
     return app
 
 
+def timed_model(source: Path, target: Path) -> None:
+    """`durations` çıkışını kokoro-onnx'in aradığı `duration` adıyla da verir."""
+    import onnx
+
+    model = onnx.load(source)
+    names = [o.name for o in model.graph.output]
+    if names != ["waveform", "durations"]:
+        sys.exit(f"unexpected outputs {names}")
+    model.graph.node.append(onnx.helper.make_node("Identity", ["durations"], ["duration"]))
+    model.graph.output[1].name = "duration"
+    onnx.save(model, target)
+
+
 def main() -> None:
+    if len(sys.argv) == 4 and sys.argv[1] == "--timed-model":
+        timed_model(Path(sys.argv[2]), Path(sys.argv[3]))
+        return
     if len(sys.argv) != 2:
-        sys.exit("usage: main.py <config.yaml>")
+        sys.exit("usage: main.py <config.yaml> | --timed-model <source.onnx> <target.onnx>")
     settings = Settings.model_validate(yaml.safe_load(Path(sys.argv[1]).read_text()))
     print(f"tts: voices {sorted(settings.voices)} at {settings.sample_rate} Hz", flush=True)
     uvicorn.run(build(settings), host=settings.host, port=settings.port)

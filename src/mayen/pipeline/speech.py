@@ -70,6 +70,7 @@ from mayen.ports.speech import (
     TURN,
     VAD,
     VAD_FRAME,
+    WORD_ENDS,
     Embedding,
     Health,
     Part,
@@ -494,6 +495,31 @@ class ServiceSTT(STTService):
         )
 
 
+def word_times(text: str, ends: list[float]) -> list[tuple[str, float]]:
+    """Cümlenin her kelimesi ve söylenmiş sayılacağı an (sn, sesin başından).
+
+    Ses kelime gruplarının bitişini verir. Gruplar kelimelerdir ama okunuş kısa kelimeleri
+    birleştirebilir ("has been" tek grup); kelime, sırasının vardığı oranda biten gruba
+    bağlanır: sayılar eşitse birebir, değilse sapma bir kelimeyi geçmez.
+    """
+    words = text.split()
+    if not words or not ends:
+        return [(text, ends[-1] if ends else 0.0)]
+    n, m = len(words), len(ends)
+    return [(w, ends[max(0, round((i + 1) * m / n) - 1)]) for i, w in enumerate(words)]
+
+
+def _ends(header: str | None) -> list[float]:
+    """Okunamayan başlık yok sayılır: söz yine söylenir, yalnızca cümle bütün sayılır."""
+    if not header:
+        return []
+    try:
+        return [float(t) for t in header.split(",")]
+    except ValueError:
+        log.warning("unreadable %s header ignored", WORD_ENDS)
+        return []
+
+
 class ServiceTTS(TTSService):
     """Cümleyi TTS servisine verir, gelen sesi geldikçe çalar.
 
@@ -511,6 +537,9 @@ class ServiceTTS(TTSService):
         super().__init__(
             push_start_frame=True,
             push_stop_frames=True,
+            # Söz kelime kelime, sesi çalındıkça söylenmiş sayılır: kesilen cevabın geçmişe
+            # giren kısmı duyulan kadardır (`word_times`).
+            push_text_frames=False,
             settings=TTSSettings(model=None, voice=None, language=None),
             **kwargs,
         )
@@ -522,6 +551,9 @@ class ServiceTTS(TTSService):
         self._resampler = create_stream_resampler()
         self._context: str | None = None
         self._open: str | None = None
+        # Cevabın önceki cümlelerinin ses süresi: Pipecat bir cevabın kelime zamanlarını
+        # cevabın başından sayar, cümleler tek bağlamı paylaşır.
+        self._offset_s = 0.0
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -559,9 +591,12 @@ class ServiceTTS(TTSService):
         if context_id != self._context:
             # Yeni cevap: önceki cevabın açık kalan işareti buna taşınmaz.
             self._context, self._open = context_id, None
+            self._offset_s = 0.0
         parts, self._open = split_parts(text, self._open)
         if not parts:
-            # Cümle bölücü bir işareti tek başına bırakabilir ("</tr>"); okunacak bir şey yok.
+            # Cümle bölücü bir işareti tek başına bırakabilir ("</tr>"); okunacak bir şey yok
+            # ama işaret geçmişte yerinde kalır.
+            await self.add_word_timestamps([(text, self._offset_s)], context_id)
             return
         if self._http is None or not self._rate:
             yield ErrorFrame("TTS service is not available")
@@ -579,12 +614,19 @@ class ServiceTTS(TTSService):
                     yield ErrorFrame(f"TTS service {r.status}: {await r.text()}")
                     return
                 rest = b""
+                samples = 0
+                ends = _ends(r.headers.get(WORD_ENDS))
+                if ends:
+                    await self.add_word_timestamps(
+                        [(w, t + self._offset_s) for w, t in word_times(text, ends)], context_id
+                    )
                 async for chunk in r.content.iter_chunked(_CHUNK):
                     await self.stop_ttfb_metrics()
                     # Parça bir örneğin ortasında bölünebilir; yarım bayt sonrakine kalır.
                     data = rest + chunk
                     whole = len(data) - len(data) % 2
                     rest = data[whole:]
+                    samples += whole // 2
                     audio = await self._resampler.resample(
                         data[:whole], self._rate, self.sample_rate
                     )
@@ -594,6 +636,11 @@ class ServiceTTS(TTSService):
                         num_channels=1,
                         context_id=context_id,
                     )
+                if not ends:  # zaman yoksa cümle bitince bütün olarak
+                    await self.add_word_timestamps(
+                        [(text, self._offset_s + samples / self._rate)], context_id
+                    )
+                self._offset_s += samples / self._rate
         except aiohttp.ClientError as e:
             yield ErrorFrame(f"TTS service: {e}")
         finally:

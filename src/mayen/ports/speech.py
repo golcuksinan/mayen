@@ -26,6 +26,10 @@ word olduğu olasılığı. Durum bağlantı başınadır. Serviste wake word mo
 TTS: `POST /speak` gövdesi JSON: `voice` ve sırasıyla okunacak `parts`; her parçanın
 `language`'ı `null` ise sesin kendi dilidir, değilse parça o dilin okunuşuyla aynı sese
 verilir (§7). Yanıt `sample_rate` hızında ham PCM akışıdır; ilk ses üretilir üretilmez gelir.
+Ses biriminin zamanını bilen ses, yanıtın `X-Word-Ends` başlığında sesin kelime gruplarının
+bitişlerini verir (saniye, sesin başından, virgülle). Gruplar metnin kelimeleriyle birebir
+değildir (okunuş kısa kelimeleri birleştirir); başlık isteğe bağlıdır, yoksa cümle bitince
+bütün söylenmiş sayılır.
 
 Konuşmacı (§6, §10.5): ayrı bir servis. `POST /embed` gövdesi bir sözün sesi, ham PCM (16 bit,
 tek kanal, `sample_rate` hızında); yanıt JSON: `model` ve `vector`, sesin izi (birim uzunlukta).
@@ -45,6 +49,7 @@ SCHEMA_VERSION = 1
 HEALTH = "/health"
 TRANSCRIBE = "/transcribe"
 SPEAK = "/speak"
+WORD_ENDS = "X-Word-Ends"
 VAD = "/vad"
 TURN = "/turn"
 WAKE = "/wake"
