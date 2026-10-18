@@ -490,6 +490,9 @@ def _session(core: Core, conversation: _Conversation, pipeline: Pipeline) -> Ses
         observers=observers,
         # İstemci RTVI konuşmaz; açık kalırsa yazılı kanalın her mesajını kendi biçimi sanır.
         enable_rtvi=False,
+        # Pipecat'in varsayılanı 5 dk sessizlikte oturumu kapatır: bağlantı kopar, bağlam
+        # sıfırlanır. Bağlamın ne zaman sıfırlanacağı açık bir karardır (§16.12).
+        idle_timeout_secs=None,
     )
     return Session(worker, conversation.gate, conversation.confirmation, observers)
 

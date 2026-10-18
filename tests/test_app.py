@@ -300,6 +300,8 @@ def test_voice_session_is_wired(tmp_path: Path) -> None:
         )
         session = voice_session(core, "s1", voice)
         assert session.gate.session == "s1"
+        # Sessizlik oturumu kapatmaz (§16.12 açık); Pipecat sürümü sabit (§3).
+        assert session.worker._idle_timeout_secs is None
         assert core.sessions.running("s1") is None
         # Turu yokken dinleyen bilinmez: ses varsayılan dilden seçilir (§8.6).
         assert languages == [config.default_language]
