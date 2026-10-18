@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Any
 
 from mayen.ports.events import SessionState, stamp
+from mayen.ports.speech import untagged
 from mayen.ports.tools import ToolResult
 from mayen.ports.transcript import Utterance
 
@@ -42,7 +43,7 @@ def encode_utterance(utterance: Utterance) -> str:
             "time": stamp(u.time),
             "party": u.party.value,
             "role": None if u.role is None else u.role.value,
-            "text": u.text,
+            "text": untagged(u.text),
             "interrupted": u.interrupted,
         },
     )

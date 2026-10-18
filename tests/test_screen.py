@@ -17,7 +17,7 @@ from mayen.clients import screen as desktop_screen
 from mayen.core.feed import Feed
 from mayen.ports.devices import Capability, Command
 from mayen.ports.events import Event, EventId, EventKind, Header, SessionState
-from mayen.ports.screen import SCHEMA_VERSION, screen_message
+from mayen.ports.screen import SCHEMA_VERSION, encode_utterance, screen_message
 from mayen.ports.tools import (
     Effect,
     Record,
@@ -106,6 +106,11 @@ async def test_only_this_sessions_state_and_words_said_in_a_turn_are_followed() 
         ("state", "listening"),
         ("utterance", "hava nasıl"),
     ]
+
+
+def test_the_language_tags_of_what_mayen_said_are_not_shown() -> None:
+    text = encode_utterance(said("s1", "Merhaba <tr>Sinan</tr>, ses <tr>yüzde elli</tr>."))
+    assert json.loads(text)["text"] == "Merhaba Sinan, ses yüzde elli."
 
 
 def test_a_command_is_not_a_screen_message() -> None:

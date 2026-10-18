@@ -41,6 +41,7 @@ Hepsi `GET /health` ile biçimini bildirir. Çıkış biçimi sabittir; bildiril
 bekleneni tutmazsa istemci yüksek sesle başarısız olur (§14).
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,6 +101,15 @@ class Part:
 
     language: str | None
     text: str
+
+
+TAG = re.compile(r"<(/?)([a-z]{2})>")
+"""Modelin metne koyduğu dil işareti (`<tr>…</tr>`, §7)."""
+
+
+def untagged(text: str) -> str:
+    """Gösterilen metin: işaret seslendirilmediği gibi görünmez de (§7)."""
+    return TAG.sub("", text)
 
 
 def _versioned(body: Any) -> dict[str, Any]:  # noqa: ANN401  # çözülmüş JSON

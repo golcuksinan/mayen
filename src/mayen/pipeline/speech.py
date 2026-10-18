@@ -19,7 +19,6 @@ parçalara bölünür, dili yorumlanmaz (§2.1). Ses birimine çevirmek sesin i�
 import asyncio
 import json
 import logging
-import re
 import time
 import urllib.error
 import urllib.request
@@ -66,6 +65,7 @@ from mayen.ports.speech import (
     EMBED,
     HEALTH,
     SPEAK,
+    TAG,
     TRANSCRIBE,
     TURN,
     VAD,
@@ -90,8 +90,6 @@ log = logging.getLogger(__name__)
 VOICE = "mayen.voice"
 # İzin çıkarıldığı sesin süresi (sn); turun sözleri birlikte tanınırken ağırlığıdır.
 VOICE_S = "mayen.voice_s"
-
-TAG = re.compile(r"<(/?)([a-z]{2})>")
 
 # Akıştaki parça boyutu; ilk sesi geciktirmeyecek kadar küçük.
 _CHUNK = 4096
