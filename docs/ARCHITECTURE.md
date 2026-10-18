@@ -494,6 +494,13 @@ kavramdır; modele nasıl iletildiği model kaydındadır (§8.9).
 - **Tool kataloğu herkes için aynıdır.** Konuşana göre filtrelenmiş bir katalog, konuşan
   değiştikçe öneki değiştirir. Model, bir tanıdığın yapamayacağı bir şeyi denerse ret, tool
   sonucu olarak geri döner.
+- **Önek, istekten önce ısıtılır:** oturum açılınca ve sesli oturumda söz başlayınca, öneki
+  ve geçmişi taşıyan tek token'lık bir istek arka planda gider; cevabı atılır. Sunucu önceki
+  önekleri genellikle zaten tutar; ilk isteği soğuk bulan durumlar modelin yüklenmesi, önekin
+  değişmesi (prompt ya da katalog; ~2,4k token ilk cevabı 4 sn'ye çıkardı, ısıtmayla 0,8 sn)
+  ve sunucunun uzun boşta kalmasıdır (ilk istek ~1 sn uzadı). Söz ile istek arasındaki ~1,5
+  sn, ısıtmanın bitmesine yeter. Yazılı hatta mesajla istek aynı anda gider; orada söz
+  başlangıcı ısıtması yoktur, asıl isteği yalnızca bekletirdi.
 - **Paralel oturumların önbelleği:** her oturumun kendi öneki vardır. Sunucunun paralel istek kapasitesi ile
   önbelleğin oturumlar arasında nasıl paylaşıldığı ölçülmeden bilinmez (§16.1).
 

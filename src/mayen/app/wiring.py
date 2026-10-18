@@ -456,16 +456,20 @@ def _conversation(
         None if sound is None else sound.play,
         shown,
     )
+    context = LLMContext(tools=tools.schema())
     llm = llm_service(
         endpoint,
         config.system_prompt,
         lambda: core.context_block.render(session, caller()),
         StepCap(config.loop.max_steps, config.loop.max_corrections),
         tools.malformed,
+        session=context,
+        # Yazılı hatta mesaj geldiği an istek de gider; ısıtma onu yalnızca bekletirdi.
+        warm_on_speech=vad is not None,
     )
     tools.register(llm)
     aggregators = LLMContextAggregatorPair(
-        LLMContext(tools=tools.schema()),
+        context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=vad,
             # Açık verilmezse Pipecat Smart Turn'ü çekirdekte yükler (§18). Yazılı hatta söz

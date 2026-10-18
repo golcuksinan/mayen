@@ -5,9 +5,12 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.processors.aggregators.llm_context import LLMContext
 
 from fakes import FakeClock
@@ -204,3 +207,41 @@ def test_the_session_device_capabilities_are_in_the_block(people: SqlitePersonSt
     )
     assert 'device: {"capabilities": ["speaker"]}' in block.render("voice", SYSTEM)
     assert 'device: {"capabilities": []}' in block.render("text", SYSTEM)
+
+
+class Answered(Captured):
+    async def create(self, **params: Any) -> Any:  # noqa: ANN401
+        self.requests.append(params)
+        message = SimpleNamespace(content="x")
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+async def test_warm_up_sends_the_prefix_and_history_without_the_block() -> None:
+    endpoint = Endpoint(ModelRole.TALKER, "http://127.0.0.1:1/v1", "m", 4096, True)
+    service = llm_service(
+        endpoint, "You are Mayen.", lambda: "[context]", StepCap(5, 2), lambda _: False
+    )
+    captured = Answered()
+    service._client.chat.completions.create = captured.create
+    tools = ToolsSchema(standard_tools=[FunctionSchema("f", "d", {}, [])])
+    session = LLMContext(messages=[{"role": "user", "content": "hi"}], tools=tools)
+
+    await service.warm(session)
+    await service.get_chat_completions(session)
+
+    warm, real = captured.requests
+    assert [m["content"] for m in warm["messages"]] == ["You are Mayen.", "hi"]
+    assert warm["tools"] == real["tools"]
+    assert warm["max_completion_tokens"] == 1
+    assert warm["stream"] is False
+
+
+async def test_failed_warm_up_is_not_an_error() -> None:
+    endpoint = Endpoint(ModelRole.TALKER, "http://127.0.0.1:1/v1", "m", 4096, True)
+    service = llm_service(endpoint, "S", lambda: "[context]", StepCap(5, 2), lambda _: False)
+
+    async def down(**_: Any) -> None:  # noqa: ANN401
+        raise ConnectionError("refused")
+
+    service._client.chat.completions.create = down
+    await service.warm(LLMContext())

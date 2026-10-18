@@ -7,17 +7,22 @@ Bağlam bloğu (§8.3) ayrı bir işlemci olarak durmaz, servisin istek kurduğu
 tool sonucundan sonraki çağrıyı hattın aşağısından tetikler ve modelin üstündeki bir işlemci o
 çağrıyı görmez. İstekte bağlamın bir kopyası gider; tool çağrıları ve toplayıcılar asıl
 bağlamı kullanmaya devam eder, blok geçmişe hiç yazılmaz.
+
+Isıtma (§8.3) da buradadır: oturumun öneki ve geçmişi, ilk istekten önce sunucuya işletilir.
 """
 
 import json
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
+from pipecat.frames.frames import Frame, StartFrame, UserStartedSpeakingFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.openai.llm import OpenAILLMService
 
 from mayen.ports.models import NO_KEY, Endpoint
@@ -89,12 +94,40 @@ class ContextualLLMService(OpenAILLMService):
         block: Callable[[], str],
         cap: StepCap,
         malformed: Callable[[str], bool],
+        session: LLMContext | None = None,
+        warm_on_speech: bool = False,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         super().__init__(**kwargs)
         self._block = block
         self._cap = cap
         self._malformed = malformed
+        self._session = session
+        self._warm_on_speech = warm_on_speech
+        self._warming = False
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if self._session is None or self._warming:
+            return
+        if isinstance(frame, StartFrame) or (
+            self._warm_on_speech and isinstance(frame, UserStartedSpeakingFrame)
+        ):
+            self._warming = True
+            self.create_task(self.warm(self._session))
+
+    async def warm(self, context: LLMContext) -> None:
+        """Sabit önek ve geçmiş, istekten önce sunucuya işletilir (§8.3); cevap atılır."""
+        started = time.perf_counter()
+        try:
+            await self.run_inference(
+                LLMContext(messages=list(context.messages), tools=context.tools), max_tokens=1
+            )
+            log.debug("warmed in %.2fs", time.perf_counter() - started)
+        except Exception as e:  # ısıtılamayan önek asıl istekte işlenir
+            log.warning("warm-up failed: %s", e)
+        finally:
+            self._warming = False
 
     async def get_chat_completions(
         self, context: LLMContext
@@ -119,12 +152,19 @@ def llm_service(
     block: Callable[[], str],
     cap: StepCap,
     malformed: Callable[[str], bool],
-) -> OpenAILLMService:
-    """Ayarlar gövdeyle her istekte gider; sunucunun varsayılanı rol farkını bilmez."""
+    session: LLMContext | None = None,
+    warm_on_speech: bool = False,
+) -> ContextualLLMService:
+    """Ayarlar gövdeyle her istekte gider; sunucunun varsayılanı rol farkını bilmez.
+
+    `session` verilirse oturum açılınca, `warm_on_speech` ile söz başlayınca da ısıtılır (§8.3).
+    """
     service = ContextualLLMService(
         block=block,
         cap=cap,
         malformed=malformed,
+        session=session,
+        warm_on_speech=warm_on_speech,
         base_url=endpoint.base_url,
         api_key=endpoint.api_key.get_secret_value() if endpoint.api_key else NO_KEY,
         settings=OpenAILLMService.Settings(
