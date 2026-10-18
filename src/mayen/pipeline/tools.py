@@ -110,6 +110,19 @@ def openai_tools(registry: ToolRegistry) -> list[dict[str, Any]]:
     ]
 
 
+def queued_calls(llm: LLMService[Any]) -> bool:
+    """Aynı cevabın sırada bekleyen çağrısı var mı; varsa model bu sonuçla çalışmaz.
+
+    Pipecat sıralı kipte (§9.3) bir çağrıyı ancak çalışmaya başlayınca "sürüyor" sayar: ilk
+    sonuç geldiğinde sıradakini görmez ve modeli hemen çalıştırır, model de her sonuçta bir
+    kez cevap verir (aynı tura iki cevap). Upstream'de açık: pipecat#5852, düzeltmesi #5853.
+    Kuyruk Pipecat'in özel alanıdır; sürüm sabit (1.12.0). Düzeltme yayınlanınca bu
+    fonksiyon ve çağrısı kalkar; `test_one_response_runs_the_model_once` ikisini de sınar.
+    """
+    queue = getattr(llm, "_sequential_runner_queue", None)
+    return isinstance(queue, asyncio.Queue) and not queue.empty()
+
+
 class AuthorizedTools:
     """Kayıt defterindeki tool'ları yetki kararının arkasında Pipecat'e bağlar."""
 
@@ -150,6 +163,8 @@ class AuthorizedTools:
     def _handler(self, spec: ToolSpec[Any]) -> Callable[[FunctionCallParams], Awaitable[None]]:
         async def handle(params: FunctionCallParams) -> None:
             result, properties = await self.call(spec, params.arguments, params.tool_call_id)
+            if properties is None and queued_calls(params.llm):
+                properties = FunctionCallResultProperties(run_llm=False)
             await params.result_callback(result, properties=properties)
 
         return handle

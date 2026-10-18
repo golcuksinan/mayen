@@ -6,6 +6,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from enum import StrEnum
 from typing import Any, cast
 
+from pipecat.frames.frames import DataFrame, Frame, FunctionCallFromLLM, LLMContextFrame
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregator
+from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.llm_service import LLMService
+from pipecat.tests.utils import SleepFrame, run_test
 from pydantic import BaseModel, Field
 
 from fakes import FakeClock, MemoryEventLog
@@ -360,3 +367,34 @@ async def test_confirmed_body_is_recorded_when_it_runs() -> None:
         EventKind.TOOL_FINISHED,
     ]
     assert {e.body["call_id"] for e in log.events} == {"c1"}
+
+
+class _Go(DataFrame):
+    """Testin modeli: bu kare gelince tek cevapta iki çağrı yapmış gibi davranır."""
+
+
+class _Model(LLMService):
+    def __init__(self) -> None:
+        super().__init__(run_in_parallel=False)  # Mayen'in kipi (§9.3)
+        self.context = LLMContext()
+        self.runs = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if isinstance(frame, LLMContextFrame):
+            self.runs += 1
+        elif isinstance(frame, _Go):
+            calls = [FunctionCallFromLLM("note_search", i, {}, self.context) for i in "ab"]
+            await self.run_function_calls(calls)
+        else:
+            await self.push_frame(frame, direction)
+
+
+async def test_one_response_runs_the_model_once() -> None:
+    # Pipecat sıralı kipte her sonuçta modeli çalıştırıyordu (pipecat#5852): tura iki cevap.
+    t, _, _ = tools()
+    model = _Model()
+    t.register(model)
+    aggregator = LLMAssistantAggregator(model.context)
+    await run_test(Pipeline([model, aggregator]), frames_to_send=[_Go(), SleepFrame(0.2)])
+    assert model.runs == 1
