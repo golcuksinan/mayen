@@ -29,6 +29,7 @@ declare global {
     mayenScreen?: (raw: string) => void
     mayenConnection?: (connection: Connection) => void
     mayenNight?: (span: string) => void
+    pywebview?: { api: { fullscreen: () => void } }
   }
 }
 

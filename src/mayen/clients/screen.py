@@ -60,6 +60,17 @@ class Page:
                 print(f"[screen: {type(e).__name__}: {e}]", file=sys.stderr)
 
 
+class Api:
+    """Sayfanın pencereye çağırabildikleri (pywebview js_api); çekirdeğe gitmez."""
+
+    def __init__(self) -> None:
+        self.window: webview.Window | None = None
+
+    def fullscreen(self) -> None:
+        if self.window is not None:
+            self.window.toggle_fullscreen()
+
+
 def attempt(url: str, page: Page) -> None:
     """Bir bağlantı denemesi; nasıl biterse bitsin ekran kopukluğu görür. Bu iş parçacığında
     yükselen bir hata onu öldürür ve istemci sessizce sağırlaşırdı (§13); her hata yazılır ve
@@ -92,10 +103,12 @@ def main(argv: list[str] | None = None) -> int:
             f"[no screen at {args.ui}; build it: cd desktop && npm run build]", file=sys.stderr
         )
         return 1
+    api = Api()
     window = webview.create_window(
-        "Mayen", args.ui, width=1280, height=760, background_color="#0B0D11"
+        "Mayen", args.ui, js_api=api, width=1280, height=760, background_color="#0B0D11"
     )
     assert window is not None  # None, yalnızca açılış olayında iptal edilen pencerede
+    api.window = window
     page = Page(window)
     if args.night:
         page.night(args.night)

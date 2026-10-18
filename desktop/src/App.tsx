@@ -78,6 +78,19 @@ function useFocus(screen: Screen, now: number): boolean {
   return manual ?? auto
 }
 
+// F11 pencereyi tam ekrana alır ya da çıkarır; pencere Python'undur (pywebview), sayfa yalnızca iletir
+function useFullscreen() {
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'F11') return
+      e.preventDefault()
+      window.pywebview?.api.fullscreen()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+}
+
 function markState(screen: Screen, now: number): MarkState {
   if (screen.connection !== 'live') return 'offline'
   const last = screen.cards[0]
@@ -130,6 +143,7 @@ export default function App() {
   const screen = useScreen()
   const now = useNow(200)
   const demo = useDemo()
+  useFullscreen()
   const focus = useFocus(screen, now)
   const mark = demo ?? markState(screen, now)
   const lvl = demo
