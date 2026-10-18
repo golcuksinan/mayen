@@ -464,3 +464,45 @@ async def test_the_turn_decision_reaches_the_stt_once() -> None:
         user, frames_to_send=[*_speech(), SleepFrame(0.1)], expected_up_frames=None
     )
     assert len([f for f in up if isinstance(f, TurnEndSignal)]) == 1
+
+
+async def test_an_answer_without_words_still_ends(fake: tuple[FakeSpeech, str]) -> None:
+    # Yalnızca tool çağıran ya da boş cevabın sesi yok; bitişi tutulursa tur hiç kapanmaz
+    # (canlıda görüldü: sessiz sonuçtan sonra ekran "thinking"de kaldı).
+    _, url = fake
+    tts = ServiceTTS(url, {"English": "emma"}, lambda: "English", sample_rate=16000)
+    down, _ = await run_test(
+        tts,
+        frames_to_send=[
+            LLMFullResponseStartFrame(),
+            LLMFullResponseEndFrame(),
+            SleepFrame(0.2),
+        ],
+    )
+    assert [
+        type(f)
+        for f in down
+        if isinstance(f, LLMFullResponseStartFrame | LLMFullResponseEndFrame)
+    ] == [
+        LLMFullResponseStartFrame,
+        LLMFullResponseEndFrame,
+    ]
+
+
+async def test_an_answer_ending_without_a_full_stop_ends_after_its_words(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    # Noktasız son cümle bitişte okunur; bitiş onun sözlerinden sonra gelir.
+    _, url = fake
+    tts = ServiceTTS(url, {"English": "emma"}, lambda: "English", sample_rate=16000)
+    down, _ = await run_test(
+        tts,
+        frames_to_send=[
+            LLMFullResponseStartFrame(),
+            LLMTextFrame("Done"),
+            LLMFullResponseEndFrame(),
+            SleepFrame(0.3),
+        ],
+    )
+    kinds = [type(f) for f in down if isinstance(f, TTSTextFrame | LLMFullResponseEndFrame)]
+    assert kinds == [TTSTextFrame, LLMFullResponseEndFrame]

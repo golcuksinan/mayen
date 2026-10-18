@@ -42,6 +42,9 @@ from pipecat.frames.frames import (
     ErrorFrame,
     Frame,
     InputAudioRawFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
     StartFrame,
     SystemFrame,
     TranscriptionFrame,
@@ -552,6 +555,7 @@ class ServiceTTS(TTSService):
         # Cevabın önceki cümlelerinin ses süresi: Pipecat bir cevabın kelime zamanlarını
         # cevabın başından sayar, cümleler tek bağlamı paylaşır.
         self._offset_s = 0.0
+        self._worded = False  # cevapta okunacak metin geldi mi
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -584,6 +588,28 @@ class ServiceTTS(TTSService):
         if self._http is not None:
             await self._http.close()
             self._http = None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        """Sözsüz cevabın bitişi tutulmaz.
+
+        `push_text_frames=False` iken Pipecat cevabın bitişini, o cevabın sesi bitince bırakmak
+        üzere tutar. Yalnızca tool çağıran ya da boş bir cevabın sesi yoktur: bitiş hiç
+        bırakılmaz, tur kapanmaz. Böyle bir cevabın bitişi, önceki seslerin ardından sıraya
+        konur (Pipecat'in metin kipinde yaptığı gibi). Tutulan kare ve bayraklar Pipecat'in
+        özel alanlarıdır; sürüm sabit (1.12.0).
+        """
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._worded = False
+        elif isinstance(frame, LLMTextFrame) and frame.text.strip():
+            self._worded = True
+        wordless = isinstance(frame, LLMFullResponseEndFrame) and not self._worded
+        context = self._turn_context_id
+        await super().process_frame(frame, direction)
+        if wordless and context is not None:
+            held = self._pending_llm_response_end_frames.pop(context, None)
+            if held is not None:
+                self._llm_response_started = False
+                await self._serialization_queue.put(held)
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame]:
         if context_id != self._context:
