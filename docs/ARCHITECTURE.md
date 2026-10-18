@@ -697,6 +697,11 @@ Ortak `ToolSpec`. Her skill şunları bildirir:
   kısaltılmış bir görünümü gider; gereksiz alanlar bağlamda yer kaplamaz. Aynı tool birden
   fazla eylem içeriyorsa hangi eylemin yapıldığı argümanlarda görünür, ayrı bir alanda
   tekrar edilmez.
+- **`ok`, etkinin görüldüğünü kanıtlar: eylemden sonra durum yeniden okunur ve `ok` yalnızca
+  etki orada görülürse döner.** Görülmezse sonuç `error`dur, nedeni ve okunan durumla; yeni
+  bir durum yoktur. Aracın hatasız dönmesi `ok` için yetmez: oynatıcı komutu alıp
+  çalmayabilir, pencere kaydetme sorusuyla açık kalabilir. Model `ok`u "yapıldı" diye
+  anlatır; etki görülmeden `ok` dönseydi, yapılmamış bir iş yapıldı diye anlatılırdı.
 - **Ret ve zaman aşımı modele tool sonucu olarak geri beslenir**, hata olarak yükseltilmez.
   Bozuk bir çağrı da geri beslenir; düzeltme bir adım harcamaz. Adım tavanına ulaşılırsa
   model eldeki sonuçlarla yanıt üretir.

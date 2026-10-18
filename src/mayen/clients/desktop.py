@@ -11,6 +11,9 @@ yapılır: düz metin çıktısı yerel ayara göre değişir.
 Uygulamalar, çekirdeğin gönderdiği `.desktop` kimliğiyle, sistemin kendi tanımından
 `gtk-launch` ile açılır; tablo çekirdeğin config'indedir (§9.4).
 
+`ok`, etkinin görüldüğünü kanıtlar (§9.1): eylemden sonra durum yeniden okunur ve `ok` yalnızca
+etki orada görülürse döner. Süresi içinde görülmezse sonuç `error`dur ve okunan durumu taşır.
+
 Pencereler KWin'in betik arayüzüyle yönetilir: Wayland pencere listesini istemcilere vermez,
 KDE'de onu veren tek yol pencere yöneticisinin kendisidir. Betikler koddaki bir tablodadır
 (§9.4); betiğin çıktısı oturum günlüğünden, her çalıştırmaya özel bir işaretle okunur.
@@ -25,6 +28,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from mayen.ports.devices import Capability, Command, CommandResult
@@ -62,6 +66,24 @@ async def spawn_argv(argv: list[str]) -> None:
 
 type Spawn = Callable[[list[str]], Awaitable[None]]
 
+# Etkinin görünmesi için beklenen en uzun süre; tool'un süresine (5 sn) sığar. Ölçülen: ses
+# ~15 ms, MPRIS durumu ~20 ms, pencere kapanması ~30 ms, YouTube'da sonraki şarkı 1,5 sn.
+# Etki gelince hemen dönülür; sınıra yalnızca etki hiç gelmezse varılır.
+EFFECT_WAIT_S = 3.0
+_POLL_S = 0.05
+
+
+async def until[T](
+    read: Callable[[], Awaitable[T]], seen: Callable[[T], bool], wait_s: float
+) -> T:
+    """Durumu, etki görülene ya da süre dolana kadar okur; son okunanı döner."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        value = await read()
+        if seen(value) or time.monotonic() >= deadline:
+            return value
+        await asyncio.sleep(_POLL_S)
+
 
 class Executor(Protocol):
     def available(self) -> bool: ...
@@ -78,8 +100,9 @@ def _level(sink: Mapping[str, Any]) -> int:
 
 
 class Speaker:
-    def __init__(self, run: Run = run_argv) -> None:
+    def __init__(self, run: Run = run_argv, wait_s: float = EFFECT_WAIT_S) -> None:
         self._run = run
+        self._wait_s = wait_s
 
     def available(self) -> bool:
         return shutil.which("pactl") is not None
@@ -105,13 +128,22 @@ class Speaker:
             level = int(args["level"])
             before = _level(await self._default())
             await self._run(["pactl", "set-sink-volume", DEFAULT_SINK, f"{level}%"])
+            sink = await until(self._default, lambda s: _level(s) == level, self._wait_s)
+            after = _level(sink)
             # Önceki seviye geri alma içindir (§9.6); yalnızca eylem anında bilinir.
-            return CommandResult("", Status.OK, {"level": level, "previous": before})
+            volume = {"level": after, "previous": before}
+            if after != level:
+                return CommandResult("", Status.ERROR, volume, f"the volume stayed at {after}%")
+            return CommandResult("", Status.OK, volume)
         if action == "set_muted":
             muted = bool(args["muted"])
             before = bool((await self._default())["mute"])
             await self._run(["pactl", "set-sink-mute", DEFAULT_SINK, "1" if muted else "0"])
-            return CommandResult("", Status.OK, {"muted": muted, "previous": before})
+            sink = await until(self._default, lambda s: bool(s["mute"]) is muted, self._wait_s)
+            mute = {"muted": bool(sink["mute"]), "previous": before}
+            if mute["muted"] is not muted:
+                return CommandResult("", Status.ERROR, mute, "the mute did not change")
+            return CommandResult("", Status.OK, mute)
         if action == "list_outputs":
             default, sinks = await self._sinks()
             outputs = [
@@ -125,7 +157,11 @@ class Speaker:
             if output not in {s["name"] for s in sinks}:
                 return CommandResult("", Status.ERROR, error=f"no output with id {output!r}")
             await self._run(["pactl", "set-default-sink", output])
-            return CommandResult("", Status.OK, {"output": output, "previous": default})
+            now, _ = await until(self._sinks, lambda d: d[0] == output, self._wait_s)
+            moved = {"output": now, "previous": default}
+            if now != output:
+                return CommandResult("", Status.ERROR, moved, "the output did not change")
+            return CommandResult("", Status.OK, moved)
         return None
 
 
@@ -141,12 +177,46 @@ MEDIA_METHODS = {
 }
 
 
+@dataclass(frozen=True)
+class _PlayerState:
+    status: str
+    title: str | None
+    position: int | None
+
+
+MEDIA_UNSEEN = {
+    "play": "the player is not playing",
+    "pause": "the player is still playing",
+    "toggle": "the player did not change",
+    "next": "the track did not change",
+    "previous": "the track did not change",
+}
+
+
+def _played(action: str, before: _PlayerState, now: _PlayerState) -> bool:
+    """Eylemin etkisi oynatıcının durumunda görülüyor mu."""
+    if action == "play":
+        return now.status == "playing"
+    if action == "pause":
+        return now.status != "playing"
+    if action == "toggle":
+        return now.status != before.status
+    rewound = (
+        action == "previous"
+        and now.position is not None
+        and before.position is not None
+        and now.position < before.position
+    )
+    return now.title != before.title or rewound
+
+
 class Media:
     """Oynatıcı verilmezse çalan; çalan yoksa tek olan. Birden çoğu çalmıyorsa seçmez:
     rastgele bir seçim, kişinin istemediği oynatıcıyı çalıştırabilirdi."""
 
-    def __init__(self, run: Run = run_argv) -> None:
+    def __init__(self, run: Run = run_argv, wait_s: float = EFFECT_WAIT_S) -> None:
         self._run = run
+        self._wait_s = wait_s
 
     def available(self) -> bool:
         return shutil.which("busctl") is not None
@@ -216,14 +286,39 @@ class Media:
         [player] = chosen
         bus = f"{MPRIS}.{player['id']}"
         method = MEDIA_METHODS[action]
+        before = await self._state(bus, action)
         await self._run(["busctl", "--user", "call", bus, MPRIS_PATH, PLAYER, method])
+        after = await until(
+            lambda: self._state(bus, action),
+            lambda now: _played(action, before, now),
+            self._wait_s,
+        )
         data = {"player": player["name"], "id": player["id"], **await self._track(bus)}
+        if not _played(action, before, after):
+            return CommandResult("", Status.ERROR, data, MEDIA_UNSEEN[action])
         return CommandResult("", Status.OK, data)
+
+    async def _state(self, bus: str, action: str) -> _PlayerState:
+        status = str(await self._property(bus, PLAYER, "PlaybackStatus")).lower()
+        title = (await self._track(bus)).get("title")
+        position = None
+        if action == "previous":
+            # Çoğu oynatıcı şarkının başındaysa öncekine, değilse başa döner.
+            try:
+                position = int(await self._property(bus, PLAYER, "Position"))
+            except (CommandError, KeyError, ValueError, TypeError):
+                position = None  # oynatıcı konumu bildirmiyor
+        return _PlayerState(status, title, position)
 
 
 class Apps:
     """Çekirdeğin gönderdiği `.desktop` kimliğini açar; tablo çekirdeğin config'indedir ve
-    ad katalogda seçenektir (§9.1). Kimlik tireyle başlayamaz: başlatıcının seçeneği olurdu."""
+    ad katalogda seçenektir (§9.1). Kimlik tireyle başlayamaz: başlatıcının seçeneği olurdu.
+
+    Açmanın görülen etkisi sürecin başlamasıdır (§9.1): `gtk-launch` uygulamanın komutunu
+    çalıştıramazsa hata verir. Pencere beklenmez: bir oyunun penceresi onlarca saniye sürebilir
+    (ölçülen, Steam kapalıyken CS2: 14 sn), önce başka bir uygulamanın penceresi gelebilir
+    (Steam'in girişi) ve pencerenin sınıfı uygulamanın başlatma ayarına göre değişir."""
 
     def __init__(self, spawn: Spawn = spawn_argv) -> None:
         self._spawn = spawn
@@ -356,8 +451,9 @@ class Windows:
     Böylece eski bir listedeki numara, sonradan açılmış başka bir pencereye dokunamaz; kısa
     olduğu için de onay cümlesinde aynen okunabilir (§10.5)."""
 
-    def __init__(self, script: Script = kwin_script) -> None:
+    def __init__(self, script: Script = kwin_script, wait_s: float = EFFECT_WAIT_S) -> None:
         self._script = script
+        self._wait_s = wait_s
         self._numbers: dict[str, int] = {}
         self._next = 1
 
@@ -403,7 +499,34 @@ class Windows:
             windows = await self._list()
             return CommandResult("", Status.ERROR, {"windows": windows}, f"{error}; pick one")
         data = {"window": number, "title": found["title"], "app": found["app"]}
+        assert kwin_id is not None  # bulunan pencerenin kimliği vardır
+        windows = await until(
+            lambda: self._script("list", ""),
+            lambda now: _arranged(action, kwin_id, now),
+            self._wait_s,
+        )
+        if not _arranged(action, kwin_id, windows):
+            return CommandResult("", Status.ERROR, data, WINDOW_UNSEEN[action])
         return CommandResult("", Status.OK, data)
+
+
+WINDOW_UNSEEN = {
+    "focus": "the window did not come to the front",
+    "minimize": "the window was not minimized",
+    "close": "the window is still open; it may be asking something, such as to save",
+}
+
+
+def _arranged(action: str, kwin_id: str, windows: list[dict[str, Any]]) -> bool:
+    """Eylemin etkisi pencere listesinde görülüyor mu."""
+    window = next((w for w in windows if w["id"] == kwin_id), None)
+    if action == "close":
+        return window is None
+    if window is None:
+        return False
+    if action == "minimize":
+        return bool(window["minimized"])
+    return bool(window["active"]) and not window["minimized"]
 
 
 def _by_number(window: Mapping[str, Any]) -> int:

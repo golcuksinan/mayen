@@ -105,10 +105,11 @@ async def test_a_timed_out_command_leaves_nothing_behind() -> None:
 
 
 class Pactl:
-    """`pactl`'ın sahte hâli: argv'leri kaydeder."""
+    """`pactl`'ın sahte hâli: argv'leri kaydeder; `stuck` ise ayarlar etkisiz kalır."""
 
-    def __init__(self) -> None:
+    def __init__(self, stuck: bool = False) -> None:
         self.calls: list[list[str]] = []
+        self.stuck = stuck
         self.default = "usb"
         self.sinks = [
             {"name": "hdmi", "description": "HDMI", "mute": False, "volume": _vol(50)},
@@ -123,7 +124,18 @@ class Pactl:
             return json.dumps(self.sinks)
         if argv[1] == "set-default-sink" and argv[2] == "broken":
             raise CommandError("Failure: No such entity")
+        if not self.stuck:
+            self._apply(argv[1], argv[-1])
         return ""
+
+    def _apply(self, verb: str, value: str) -> None:
+        sink = next(s for s in self.sinks if s["name"] == self.default)
+        if verb == "set-sink-volume":
+            sink["volume"] = _vol(int(value.rstrip("%")))
+        elif verb == "set-sink-mute":
+            sink["mute"] = value == "1"
+        elif verb == "set-default-sink":
+            self.default = value
 
 
 def _vol(percent: int) -> dict[str, Any]:
@@ -137,7 +149,7 @@ async def test_speaker_reads_and_sets_through_argv() -> None:
     assert got == CommandResult("1", Status.OK, {"level": 55, "muted": True})
     done = await desktop.handle(Command("2", Capability.SPEAKER, "set_volume", {"level": 30}))
     assert done.data == {"level": 30, "previous": 55}
-    assert pactl.calls[-1] == ["pactl", "set-sink-volume", "@DEFAULT_SINK@", "30%"]
+    assert ["pactl", "set-sink-volume", "@DEFAULT_SINK@", "30%"] in pactl.calls
     listed = await desktop.handle(Command("3", Capability.SPEAKER, "list_outputs"))
     assert listed.data["outputs"][1] == {"id": "usb", "name": "Headset", "current": True}
     moved = await desktop.handle(
@@ -148,6 +160,19 @@ async def test_speaker_reads_and_sets_through_argv() -> None:
         Command("5", Capability.SPEAKER, "set_output", {"output": "x"})
     )
     assert missing.status is Status.ERROR
+
+
+async def test_a_speaker_setting_that_does_not_take_is_an_error() -> None:
+    speaker = Speaker(Pactl(stuck=True), wait_s=0)
+    level = await speaker.handle("set_volume", {"level": 30})
+    assert level == CommandResult(
+        "", Status.ERROR, {"level": 55, "previous": 55}, "the volume stayed at 55%"
+    )
+    mute = await speaker.handle("set_muted", {"muted": False})
+    assert mute is not None and mute.status is Status.ERROR and mute.data["muted"] is True
+    output = await speaker.handle("set_output", {"output": "hdmi"})
+    assert output is not None and output.status is Status.ERROR
+    assert output.data == {"output": "usb", "previous": "usb"}
 
 
 async def test_unknown_actions_and_tool_failures_become_results() -> None:
@@ -281,9 +306,11 @@ async def test_audio_output_lists_or_switches() -> None:
 class Bus:
     """`busctl`'ın sahte hâli: oynatıcılar ve çağrılar."""
 
-    def __init__(self, players: Mapping[str, tuple[str, str]]) -> None:
-        self.players = players  # kimlik → (ad, durum)
+    def __init__(self, players: Mapping[str, tuple[str, str]], stuck: bool = False) -> None:
+        self.players = dict(players)  # kimlik → (ad, durum)
         self.called: list[list[str]] = []
+        self.stuck = stuck  # çağrılar etkisiz kalır
+        self.track = 1
 
     async def __call__(self, argv: list[str]) -> str:
         if "ListNames" in argv:
@@ -298,13 +325,19 @@ class Bus:
                 "Identity": name,
                 "PlaybackStatus": status,
                 "Metadata": {
-                    "xesam:title": {"data": f"{name} song"},
+                    "xesam:title": {"data": f"{name} song" + "'" * (self.track - 1)},
                     "xesam:artist": {"data": ["A", "B"]},
                     "xesam:url": {"data": "https://example.com/private"},
                 },
             }[argv[-1]]
             return json.dumps({"data": value})
         self.called.append(argv)
+        player = argv[argv.index("call") + 1].removeprefix("org.mpris.MediaPlayer2.")
+        if not self.stuck:
+            name, status = self.players[player]
+            status = {"Play": "Playing", "Pause": "Paused"}.get(argv[-1], status)
+            self.players[player] = (name, status)
+            self.track += argv[-1] == "Next"
         return ""
 
 
@@ -329,6 +362,7 @@ async def test_media_acts_on_the_playing_player_and_never_returns_the_address() 
             "Pause",
         ]
     ]
+    bus = Bus({"spotify": ("Spotify", "Paused"), "firefox": ("Firefox", "Playing")})
     status = await Media(bus).handle("status", {})
     assert status is not None
     assert "private" not in json.dumps(status.data)
@@ -347,6 +381,23 @@ async def test_media_does_not_guess_between_players_that_are_not_playing() -> No
     nothing = await Media(Bus({})).handle("next", {})
     assert nothing is not None and nothing.error == "no media player is open"
     assert await Media(bus).handle("explode", {}) is None
+
+
+async def test_a_media_action_is_ok_only_when_the_player_shows_it() -> None:
+    playing = {"firefox": ("Firefox", "Playing")}
+    ok = await Media(Bus(playing)).handle("next", {})
+    assert ok is not None and ok.status is Status.OK and ok.data["title"] == "Firefox song'"
+    for action, error in (
+        ("pause", "the player is still playing"),
+        ("next", "the track did not change"),
+    ):
+        stuck = await Media(Bus(playing, stuck=True), wait_s=0).handle(action, {})
+        assert stuck is not None
+        assert (stuck.status, stuck.error) == (Status.ERROR, error)
+        assert stuck.data["title"] == "Firefox song"  # okunan durum hatayla döner
+    paused = {"firefox": ("Firefox", "Paused")}
+    stuck = await Media(Bus(paused, stuck=True), wait_s=0).handle("play", {})
+    assert stuck is not None and stuck.error == "the player is not playing"
 
 
 async def test_media_skill_sends_the_action_and_the_player() -> None:
@@ -405,19 +456,35 @@ C = "{c9f780c5-ecda-4c91-8fc3-38127a627cce}"
 class KWin:
     """KWin betiğinin sahte hâli: açık pencereler ve çalışan betikler."""
 
-    def __init__(self, *ids: str) -> None:
+    def __init__(self, *ids: str, stuck: bool = False) -> None:
         self.open = list(ids)
         self.ran: list[tuple[str, str]] = []
+        self.stuck = stuck  # betikler etkisiz kalır
+        self.minimized: set[str] = set()
+        self.active: str | None = None
 
     async def __call__(self, action: str, window: str) -> Any:  # noqa: ANN401
         self.ran.append((action, window))
         if action == "list":
             return [
-                {"id": i, "title": f"t{i[1]}", "app": "a", "active": False} for i in self.open
+                {
+                    "id": i,
+                    "title": f"t{i[1]}",
+                    "app": "a",
+                    "active": i == self.active,
+                    "minimized": i in self.minimized,
+                }
+                for i in self.open
             ]
         found = window in self.open
-        if found and action == "close":
-            self.open.remove(window)
+        if found and not self.stuck:
+            if action == "close":
+                self.open.remove(window)
+            elif action == "minimize":
+                self.minimized.add(window)
+            else:
+                self.minimized.discard(window)
+                self.active = window
         return {"found": found, "title": "t" if found else None, "app": "a" if found else None}
 
 
@@ -447,7 +514,9 @@ async def test_close_needs_the_number_and_the_app_of_the_same_window() -> None:
         wrong = await windows.handle("close", args)
         assert wrong is not None and wrong.status is Status.ERROR
         assert wrong.data == {
-            "windows": [{"window": 1, "title": "ta", "app": "a", "active": False}]
+            "windows": [
+                {"window": 1, "title": "ta", "app": "a", "active": False, "minimized": False}
+            ]
         }
     assert kwin.open == [A] and all(a != "close" for a, _ in kwin.ran)
 
@@ -465,6 +534,27 @@ async def test_a_missing_or_stale_number_is_an_error_that_carries_the_list() -> 
     assert [w["window"] for w in unnamed.data["windows"]] == [2]
     assert ("minimize", A) in kwin.ran and ("minimize", B) not in kwin.ran
     assert await windows.handle("explode", {}) is None
+
+
+async def test_a_window_action_is_ok_only_when_the_window_list_shows_it() -> None:
+    kwin = KWin(A, B)
+    windows = Windows(kwin)
+    await windows.handle("list", {})
+    for action in ("minimize", "focus"):
+        done = await windows.handle(action, {"window": 2})
+        assert done is not None and done.status is Status.OK
+    assert kwin.active == B and not kwin.minimized
+    stuck = KWin(A, stuck=True)
+    windows = Windows(stuck, wait_s=0)
+    await windows.handle("list", {})
+    for action, error in (
+        ("minimize", "the window was not minimized"),
+        ("focus", "the window did not come to the front"),
+        ("close", "the window is still open; it may be asking something, such as to save"),
+    ):
+        unseen = await windows.handle(action, {"window": 1, "app": "a"})
+        assert unseen is not None and (unseen.status, unseen.error) == (Status.ERROR, error)
+        assert unseen.data == {"window": 1, "title": "t", "app": "a"}
 
 
 class Journal:
