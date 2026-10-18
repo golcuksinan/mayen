@@ -230,6 +230,31 @@ async def test_volume_reads_without_arguments_and_reports_what_it_changed() -> N
     assert [a for a, _ in device.calls] == ["get", "set_volume", "set_muted"]
 
 
+async def test_volume_change_is_relative_to_the_current_level_and_clamped() -> None:
+    device = Device(
+        {
+            "get": ToolResult(Status.OK, {"level": 50, "muted": False}),
+            "set_volume": ToolResult(Status.OK, {"level": 40, "previous": 50}),
+        }
+    )
+    lower = await volume.run(volume.Args(change=-10), ctx(device))
+    assert lower == ToolResult(Status.OK, {"level": 40, "previous_level": 50})
+    await volume.run(volume.Args(change=80), ctx(device))
+    assert device.calls == [
+        ("get", {}),
+        ("set_volume", {"level": 40}),
+        ("get", {}),
+        ("set_volume", {"level": 100}),
+    ]
+
+
+async def test_volume_refuses_level_and_change_together() -> None:
+    device = Device({})
+    result = await volume.run(volume.Args(level=30, change=-10), ctx(device))
+    assert result.status is Status.ERROR
+    assert device.calls == []
+
+
 def test_volume_is_bounded_in_the_schema() -> None:
     with pytest.raises(ValueError):
         volume.Args(level=5000)

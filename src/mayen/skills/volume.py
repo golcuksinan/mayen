@@ -16,15 +16,31 @@ class Args(BaseModel):
     level: int | None = Field(
         default=None, ge=0, le=100, description="Volume in percent; omit to leave it as is"
     )
+    # Göreli istek ("kıs", "biraz aç") mutlak sayıya çevrilemez: model o anki seviyeyi bilmez.
+    change: int | None = Field(
+        default=None,
+        ge=-100,
+        le=100,
+        description="Change from the current volume in percentage points, e.g. -10 for "
+        "quieter; use this instead of level when the user asks for louder or quieter",
+    )
     muted: bool | None = Field(default=None, description="Mute or unmute; omit to leave it")
 
 
 async def run(args: Args, ctx: ToolContext) -> ToolResult:
-    if args.level is None and args.muted is None:
+    if args.level is not None and args.change is not None:
+        return ToolResult(Status.ERROR, error="give level or change, not both")
+    if args.level is None and args.change is None and args.muted is None:
         return await ctx.device.run(Capability.SPEAKER, "get", {})
     data: dict[str, object] = {}
-    if args.level is not None:
-        result = await ctx.device.run(Capability.SPEAKER, "set_volume", {"level": args.level})
+    level = args.level
+    if args.change is not None:
+        current = await ctx.device.run(Capability.SPEAKER, "get", {})
+        if current.status is not Status.OK:
+            return current
+        level = min(100, max(0, int(current.data["level"]) + args.change))
+    if level is not None:
+        result = await ctx.device.run(Capability.SPEAKER, "set_volume", {"level": level})
         if result.status is not Status.OK:
             return result
         data["level"], data["previous_level"] = result.data["level"], result.data["previous"]
