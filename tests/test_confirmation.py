@@ -140,13 +140,14 @@ DELETE = _spec("note_delete")
 
 
 class Executed:
-    def __init__(self) -> None:
+    def __init__(self, relay: bool = True) -> None:
         self.order: list[int] = []
+        self.relay = relay
 
     def body(self, note: int) -> Any:  # noqa: ANN401
         async def execute() -> ToolResult:
             self.order.append(note)
-            return ToolResult(Status.OK, {"deleted": note})
+            return ToolResult(Status.OK, {"deleted": note}, relay=self.relay)
 
         return execute
 
@@ -157,11 +158,12 @@ def gate(
     timeout_s: float = 5,
     log: MemoryEventLog | None = None,
     awaiting: list[bool] | None = None,
+    quiet: bool = False,
 ) -> ConfirmationGateProcessor:
     events = SessionEvents(Recorder(log or MemoryEventLog(), FakeClock()), "s1", lambda: None)
     reported = awaiting if awaiting is not None else []
     return ConfirmationGateProcessor(
-        writer, resolver, timeout_s, lambda f: f.user_id, events, reported.append
+        writer, resolver, timeout_s, lambda f: f.user_id, events, reported.append, quiet
     )
 
 
@@ -236,6 +238,19 @@ async def test_calls_of_one_response_are_asked_together_once_all_closed() -> Non
     assert speak
     # Onay cevabı ana modele gitmez (§5.4).
     assert of(down, TranscriptionFrame) == []
+
+
+async def test_a_confirmed_quiet_result_is_not_told_where_a_sound_plays() -> None:
+    # Kapanan pencere görünür: "evet"ten sonra sözsüz ses yeter (§7, "Sessiz kal").
+    for quiet, relay, told in ((True, False, False), (True, True, True), (False, False, True)):
+        resolver = Resolver(Resolution.CONFIRM)
+        g, executed = gate(Writer("Close window 1?"), resolver, quiet=quiet), Executed(relay)
+        await request(g, executed, 1)
+        down, _ = await run_test(
+            g, frames_to_send=[started("a"), result("a"), SleepFrame(0.05), said("evet")]
+        )
+        _, speak = closed(down)
+        assert speak is told
 
 
 async def test_no_question_while_a_call_of_the_response_is_still_open() -> None:

@@ -5,6 +5,7 @@ model kişiye sorar. Açık oynatıcı yoksa bir şey başlatılamaz: uygulama a
 değildir.
 """
 
+from dataclasses import replace
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -32,7 +33,9 @@ class Args(BaseModel):
 
 async def run(args: Args, ctx: ToolContext) -> ToolResult:
     params = {} if args.player is None else {"player": args.player}
-    return await ctx.device.run(Capability.MEDIA, args.action.value, params)
+    result = await ctx.device.run(Capability.MEDIA, args.action.value, params)
+    # Çalmak, durmak, şarkı değişmek duyulur; anlatılan yalnızca ne çaldığıdır (§7).
+    return replace(result, relay=args.action is Action.STATUS)
 
 
 SPEC = ToolSpec(

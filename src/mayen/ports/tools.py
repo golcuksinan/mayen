@@ -103,6 +103,9 @@ class ToolResult:
     records: Sequence[Record] = ()
     error: str | None = None
     withheld: int = 0  # okuma yetkisi olmadığı için sonuçtan çıkarılan kayıt sayısı
+    # Sonucu model anlatır mı (§7, "Sessiz kal"). `False`: sonuç, etkinin kendisinden başka
+    # bilgi taşımıyor; kişi etkiyi görüyor ya da duyuyor. Yalnızca `ok`ta geçerlidir.
+    relay: bool = True
 
 
 class ToolContext(Protocol):

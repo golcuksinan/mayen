@@ -8,7 +8,7 @@ bir konuşmadır.
 
 import asyncio
 import dataclasses
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -110,6 +110,12 @@ def openai_tools(registry: ToolRegistry) -> list[dict[str, Any]]:
     ]
 
 
+def relayed(results: Sequence[ToolResult]) -> bool:
+    """Bu sonuçlardan sonra model çalışır mı (§7, "Sessiz kal"). Biri bile anlatılmak
+    istiyorsa ya da `ok` değilse çalışır: hata, ret ve zaman aşımı her zaman söylenir."""
+    return any(r.relay or r.status is not Status.OK for r in results)
+
+
 def queued_calls(llm: LLMService[Any]) -> bool:
     """Aynı cevabın sırada bekleyen çağrısı var mı; varsa model bu sonuçla çalışmaz.
 
@@ -152,6 +158,8 @@ class AuthorizedTools:
         # Modele giden sonuç, süzgeçten sonra: sesli oturumda istemcinin ekranına (§7).
         self._shown = shown
         self._malformed: set[str] = set()  # argümanı doğrulanamayan çağrılar (§9.1)
+        # Aynı cevaptaki çağrıların anlatılmak isteyen sonucu var mı; son çağrıda okunur.
+        self._relay = False
 
     def schema(self) -> ToolsSchema:
         return tools_schema(self._registry)
@@ -163,8 +171,17 @@ class AuthorizedTools:
     def _handler(self, spec: ToolSpec[Any]) -> Callable[[FunctionCallParams], Awaitable[None]]:
         async def handle(params: FunctionCallParams) -> None:
             result, properties = await self.call(spec, params.arguments, params.tool_call_id)
-            if properties is None and queued_calls(params.llm):
+            # Model, cevabın son çağrısından sonra bir kez ve ancak bir sonuç onu isterse
+            # çalışır. Sessiz sonuç da onay bekleyen de modeli istemez: onay soruyu kendisi
+            # sorar (§10.5).
+            self._relay |= properties is None
+            if queued_calls(params.llm):
                 properties = FunctionCallResultProperties(run_llm=False)
+            else:
+                properties = (
+                    None if self._relay else FunctionCallResultProperties(run_llm=False)
+                )
+                self._relay = False
             await params.result_callback(result, properties=properties)
 
         return handle
@@ -211,7 +228,17 @@ class AuthorizedTools:
                 run_llm=False
             )
 
-        return to_model(await self._run(spec, args, call_id, caller, table)), None
+        result = await self._run(spec, args, call_id, caller, table)
+        if self.quiet and not relayed([result]):
+            # Sonuç etkinin kendisinden başka bilgi taşımıyor: model anlatmaz (§7).
+            return to_model(result), FunctionCallResultProperties(run_llm=False)
+        return to_model(result), None
+
+    @property
+    def quiet(self) -> bool:
+        """Sessiz sonuç yalnızca sözsüz ses çalınan oturumda: yazılı kanalda susmak hiçbir
+        karşılık vermemek olurdu (§7)."""
+        return self._ran is not None
 
     def _requested(
         self,

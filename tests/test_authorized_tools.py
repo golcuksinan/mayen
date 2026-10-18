@@ -74,6 +74,14 @@ async def _broken(args: BaseModel, ctx: ToolContext) -> ToolResult:
     raise RuntimeError("disk full")
 
 
+async def _quiet(args: BaseModel, ctx: ToolContext) -> ToolResult:
+    return ToolResult(Status.OK, relay=False)
+
+
+async def _quiet_failure(args: BaseModel, ctx: ToolContext) -> ToolResult:
+    return ToolResult(Status.ERROR, error="the player is not playing", relay=False)
+
+
 class Empty(BaseModel):
     pass
 
@@ -98,6 +106,8 @@ SEARCH = _spec("note_search", Effect.READ, _search)
 DELETE = _spec("note_delete", Effect.IRREVERSIBLE, _delete, NoteId)
 SLOW = _spec("slow", Effect.READ, _slow)
 BROKEN = _spec("broken", Effect.READ, _broken)
+QUIET = _spec("quiet", Effect.READ, _quiet)
+QUIET_FAILURE = _spec("quiet_failure", Effect.READ, _quiet_failure)
 
 
 class Gate:
@@ -129,7 +139,7 @@ def tools(
         ctx.caller = c
         return cast(ToolContext, ctx)
 
-    registry = ToolRegistry([SEARCH, DELETE, SLOW, BROKEN])
+    registry = ToolRegistry([SEARCH, DELETE, SLOW, BROKEN, QUIET, QUIET_FAILURE])
     events = SessionEvents(Recorder(log or MemoryEventLog(), FakeClock()), "s1", lambda: None)
     return (
         AuthorizedTools(
@@ -280,7 +290,7 @@ def test_schema_lists_every_tool() -> None:
     t, _, _ = tools()
     schema = t.schema()
     names = [f.name for f in schema.standard_tools]
-    assert names == ["note_search", "note_delete", "slow", "broken"]
+    assert names == ["note_search", "note_delete", "slow", "broken", "quiet", "quiet_failure"]
     delete = schema.standard_tools[1]
     assert delete.required == ["id"]
 
@@ -374,17 +384,21 @@ class _Go(DataFrame):
 
 
 class _Model(LLMService):
-    def __init__(self) -> None:
+    def __init__(self, calls: tuple[str, ...] = ("note_search", "note_search")) -> None:
         super().__init__(run_in_parallel=False)  # Mayen'in kipi (§9.3)
         self.context = LLMContext()
         self.runs = 0
+        self._calls = calls
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, LLMContextFrame):
             self.runs += 1
         elif isinstance(frame, _Go):
-            calls = [FunctionCallFromLLM("note_search", i, {}, self.context) for i in "ab"]
+            calls = [
+                FunctionCallFromLLM(name, str(i), {}, self.context)
+                for i, name in enumerate(self._calls)
+            ]
             await self.run_function_calls(calls)
         else:
             await self.push_frame(frame, direction)
@@ -398,3 +412,34 @@ async def test_one_response_runs_the_model_once() -> None:
     aggregator = LLMAssistantAggregator(model.context)
     await run_test(Pipeline([model, aggregator]), frames_to_send=[_Go(), SleepFrame(0.2)])
     assert model.runs == 1
+
+
+async def _silent() -> None:
+    pass
+
+
+async def test_a_quiet_result_needs_no_model_only_where_a_sound_plays() -> None:
+    # Sonuç etkinin kendisinden başka bir şey taşımıyorsa model anlatmaz (§7, "Sessiz kal").
+    voiced, _, _ = tools(ran=_silent)
+    _, props = await voiced.call(QUIET, {})
+    assert props is not None and props.run_llm is False
+    # Hata her zaman söylenir; sözsüz ses olmayan yazılı kanalda susmak cevapsız kalmaktır.
+    assert (await voiced.call(QUIET_FAILURE, {}))[1] is None
+    written, _, _ = tools()
+    assert (await written.call(QUIET, {}))[1] is None
+
+
+async def _runs(calls: tuple[str, ...]) -> int:
+    t, _, _ = tools(ran=_silent)
+    model = _Model(calls)
+    t.register(model)
+    aggregator = LLMAssistantAggregator(model.context)
+    await run_test(Pipeline([model, aggregator]), frames_to_send=[_Go(), SleepFrame(0.2)])
+    return model.runs
+
+
+async def test_a_response_runs_the_model_if_any_of_its_results_wants_it() -> None:
+    assert await _runs(("quiet", "quiet")) == 0
+    assert await _runs(("quiet", "note_search")) == 1
+    assert await _runs(("note_search", "quiet")) == 1
+    assert await _runs(("quiet", "quiet_failure")) == 1

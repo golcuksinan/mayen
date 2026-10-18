@@ -417,6 +417,7 @@ def _conversation(
         lambda frame: speaker(frame).person_id,
         events,
         state.awaiting,
+        quiet=sound is not None,
     )
     gate = TriggerGate(
         session,

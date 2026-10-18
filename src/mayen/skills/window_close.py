@@ -5,6 +5,8 @@ yalnızca bir numara duysaydı hangi pencerenin kapanacağını bilemezdi. İste
 pencereyi göstermiyorsa kapatmaz; tahmin edilmiş bir numara başka bir pencereyi kapatamaz.
 """
 
+from dataclasses import replace
+
 from pydantic import BaseModel, Field
 
 from mayen.ports.devices import Capability
@@ -17,9 +19,10 @@ class Args(BaseModel):
 
 
 async def run(args: Args, ctx: ToolContext) -> ToolResult:
-    return await ctx.device.run(
+    result = await ctx.device.run(
         Capability.WINDOWS, "close", {"window": args.window, "app": args.app}
     )
+    return replace(result, relay=False)  # kapanan pencere görünür (§7)
 
 
 SPEC = ToolSpec(

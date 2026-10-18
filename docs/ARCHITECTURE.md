@@ -367,6 +367,21 @@ sil` olarak gider.
 | **Geri bildirim sesleri** | Durum olaylarına abone olan bir modül |
 | **Kanallar** | Çıkış sese özel değil: bildirim, mesaj gibi kanallar. Aynı kanaldan yazılı komut da alınır. Kimlik onayı bildirimleri (§10.5) bu kanaldan gider ve yanıt aynı kanaldan alınır |
 
+**Sonucu, etkinin kendisinden başka bilgi taşımayan bir tool çağrısından sonra model
+çalışmaz; sözsüz ses (§8.8) yeter.** Müzik çaldıysa, pencere öne geldiyse kişi bunu duyuyor ya
+da görüyor; "yaptım" demek yeni bir şey söylemez, cevabı yalnızca geciktirir. Kararı sonucun
+kendisi taşır (`relay`), tool değil: aynı tool'un bir eylemi bilgi verir (ne çalıyor), ötekisi
+vermez (çal); ses zaten istenen seviyedeyse bu, kişinin bilmediği bir şeydir ve söylenir. Hata,
+ret ve zaman aşımı her zaman söylenir; bunu skill değil hat zorlar. Aynı cevaptaki çağrılardan
+biri söylenmek isterse model bir kez çalışır ve hepsini görür. Kural yalnızca sözsüz sesin
+çalındığı oturumda geçerlidir: yazılı kanalda susmak, cevapsız kalmaktır. Bedeli: model ikinci
+adımı ilk sonucu görerek planlıyorsa o adım yapılmaz; soru sorulduysa cevapsız kalır. Ölçüldü
+(`gemma26-ses`): geçmişsiz, iki iş isteyen 8 cümle × 10'da 80 cevabın 79'unda, eylem ve soru
+isteyen 6 cümle × 10'da 60'ında 60'ı tek cevapta geldi; canlıda bir kez kaçtı ("müziği durdur ve
+hava nasıl"), o tur gerçek geçmişiyle 10 kez oynatılınca 9'unda tek cevapta geldi. Kaynak: LangChain ve LlamaIndex'te tool'un `return_direct`'i, Pipecat'in
+`run_llm=False`'u, sesli arayüz tasarımında sözsüz onay (Pearl, *Designing Voice User
+Interfaces*).
+
 **TTS gerçek zamandan hızlı üretmek zorundadır.** Cümleye bölme ve sıralı seslendirme ödünç
 alınan çerçevenin işidir; çerçeve bir cümle çalınırken sıradakini üretir ve yavaş bir TTS'te
 cümleler arasında boşluk kalır, ses kesik duyulur.

@@ -64,6 +64,7 @@ def result_of(body: Mapping[str, Any]) -> ToolResult:
         tuple(Record(Sensitivity(r["sensitivity"]), r["data"]) for r in raw["records"]),
         raw["error"],
         raw["withheld"],
+        raw.get("relay", True),  # alandan önceki kayıtlarda yok
     )
 
 

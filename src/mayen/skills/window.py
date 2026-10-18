@@ -6,6 +6,7 @@ Kapatma geri alınamaz, bu yüzden ayrı tool'dur (`window_close`, §9.1). Pence
 açık olan içeriği (sayfa, belge, ileti konusu) söyler; hassasiyet bu yüzden `PERSONAL`'dır.
 """
 
+from dataclasses import replace
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -28,7 +29,9 @@ class Args(BaseModel):
 async def run(args: Args, ctx: ToolContext) -> ToolResult:
     # Numarasız ya da bilinmeyen numaralı istek, istemciden açık pencerelerin listesiyle döner.
     params = {} if args.window is None else {"window": args.window}
-    return await ctx.device.run(Capability.WINDOWS, args.action.value, params)
+    result = await ctx.device.run(Capability.WINDOWS, args.action.value, params)
+    # Öne gelen ya da küçülen pencere görünür; anlatılan yalnızca liste (§7).
+    return replace(result, relay=args.action is Action.LIST)
 
 
 SPEC = ToolSpec(

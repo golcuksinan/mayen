@@ -7,6 +7,7 @@ ederdi. Kapatmak bu tool'un işi değildir.
 """
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, create_model
@@ -34,9 +35,10 @@ def spec(tables: SkillConfig) -> ToolSpec[Any] | None:
 
     async def run(arguments: BaseModel, ctx: ToolContext) -> ToolResult:
         name = str(arguments.app)  # type: ignore[attr-defined]
-        return await ctx.device.run(
+        result = await ctx.device.run(
             Capability.APPS, "open", {"app": name, "entry": table[name]}
         )
+        return replace(result, relay=False)  # açılan uygulama görünür (§7)
 
     return ToolSpec(
         name="apps",

@@ -250,7 +250,9 @@ async def test_volume_reads_without_arguments_and_reports_what_it_changed() -> N
     assert read.data == {"level": 55, "muted": False}
     both = await volume.run(volume.Args(level=20, muted=True), ctx(device))
     assert both == ToolResult(
-        Status.OK, {"level": 20, "previous_level": 55, "muted": True, "previous_muted": False}
+        Status.OK,
+        {"level": 20, "previous_level": 55, "muted": True, "previous_muted": False},
+        relay=False,
     )
     assert [a for a, _ in device.calls] == ["get", "set_volume", "set_muted"]
 
@@ -263,7 +265,7 @@ async def test_volume_change_is_relative_to_the_current_level_and_clamped() -> N
         }
     )
     lower = await volume.run(volume.Args(change=-10), ctx(device))
-    assert lower == ToolResult(Status.OK, {"level": 40, "previous_level": 50})
+    assert lower == ToolResult(Status.OK, {"level": 40, "previous_level": 50}, relay=False)
     await volume.run(volume.Args(change=80), ctx(device))
     assert device.calls == [
         ("get", {}),
@@ -271,6 +273,24 @@ async def test_volume_change_is_relative_to_the_current_level_and_clamped() -> N
         ("get", {}),
         ("set_volume", {"level": 100}),
     ]
+
+
+async def test_only_what_the_person_cannot_hear_is_relayed() -> None:
+    # Değişen ses duyulur; zaten istenen hâldeyse model söyler (§7, "Sessiz kal").
+    same = Device({"set_volume": ToolResult(Status.OK, {"level": 50, "previous": 50})})
+    assert (await volume.run(volume.Args(level=50), ctx(same))).relay
+    read = Device({"get": ToolResult(Status.OK, {"level": 50, "muted": False})})
+    assert (await volume.run(volume.Args(), ctx(read))).relay
+    ok = Device(
+        dict.fromkeys(("play", "status", "list", "focus", "close"), ToolResult(Status.OK))
+    )
+    assert not (await media.run(media.Args(action=media.Action.PLAY), ctx(ok))).relay
+    assert (await media.run(media.Args(action=media.Action.STATUS), ctx(ok))).relay
+    assert (await window.run(window.Args(action=window.Action.LIST), ctx(ok))).relay
+    focus = window.Args(action=window.Action.FOCUS, window=1)
+    assert not (await window.run(focus, ctx(ok))).relay
+    closing = window_close.Args(window=1, app="a")
+    assert not (await window_close.run(closing, ctx(ok))).relay
 
 
 async def test_volume_refuses_level_and_change_together() -> None:
@@ -444,7 +464,8 @@ async def test_apps_skill_sends_the_name_and_its_entry() -> None:
     spec = apps.spec(SkillConfig(apps={"Dolphin": "org.kde.dolphin"}))
     assert spec is not None
     device = Device({"open": ToolResult(Status.OK)})
-    await spec.run(spec.args(app="Dolphin"), ctx(device))
+    opened = await spec.run(spec.args(app="Dolphin"), ctx(device))
+    assert not opened.relay  # açılan uygulama görünür (§7)
     assert device.calls == [("open", {"app": "Dolphin", "entry": "org.kde.dolphin"})]
 
 

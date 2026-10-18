@@ -26,7 +26,7 @@ from mayen.ports.people import DeviceId, PersonStore
 from mayen.ports.timers import TimerStore
 from mayen.ports.tools import Status, ToolResult, TurnFlags, Verdict
 from mayen.ports.transcript import Party, TranscriptStore
-from mayen.ports.triggers import TurnId
+from mayen.ports.triggers import TriggerSource, TurnId
 from mayen.replay.history import CallerOf, Message, Records, TableOf, TurnInfo, clean, result_of
 
 
@@ -41,6 +41,7 @@ class Called:
     arguments: Any
     verdict: str | None  # argümanı doğrulanamayan çağrıda karar yok
     result: Mapping[str, Any] | None = None  # modelin gördüğü sonuç
+    relay: bool = True  # sonucu model anlatır mı (§7, "Sessiz kal")
 
 
 type Step = Said | Called
@@ -203,16 +204,20 @@ class Replayer:
             if not reply.calls or tool_choice == "none":
                 return  # tool'suz istekte gelen çağrı çalışmaz; tur burada biter
             awaiting = False
+            relay = False
             for call in reply.calls:
                 step = self._call(call.name, call.arguments, turn, mocks, records)
                 if step.verdict is None:
                     malformed.add(call.id)
                 awaiting |= step.verdict == Verdict.CONFIRM.value
+                relay |= step.relay or (step.result or {}).get("status") != Status.OK.value
                 out.append(step)
                 content = json.dumps(dict(step.result or {}), ensure_ascii=False)
                 history.append({"role": "tool", "tool_call_id": call.id, "content": content})
             if awaiting:
                 return  # burada onay sorusu sorulurdu (§10.5)
+            if turn.source is TriggerSource.VOICE and not relay:
+                return  # sesli oturumda sessiz sonuçtan sonra model çalışmaz (§7)
 
     def _call(
         self,
@@ -260,7 +265,7 @@ class Replayer:
             missing = ToolResult(Status.ERROR, error="replay: no mock for this call")
             return Called(name, arguments, verdict, to_model(missing))
         view = to_model(filter_records(recorded, turn.requester, table))
-        return Called(name, arguments, verdict, view)
+        return Called(name, arguments, verdict, view, recorded.relay)
 
 
 def _original(records: Records, turn_id: TurnId, cut: datetime | None) -> list[Step]:

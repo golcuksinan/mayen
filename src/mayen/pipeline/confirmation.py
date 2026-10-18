@@ -39,7 +39,7 @@ from mayen.core.confirmation import (
     resolve_answer,
 )
 from mayen.pipeline.events import UTTERANCE, SessionEvents
-from mayen.pipeline.tools import to_model
+from mayen.pipeline.tools import relayed, to_model
 from mayen.ports.confirmation import (
     Answer,
     AnswerResolver,
@@ -75,8 +75,10 @@ class ConfirmationGateProcessor(FrameProcessor):
         speaker: SpeakerSource,
         events: SessionEvents,
         awaiting: Callable[[bool], None] = lambda _: None,
+        quiet: bool = False,
     ) -> None:
         super().__init__()
+        self._quiet = quiet  # sessiz sonuç anlatılmaz (`AuthorizedTools.quiet`, §7)
         self._writer = writer
         self._resolver = resolver
         self._timeout_s = timeout_s
@@ -225,8 +227,13 @@ class ConfirmationGateProcessor(FrameProcessor):
             match step:
                 case Step.EXECUTE:
                     # Yan etkili çağrılar sırayla çalışır (§9.3).
-                    results = [to_model(await e.execute()) for e in plan.entries]
-                    await self._finish(plan, Outcome.CONFIRMED, results=results)
+                    done = [await e.execute() for e in plan.entries]
+                    await self._finish(
+                        plan,
+                        Outcome.CONFIRMED,
+                        results=[to_model(r) for r in done],
+                        speak=not self._quiet or relayed(done),
+                    )
                 case Step.REJECT:
                     await self._finish(plan, Outcome.REJECTED)
                 case Step.ASK_AGAIN:

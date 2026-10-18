@@ -49,7 +49,11 @@ async def run(args: Args, ctx: ToolContext) -> ToolResult:
         if result.status is not Status.OK:
             return ToolResult(result.status, data, error=result.error)
         data["muted"], data["previous_muted"] = result.data["muted"], result.data["previous"]
-    return ToolResult(Status.OK, data)
+    # Değişen ses duyulur; zaten istenen hâldeyse bu, kişinin bilmediği bir şeydir (§7).
+    changed = data.get("level") != data.get("previous_level") or data.get("muted") != data.get(
+        "previous_muted"
+    )
+    return ToolResult(Status.OK, data, relay=not changed)
 
 
 SPEC = ToolSpec(

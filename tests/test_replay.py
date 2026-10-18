@@ -377,3 +377,23 @@ def test_restarted_text_turn_brings_its_message_again() -> None:
         {"role": "user", "content": "berber notunu sil"},
         {"role": "user", "content": "berber notunu sil"},
     ]
+
+
+async def test_a_quiet_result_of_a_voice_turn_ends_it_as_on_the_line() -> None:
+    # Sesli oturumda sessiz sonuçtan sonra model çalışmaz (§7, "Sessiz kal"); replay de.
+    for relay, requests in ((False, 1), (True, 2)):
+        log, turn = Log(), TurnId(uuid.uuid4())
+        owner = {"role": "owner", "person_id": "1"}
+        log.said(Party.PERSON, 0, turn, "dişçi notunu bul")
+        log.event(
+            EventKind.TURN_STARTED,
+            0.01,
+            turn,
+            {"source": "voice", "priority": "normal", "fresh": True, "requester": owner},
+        )
+        found = {**FOUND, "relay": relay}
+        log.tool(1, turn, "c1", "note_search", {"query": "dişçi"}, "allow", found)
+        log.event(EventKind.TURN_FINISHED, 2, turn, {"unanswered": False, "requester": owner})
+        model = Model(call("n1", "note_search", {"query": "dişçi"}))
+        await player(log, model).replay(turn)
+        assert len(model.requests) == requests
