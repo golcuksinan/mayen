@@ -18,6 +18,7 @@ from mayen.core.feed import Feed
 from mayen.ports.devices import Capability, Command
 from mayen.ports.events import Event, EventId, EventKind, Header, SessionState
 from mayen.ports.screen import SCHEMA_VERSION, encode_utterance, screen_message
+from mayen.ports.timers import Timer, TimerState
 from mayen.ports.tools import (
     Effect,
     Record,
@@ -28,7 +29,7 @@ from mayen.ports.tools import (
     ToolSpec,
 )
 from mayen.ports.transcript import Party, Utterance, UtteranceId
-from mayen.ports.triggers import TurnId
+from mayen.ports.triggers import Priority, TurnId
 
 NOW = datetime(2026, 10, 17, 22, 0, tzinfo=UTC)
 TURN = TurnId(uuid.uuid4())
@@ -111,6 +112,45 @@ async def test_only_this_sessions_state_and_words_said_in_a_turn_are_followed() 
 def test_the_language_tags_of_what_mayen_said_are_not_shown() -> None:
     text = encode_utterance(said("s1", "Merhaba <tr>Sinan</tr>, ses <tr>yüzde elli</tr>."))
     assert json.loads(text)["text"] == "Merhaba Sinan, ses yüzde elli."
+
+
+class Timers:
+    def __init__(self, sensitivity: Sensitivity) -> None:
+        self.sensitivity = sensitivity
+
+    def get(self, timer_id: str) -> Timer | None:
+        if timer_id != "7":
+            return None
+        return Timer(
+            "7", NOW, "su iç", Priority.HIGH, 60.0, self.sensitivity, "1", TimerState.FIRED
+        )
+
+
+def fired(session: str, timer: str = "timer:7") -> Event:
+    header = Header(
+        EventId(uuid.uuid4()), EventKind.TURN_STARTED, "x", NOW, session, TURN, related=[timer]
+    )
+    return Event(header, {"source": "timer", "priority": "high", "fresh": True})
+
+
+async def test_a_fired_reminder_is_shown_from_its_record() -> None:
+    # Mayen'in onu nasıl söylediği değil, kişinin kendi sözleri (§7: model ekrana yazmaz).
+    for sensitivity, personal, shown in (
+        (Sensitivity.GENERAL, False, True),
+        (Sensitivity.PERSONAL, True, True),
+        (Sensitivity.PERSONAL, False, False),
+    ):
+        feed, sent = Feed(), Sent()
+        screen = Screen("s1", sent, lambda p=personal: p, Timers(sensitivity))  # type: ignore[misc, arg-type]
+        following = asyncio.create_task(screen.follow(feed))
+        await asyncio.sleep(0)
+        for item in (fired("s2"), fired("s1", "note:7"), fired("s1")):
+            feed.publish(item)
+        await asyncio.sleep(0.01)
+        following.cancel()
+        expected = [{"text": "su iç", "priority": "high"}] if shown else []
+        assert [{"text": m["text"], "priority": m["priority"]} for m in sent] == expected
+        assert all(m["type"] == "reminder" for m in sent)
 
 
 def test_a_command_is_not_a_screen_message() -> None:

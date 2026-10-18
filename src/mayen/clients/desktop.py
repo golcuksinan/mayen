@@ -29,6 +29,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from mayen.ports.devices import Capability, Command, CommandResult
@@ -320,8 +321,13 @@ class Apps:
     (ölçülen, Steam kapalıyken CS2: 14 sn), önce başka bir uygulamanın penceresi gelebilir
     (Steam'in girişi) ve pencerenin sınıfı uygulamanın başlatma ayarına göre değişir."""
 
-    def __init__(self, spawn: Spawn = spawn_argv) -> None:
+    def __init__(
+        self,
+        spawn: Spawn = spawn_argv,
+        categories: Callable[[str], list[str]] | None = None,
+    ) -> None:
         self._spawn = spawn
+        self._categories = categories or desktop_categories
 
     def available(self) -> bool:
         return shutil.which("gtk-launch") is not None
@@ -333,7 +339,35 @@ class Apps:
         if not entry or entry.startswith("-"):
             return CommandResult("", Status.ERROR, error=f"{entry!r} is not a desktop entry id")
         await self._spawn(["gtk-launch", entry])
-        return CommandResult("", Status.OK, {"opened": str(args.get("app", entry))})
+        # Kategoriler sistemin kendi tanımından (§7: oyun yerleşimi açılan uygulamanın türüne
+        # göre); tablo yalnızca adı kimliğe bağlar.
+        data = {"opened": str(args.get("app", entry)), "categories": self._categories(entry)}
+        return CommandResult("", Status.OK, data)
+
+
+def application_dirs() -> list[Path]:
+    """`.desktop` dosyalarının arandığı yerler, öncelik sırasıyla (XDG Base Directory)."""
+    home = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    data = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    return [Path(d) / "applications" for d in [home, *data.split(":")] if d]
+
+
+def desktop_categories(entry: str, dirs: list[Path] | None = None) -> list[str]:
+    """Uygulamanın freedesktop kategorileri (`Categories=`), ilk bulunan tanımdan; bulunmazsa
+    boş: türü bilinmeyen uygulama hiçbir yerleşimi tetiklemez."""
+    for directory in application_dirs() if dirs is None else dirs:
+        path = directory / f"{entry}.desktop"
+        if not path.is_file():
+            continue
+        group = None
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                group = line
+            elif group == "[Desktop Entry]" and line.startswith("Categories="):
+                return [c for c in line.removeprefix("Categories=").split(";") if c]
+        return []
+    return []
 
 
 KWIN = "org.kde.KWin"

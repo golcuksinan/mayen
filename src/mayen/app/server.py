@@ -159,7 +159,12 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
                 link.attach(send)
                 core.attach_device(session, link)
                 screens.append(
-                    Screen(session, send, lambda: core.presence.personal(session) is not None)
+                    Screen(
+                        session,
+                        send,
+                        lambda: core.presence.personal(session) is not None,
+                        core.timers,
+                    )
                 )
                 stt, tts, vad, turn = core.speech()
                 # Konuşmacı tanıma config'te yoksa söz cihazın kişisinindir.

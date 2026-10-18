@@ -397,10 +397,23 @@ yoksa en yakın birime çevrilir; atılan bir birim, sesi sessizce bozar.
 gitmezse istemci cevabı yalnızca sesten öğrenebilir ve bir metin arayüzünde hiç gösteremez.
 
 **İstemci kendi oturumunun ekranını çizer; ekranı durum ve tool sonuçları sürer, model ekrana
-yazmaz.** Sesli bağlantıda istemciye sesin yanında oturumunun durumu, sözler, cevabın metni ve
-tool sonuçları gider; ekran yalnızca bunlardan çizilir. Model ekrana yazsaydı, gösterilen veri
+yazmaz.** Sesli bağlantıda istemciye sesin yanında oturumunun durumu, sözler, cevabın metni,
+tool sonuçları ve çalan hatırlatmanın kaydı gider; ekran yalnızca bunlardan çizilir. Model ekrana yazsaydı, gösterilen veri
 depodan değil modelden gelirdi ve uydurulabilirdi. Ortak cihazda `PERSONAL` bir tool sonucu
 ekrana da gitmez.
+
+**Ekranın iki yerleşimi vardır: normal ve odak.** Odak, kişinin gözü başka yerdeyken
+içindir: Mayen'e açtırdığı uygulama `Game` ya da `Video` ile `Player` türündeyse ya da gece
+saatlerindeyse. Tür, uygulamanın sistemdeki kendi tanımından okunur (masaüstünde freedesktop
+`Categories`), tabloya yazılmaz: aynı bilgi iki yerde tutulursa ayrışır; kendi tanımı yanılan
+uygulama (Blender `Game` der) yanıldığı gibi davranır. Gece saatleri istemcinin ayarıdır.
+Neyin tetiklediği görünümü değiştirmez. Odakta ortada tek şey durur ve onu o an önemli olan
+seçer: onay bekleyen soru, çalan hatırlatma, az önce gelen tool sonucu, çalan müzik, hiçbiri
+yoksa saat (Echo Show ve Nest Hub'ın ortam ekranı gibi: ayrı yerleşimler yok, ortadaki şey
+değişir). Kendini zaten belli eden sonuç (müzik kontrolü, açılan uygulama) ortaya gelmez.
+Başlığı o uygulamanın adını taşıyan pencereyi kapatma sonucu odaktan çıkarır; elle açılan ya
+da kapatılan uygulama bugün bilinmez. Çalan hatırlatma ekrana kaydından gider (kişinin kendi
+sözleri), Mayen'in onu söyleyiş cümlesinden değil.
 
 **`PERSONAL` içerik ortak cihazda verilmez, kişinin kendi cihazına gider.** Ortak bir cihazda
 istenen kişisel bir cevap, içeriğin ait olduğu kişinin kişisel cihazına (§10.1) gönderilir ve

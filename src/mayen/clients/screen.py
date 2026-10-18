@@ -46,6 +46,10 @@ class Page:
     def connection(self, state: str) -> None:
         self._calls.put(f"window.mayenConnection({json.dumps(state)})")
 
+    def night(self, span: str) -> None:
+        """Gece yerleşiminin saatleri ("23:00-07:00"); kişinin ayarıdır, çekirdekten gelmez."""
+        self._calls.put(f"window.mayenNight({json.dumps(span)})")
+
     def _send(self) -> None:
         self._window.events.loaded.wait()
         while True:
@@ -81,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ui", default=str(UI), help="the built screen, or the dev server's address"
     )
+    parser.add_argument("--night", help="night layout hours, like 23:00-07:00 (default: none)")
     args = parser.parse_args(argv)
     if not args.ui.startswith("http") and not Path(args.ui).exists():
         print(
@@ -92,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     assert window is not None  # None, yalnızca açılış olayında iptal edilen pencerede
     page = Page(window)
+    if args.night:
+        page.night(args.night)
     threading.Thread(target=_connect, args=(args.url, page), daemon=True).start()
     webview.start(gui="qt")
     return 0

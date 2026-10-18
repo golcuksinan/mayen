@@ -1,13 +1,15 @@
-// Bir cihazın ekranı: solda durum ve konuşma, sağda tool kartları. Son çalışan tool'un kartı
+// Bir cihazın ekranı: solda durum ve konuşma, sağda tool kartları; odak yerleşimi Focus.tsx'te. Son çalışan tool'un kartı
 // öne (sol üste) gelir, ötekiler yer açarak kayar. Renk yoğunluğu panelinkiyle aynı dildir.
-import { LayoutGroup, motion } from 'motion/react'
+import { AnimatePresence, LayoutGroup, motion } from 'motion/react'
 import { useEffect, useState } from 'react'
 import logo from '../../panel/src/mayen-yazi.svg?raw'
+import { YERLESIM } from '../../panel/src/hareket'
 import { Panel } from '../../panel/src/parts'
 import { THEME } from '../../panel/src/theme'
 import { CardBody, failed, TITLE } from './cards'
+import { Focus } from './Focus'
 import { Mark, type MarkState } from './Mark'
-import { useScreen, type Card, type Connection, type Screen } from './screen'
+import { isNight, useScreen, type Card, type Connection, type Screen } from './screen'
 
 const LOGO = logo
   .replace(/<rect[^>]*\/>/, '')
@@ -62,6 +64,20 @@ function useDemo() {
   return on ? DEMO[i] : null
 }
 
+// Odak: Mayen'e açtırılan oyun ya da video oynatıcı, yoksa gece saatleri. Tetikleyen ne olursa
+// olsun yerleşim aynıdır. F elle açıp kapatır (deneme); durumdan gelen değişince el bırakılır.
+function useFocus(screen: Screen, now: number): boolean {
+  const auto = screen.activity !== null || isNight(screen.night, now)
+  const [manual, setManual] = useState<boolean | null>(null)
+  useEffect(() => { setManual(null) }, [auto])
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === 'f' || e.key === 'F') setManual(v => !(v ?? auto)) }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [auto])
+  return manual ?? auto
+}
+
 function markState(screen: Screen, now: number): MarkState {
   if (screen.connection !== 'live') return 'offline'
   const last = screen.cards[0]
@@ -114,6 +130,7 @@ export default function App() {
   const screen = useScreen()
   const now = useNow(200)
   const demo = useDemo()
+  const focus = useFocus(screen, now)
   const mark = demo ?? markState(screen, now)
   const lvl = demo
     ? (demo === 'awaiting_confirmation' || demo === 'failed' || demo === 'offline' ? 'alert' : demo === 'idle' ? 'calm' : 'active')
@@ -121,8 +138,13 @@ export default function App() {
 
   return (
     <motion.div initial={THEME.calm} animate={THEME[lvl]} transition={{ duration: 0.9, ease: 'easeInOut' }}
-      style={{ height: '100vh', display: 'flex', flexDirection: 'column', padding: '20px 28px 24px', background: 'var(--zemin)' }}>
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, flex: 'none' }}>
+      style={{ height: '100vh', display: 'flex', flexDirection: 'column', padding: '20px 28px 24px', background: 'var(--zemin)',
+               // Geçişte kayan parçalar pencereden taşabilir; pencere kaydırılmaz, içerik kendi alanında kayar.
+               overflow: 'hidden' }}>
+      <AnimatePresence initial={false}>
+      {!focus && (
+      <motion.header key="header" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: { duration: 0.2 } }}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, flex: 'none' }}>
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6 }}
           style={{ display: 'flex' }} dangerouslySetInnerHTML={{ __html: LOGO }} />
         <div style={{ display: 'flex', gap: 22, alignItems: 'baseline' }}>
@@ -132,11 +154,14 @@ export default function App() {
             {CONNECTION[screen.connection]}
           </motion.span>
         </div>
-      </header>
+      </motion.header>
+      )}
+      </AnimatePresence>
 
       {screen.error && <div className="etiket vurgu" style={{ marginBottom: 12 }}>{screen.error}</div>}
 
       <LayoutGroup>
+        {focus ? <Focus screen={screen} mark={mark} now={now} /> : (
         <main style={{ flex: 1, minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
                        gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr)',
                        gridTemplateRows: 'repeat(3, minmax(0,1fr))' }}>
@@ -145,7 +170,9 @@ export default function App() {
           </Panel>
           <section style={{ gridColumn: 2, gridRow: '1 / 4', display: 'flex', flexDirection: 'column',
                             alignItems: 'center', justifyContent: 'center', gap: 28, minHeight: 0 }}>
-            <Mark state={mark} size={320} />
+            <motion.div layoutId="mark" transition={YERLESIM}>
+              <Mark state={mark} size={320} />
+            </motion.div>
             <motion.span key={mark} className="etiket" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
               style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' || mark === 'offline' ? 'var(--vurgu)' : 'var(--isaret)' }}>
               {mark === 'offline' && !demo ? CONNECTION[screen.connection] : STATE[mark]}
@@ -158,6 +185,7 @@ export default function App() {
             ))}
           </div>
         </main>
+        )}
       </LayoutGroup>
     </motion.div>
   )

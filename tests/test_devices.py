@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from mayen.clients.desktop import (
     Media,
     Speaker,
     Windows,
+    desktop_categories,
     kwin_script,
 )
 from mayen.clients.mic import respond
@@ -437,17 +439,32 @@ class Spawned:
 
 async def test_the_client_opens_the_sent_entry_and_never_an_option() -> None:
     spawned = Spawned()
-    launcher = Apps(spawned)
+    launcher = Apps(spawned, lambda entry: ["Game"])
     opened = await launcher.handle(
         "open", {"app": "Counter-Strike 2", "entry": "Counter-Strike 2"}
     )
-    assert opened is not None and opened.data == {"opened": "Counter-Strike 2"}
+    assert opened is not None
+    assert opened.data == {"opened": "Counter-Strike 2", "categories": ["Game"]}
     # Kimlik argv'nin ayrı bir öğesi; boşluklu kimlik kabukta bölünmez (§9.4).
     assert spawned.argv == [["gtk-launch", "Counter-Strike 2"]]
     option = await launcher.handle("open", {"app": "x", "entry": "--help"})
     assert option is not None and option.status is Status.ERROR
     assert await launcher.handle("list", {}) is None
     assert len(spawned.argv) == 1
+
+
+def test_categories_come_from_the_first_desktop_entry_found(tmp_path: Path) -> None:
+    home, system = tmp_path / "home", tmp_path / "system"
+    for d in (home, system):
+        d.mkdir()
+    (home / "cs2.desktop").write_text(
+        "[Desktop Entry]\nName=CS2\nCategories=Game;\n\n[Desktop Action x]\nCategories=No;\n"
+    )
+    (system / "cs2.desktop").write_text("[Desktop Entry]\nCategories=Office;\n")
+    (system / "plain.desktop").write_text("[Desktop Entry]\nName=Plain\n")
+    assert desktop_categories("cs2", [home, system]) == ["Game"]
+    assert desktop_categories("plain", [home, system]) == []
+    assert desktop_categories("missing", [home, system]) == []
 
 
 def test_app_names_are_choices_in_the_catalog_and_an_empty_table_adds_no_tool() -> None:

@@ -32,7 +32,10 @@ export type ToolMessage = {
   withheld: number
 }
 
-export type Message = StateMessage | UtteranceMessage | ToolMessage
+// Çalan hatırlatma: kişinin kendi sözleri, kaydından (§12)
+export type ReminderMessage = { type: 'reminder'; text: string; due: string; priority: string }
+
+export type Message = StateMessage | UtteranceMessage | ToolMessage | ReminderMessage
 
 export class SchemaError extends Error {}
 
@@ -41,7 +44,7 @@ export function parse(raw: string): Message {
   if (data.schema_version !== SCHEMA_VERSION) {
     throw new SchemaError(`schema_version ${String(data.schema_version)}, screen speaks ${SCHEMA_VERSION}`)
   }
-  if (data.type !== 'state' && data.type !== 'utterance' && data.type !== 'tool') {
+  if (data.type !== 'state' && data.type !== 'utterance' && data.type !== 'tool' && data.type !== 'reminder') {
     throw new SchemaError(`unknown message type ${String(data.type)}`)
   }
   return data as Message

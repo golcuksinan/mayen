@@ -14,6 +14,7 @@ from typing import Any
 
 from mayen.ports.events import SessionState, stamp
 from mayen.ports.speech import untagged
+from mayen.ports.timers import Timer
 from mayen.ports.tools import ToolResult
 from mayen.ports.transcript import Utterance
 
@@ -24,6 +25,7 @@ class ScreenKind(StrEnum):
     STATE = "state"  # oturumun durumu değişti (§5.4)
     UTTERANCE = "utterance"  # oturumda bir söz: kişinin ya da Mayen'in (§11)
     TOOL = "tool"  # bir tool çağrısının sonucu, modelin gördüğü hâliyle
+    REMINDER = "reminder"  # çalan hatırlatma: turu açan zamanlayıcının kaydı (§12)
 
 
 def _encode(kind: ScreenKind, fields: Mapping[str, Any]) -> str:
@@ -46,6 +48,14 @@ def encode_utterance(utterance: Utterance) -> str:
             "text": untagged(u.text),
             "interrupted": u.interrupted,
         },
+    )
+
+
+def encode_reminder(timer: Timer) -> str:
+    """Kişinin kendi sözleri ve vadesi; Mayen'in onu nasıl söylediği değil (model yazmaz)."""
+    return _encode(
+        ScreenKind.REMINDER,
+        {"text": timer.text, "due": stamp(timer.due), "priority": timer.priority.value},
     )
 
 
