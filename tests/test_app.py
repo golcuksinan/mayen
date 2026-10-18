@@ -79,6 +79,14 @@ def test_example_config_loads(tmp_path: Path) -> None:
     assert config.triggers.fates[TriggerSource.TEXT] is Fate.RESTART
 
 
+def test_shipped_prompts_load(tmp_path: Path) -> None:
+    path = config_dir(tmp_path)
+    shutil.copytree(EXAMPLE.parent / "prompts", tmp_path / "prompts", dirs_exist_ok=True)
+    config = load(path, {"MAYEN_MODEL": "local"})
+    assert config.system_prompt.startswith("You are Mayen")
+    assert "{language}" in config.language_rule
+
+
 def test_home_in_storage_path_is_expanded(tmp_path: Path) -> None:
     shutil.copy(EXAMPLE, tmp_path / "mayen.yaml")
     (tmp_path / "prompts").mkdir()
@@ -97,7 +105,7 @@ def test_home_in_storage_path_is_expanded(tmp_path: Path) -> None:
         (("system: prompts/system.txt", "system: prompts/none.txt"), "none.txt"),
         (("timer: {}", "timer: {READ: [SECRET]}"), "SECRET"),
         # tanınmayan kişinin dilinde ses yok: ilk yabancıya asistan susar
-        (("    English: default", "    Turkish: default"), "default_language"),
+        (("    British English: default", "    Turkish: default"), "default_language"),
     ],
 )
 def test_bad_config_is_a_config_error(

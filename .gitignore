@@ -14,6 +14,7 @@
 !/config/
 /config/*
 !/config/mayen.yaml.example
+!/config/prompts/
 !/panel/
 !/desktop/
 !/services/
@@ -26,5 +27,8 @@
 !/services/*/pyproject.toml
 !/services/*/uv.lock
 !/services/*/*.yaml.example
+!/services/stt/wake/
+/services/stt/wake/*
+!/services/stt/wake/hey_mayen.onnx
 
 __pycache__/

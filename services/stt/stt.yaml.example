@@ -6,7 +6,10 @@ model: large-v3          # faster-whisper model adı ya da indirilmiş model kla
 device: cuda             # cpu da olur
 compute_type: float16    # cpu'da int8
 # Wake word (§6), isteğe bağlı: openWakeWord modeli ve ortak iki modeli. Yoksa /wake kapalıdır.
+# "Hey Mayen" modeli depoda; ortak ikisi openWakeWord'ün v0.5.1 yayınından indirilir:
+# https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/{melspectrogram,embedding_model}.onnx
+# Yollar servisin çalıştırıldığı klasöre (depo kökü) göredir.
 # wake:
-#   model: /yol/hey_mayen.onnx
+#   model: services/stt/wake/hey_mayen.onnx
 #   melspectrogram: /yol/melspectrogram.onnx
 #   embedding: /yol/embedding_model.onnx

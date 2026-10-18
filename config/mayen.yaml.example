@@ -10,7 +10,7 @@ prompts:
   system: prompts/system.txt   # rol metni (persona ve kurallar), modele giden dilde
   language: prompts/language.txt  # dil kuralı; {language} yerine konuşanın dili gelir (§8.6)
 
-default_language: English      # tanınmayan kişiye konuşulan dil; tanınanınki profilinde (§8.6)
+default_language: British English  # tanınmayan kişiye konuşulan dil; tanınanınki profilinde (§8.6)
 
 triggers:
   voice_priority: normal       # sesli tetikleyicinin önceliği (§5.1)
@@ -59,7 +59,7 @@ stt:
 tts:
   url: http://127.0.0.1:8771
   voices:                      # her çıkış dilinin sesi (§16.3): anahtar profildeki dil,
-    English: default           # değer TTS servisinin config'indeki sesin adı
+    British English: default   # değer TTS servisinin config'indeki sesin adı
 # Konuşmacı tanıma (§6), isteğe bağlı: sesin izini çıkaran servis ve izi kişiye çeviren eşik.
 # Yoksa söz cihazın kişisinindir. Varsa sahibin izi `mayen voice <wav…>` ile yazılır.
 # speaker:

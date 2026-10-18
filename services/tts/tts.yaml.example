@@ -11,11 +11,12 @@ kokoro:                        # Kokoro sesi varsa
   voices: ~/models/voices-v1.0.bin
 
 voices:
-  default:
+  default:                     # Mayen'in sesi
     engine: kokoro
-    voice: af_heart            # Kokoro ses dosyasındaki ad
-    language: en-us            # sesin kendi dili
-    speed: 1.0
+    voice: bf_emma             # Kokoro ses dosyasındaki ad
+    language: en-gb            # sesin kendi dili
+    speed: 0.85
+    effect: wide_radio
   # another:
   #   engine: piper
   #   model: ~/models/some-voice.onnx   # yanında .onnx.json
