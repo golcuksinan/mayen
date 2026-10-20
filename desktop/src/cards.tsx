@@ -3,6 +3,7 @@
 import { motion } from 'motion/react'
 import { Row } from '../../panel/src/parts'
 import { DEGER } from '../../panel/src/hareket'
+import type { FaultPart } from './contract'
 import type { Card } from './screen'
 
 // Başarısız sonucun ekrandaki adı; ayrıntısı (tool'un hata metni) altında soluk durur
@@ -17,6 +18,16 @@ const FAILED: Record<string, string> = {
 const ACTION: Record<string, string> = {
   focus: 'brought to front',
   minimize: 'minimized',
+}
+
+// Bozulan parçanın adı; ayrıntı (servisin kendi hata metni) altında küçük yazılır
+export const FAULT: Record<FaultPart, string> = {
+  model: 'model down',
+  stt: 'speech-to-text down',
+  tts: 'voice down',
+  wake: 'wake word down',
+  vad: 'voice detection down',
+  other: 'fault',
 }
 
 export const TITLE: Record<string, string> = {

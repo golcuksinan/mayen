@@ -6,10 +6,9 @@ import logo from '../../panel/src/mayen-yazi.svg?raw'
 import { YERLESIM } from '../../panel/src/hareket'
 import { Panel } from '../../panel/src/parts'
 import { THEME } from '../../panel/src/theme'
-import { CardBody, failed, TITLE } from './cards'
+import { CardBody, failed, FAULT, TITLE } from './cards'
 import { Focus } from './Focus'
 import { Mark, type MarkState } from './Mark'
-import type { FaultPart } from './contract'
 import { isNight, useScreen, type Card, type Connection, type Screen } from './screen'
 
 const LOGO = logo
@@ -31,16 +30,6 @@ const STATE: Record<MarkState, string> = {
   thinking: 'thinking',
   speaking: 'speaking',
   awaiting_confirmation: 'awaiting confirmation',
-}
-
-// Bozulan parçanın adı; ayrıntı (servisin kendi hata metni) altında küçük yazılır
-const FAULT: Record<FaultPart, string> = {
-  model: 'model down',
-  stt: 'speech-to-text down',
-  tts: 'voice down',
-  wake: 'wake word down',
-  vad: 'voice detection down',
-  other: 'fault',
 }
 
 const ALERT_MS = 8000

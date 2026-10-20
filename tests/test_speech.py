@@ -324,18 +324,19 @@ async def test_tts_down_at_start_speaks_once_the_service_is_back(
         tts,
         frames_to_send=[
             SleepFrame(0.1),
-            TTSSpeakFrame("One."),
+            # Pipecat'in sınırı (3) aşılacak kadar sessiz cümle: servis yine kalıcı sayılmaz
+            *[TTSSpeakFrame(t) for t in ("One.", "Two.", "Three.", "Four.")],
             SleepFrame(0.5),
-            TTSSpeakFrame("Two."),
+            TTSSpeakFrame("Five."),
             SleepFrame(0.3),
         ],
     )
     await healing
     # Pipecat sessiz kalan cümle için kendi hatasını da ekler; sebep bizimkidir
     errors = [f.error for f in up if isinstance(f, ErrorFrame)]
-    assert len([e for e in errors if e.startswith("TTS service")]) == 2
+    assert len([e for e in errors if e.startswith("TTS service")]) == 5
     assert any(isinstance(f, TTSAudioRawFrame) for f in down)
-    assert [r["parts"][0]["text"] for r in service.requests] == ["Two."]
+    assert [r["parts"][0]["text"] for r in service.requests] == ["Five."]
     assert tts.is_usable
 
 

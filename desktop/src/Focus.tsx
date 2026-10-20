@@ -1,12 +1,13 @@
 // Odak yerleşimi (deneysel): kişinin gözü başka yerdeyken (oyun, video, gece) ekran tek bir
 // şey gösterir ve bakılmadan da olur. Neyin tetiklediği görünümü değiştirmez; ortada ne
 // olduğunu o an önemli olan belirler (`center`): onay bekleyen soru > çalan hatırlatma > az
-// önce gelen tool sonucu > çalan müzik > saat. Echo Show / Nest Hub'ın ortam ekranı gibi: ayrı yerleşimler yok, ortadaki
+// önce gelen tool sonucu > bozulan parça > çalan müzik > saat; bozulan parça ortada değilse köşede tek satırdır. Echo Show / Nest Hub'ın ortam ekranı gibi: ayrı yerleşimler yok, ortadaki
 // şey değişir. M köşede küçülür ama durumu yine gösterir, konuşmanın son sözü altta tek satırdır.
 // Parçalar normal yerleşimdekilerle aynı layoutId'yi taşır: geçişte yerinden kayarak oturur.
 import { AnimatePresence, motion } from 'motion/react'
 import { YERLESIM } from '../../panel/src/hareket'
-import { CardBody, failed, TITLE } from './cards'
+import type { FaultMessage } from './contract'
+import { CardBody, failed, FAULT, TITLE } from './cards'
 import { Mark, type MarkState } from './Mark'
 import type { Card, Screen } from './screen'
 
@@ -31,6 +32,7 @@ type Center =
   | { kind: 'result'; card: Card }
   | { kind: 'music'; card: Card }
   | { kind: 'clock' }
+  | { kind: 'fault'; fault: FaultMessage }
 
 function center(screen: Screen, mark: MarkState, now: number): Center {
   if (mark === 'awaiting_confirmation') {
@@ -41,6 +43,9 @@ function center(screen: Screen, mark: MarkState, now: number): Center {
   if (reminder && now - reminder.at < REMINDER_MS) return { kind: 'reminder', text: reminder.text, due: reminder.due }
   const recent = screen.cards.find(c => now - c.at < RESULT_MS && (failed(c) || !QUIET_TOOLS.has(c.tool)))
   if (recent) return { kind: 'result', card: recent }
+  // Bozulan parça: ortada daha önemli bir şey yoksa; varsa köşede tek satırdır (`Faulted`).
+  // Sonuç onu bastırmaz: ses bozukken cevabı ekrandan öğrenmenin tek yolu sonucun kendisidir.
+  if (screen.fault) return { kind: 'fault', fault: screen.fault }
   // Çalıyor mu: bugün yalnızca son media sonucundan (durdurulmadıysa); istemci oynatıcıyı
   // kendisi izleyince oradan gelecek.
   const media = screen.cards.find(c => c.tool === 'media' && c.status === 'ok' && !c.data.players)
@@ -92,6 +97,27 @@ function Reminder({ text, due }: { text: string; due: string }) {
   )
 }
 
+function Fault({ fault }: { fault: FaultMessage }) {
+  return (
+    <div style={{ textAlign: 'center', maxWidth: '70vw' }}>
+      <div className="etiket" style={{ color: 'var(--vurgu)', marginBottom: 18 }}>fault</div>
+      <div style={{ fontSize: 64, fontWeight: 600, fontStretch: '112%', lineHeight: 1.1 }}>{FAULT[fault.part]}</div>
+      <div className="soluk" style={{ fontSize: 18, marginTop: 18, overflowWrap: 'anywhere' }}>{fault.detail}</div>
+    </div>
+  )
+}
+
+function Faulted({ fault }: { fault: FaultMessage }) {
+  return (
+    <motion.div className="etiket" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      // M'nin (88 px) yüksekliğinde bir şerit: yazı onun ortasına hizalanır
+      style={{ position: 'absolute', top: 0, right: 104, height: 88, display: 'flex', alignItems: 'center',
+               lineHeight: 1, color: 'var(--vurgu)' }}>
+      {FAULT[fault.part]}
+    </motion.div>
+  )
+}
+
 function Middle({ shown }: { shown: Center }) {
   const key = shown.kind === 'result' ? `result-${shown.card.tool}-${shown.card.at}` : shown.kind
   return (
@@ -103,6 +129,7 @@ function Middle({ shown }: { shown: Center }) {
         {shown.kind === 'result' && <Result card={shown.card} />}
         {shown.kind === 'question' && <Question text={shown.text} />}
         {shown.kind === 'reminder' && <Reminder text={shown.text} due={shown.due} />}
+        {shown.kind === 'fault' && <Fault fault={shown.fault} />}
       </motion.div>
     </AnimatePresence>
   )
@@ -139,6 +166,9 @@ export function Focus({ screen, mark, now }: { screen: Screen; mark: MarkState; 
       <motion.div layoutId="mark" transition={YERLESIM} style={{ position: 'absolute', top: 0, right: 0 }}>
         <Mark state={mark} size={88} />
       </motion.div>
+      <AnimatePresence>
+        {screen.fault && shown.kind !== 'fault' && <Faulted key="faulted" fault={screen.fault} />}
+      </AnimatePresence>
       <Middle shown={shown} />
       {/* Onay sorusu ortadayken altta tekrar yazılmaz */}
       <Subtitle screen={screen} now={now} hidden={shown.kind === 'question'} />

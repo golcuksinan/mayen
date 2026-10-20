@@ -412,9 +412,11 @@ saatlerindeyse. Tür, uygulamanın sistemdeki kendi tanımından okunur (masaüs
 `Categories`), tabloya yazılmaz: aynı bilgi iki yerde tutulursa ayrışır; kendi tanımı yanılan
 uygulama (Blender `Game` der) yanıldığı gibi davranır. Gece saatleri istemcinin ayarıdır.
 Neyin tetiklediği görünümü değiştirmez. Odakta ortada tek şey durur ve onu o an önemli olan
-seçer: onay bekleyen soru, çalan hatırlatma, az önce gelen tool sonucu, çalan müzik, hiçbiri
-yoksa saat (Echo Show ve Nest Hub'ın ortam ekranı gibi: ayrı yerleşimler yok, ortadaki şey
-değişir). Kendini zaten belli eden sonuç (müzik kontrolü, açılan uygulama) ortaya gelmez.
+seçer: onay bekleyen soru, çalan hatırlatma, az önce gelen tool sonucu, bozulan parça, çalan
+müzik, hiçbiri yoksa saat (Echo Show ve Nest Hub'ın ortam ekranı gibi: ayrı yerleşimler yok, ortadaki şey
+değişir). Bozulan parça ortada değilse köşede durur: ses bozukken cevabı ekrandan öğrenmenin
+tek yolu sonucun kendisidir, hata onu bastırmamalıdır. Kendini zaten belli eden sonuç (müzik
+kontrolü, açılan uygulama) ortaya gelmez.
 Başlığı o uygulamanın adını taşıyan pencereyi kapatma sonucu odaktan çıkarır; elle açılan ya
 da kapatılan uygulama bugün bilinmez. Çalan hatırlatma ekrana kaydından gider (kişinin kendi
 sözleri), Mayen'in onu söyleyiş cümlesinden değil.

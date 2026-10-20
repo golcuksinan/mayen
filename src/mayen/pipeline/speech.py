@@ -578,6 +578,10 @@ class ServiceTTS(TTSService):
             # Söz kelime kelime, sesi çalındıkça söylenmiş sayılır: kesilen cevabın geçmişe
             # giren kısmı duyulan kadardır (`word_times`).
             push_text_frames=False,
+            # Pipecat sessiz kalan üç cümleden sonra servisi kalıcı kullanılamaz sayar; bu
+            # servis sessizliğin sebebini kendisi bildirir ve geri gelince yeniden denenir
+            # (§14). Sessiz her cümle yine hata olarak bildirilir.
+            max_consecutive_zero_audio_contexts=0,
             settings=TTSSettings(model=None, voice=None, language=None),
             **kwargs,
         )
