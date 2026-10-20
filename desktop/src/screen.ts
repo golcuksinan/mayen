@@ -31,6 +31,7 @@ declare global {
     mayenConnection?: (connection: Connection) => void
     mayenNight?: (span: string) => void
     pywebview?: { api: { fullscreen: () => void } }
+    mayenApp?: { quit: () => void } // telefon uygulaması (android/): dinlemeyi ve uygulamayı kapatır
   }
 }
 

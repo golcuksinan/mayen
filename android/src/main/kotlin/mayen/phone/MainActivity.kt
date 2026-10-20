@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowInsets
 import android.widget.FrameLayout
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -22,8 +23,20 @@ private const val BACKGROUND = "#0B0D11" // arayüzün zemini (desktop/)
 class MainActivity : Activity() {
     private lateinit var page: WebView
 
+    companion object {
+        var current: MainActivity? = null // çıkış hizmetten de istenir (bildirim)
+            private set
+    }
+
+    // Sayfadaki çıkış düğmesi (desktop/src/App.tsx); yalnızca bu nesne varken görünür
+    private inner class App {
+        @JavascriptInterface
+        fun quit() = runOnUiThread { quit(this@MainActivity) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        current = this
         // Derlenmiş arayüz göreli yollarla açılır; file:// modül betiklerini yüklemez
         val assets = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
@@ -31,6 +44,7 @@ class MainActivity : Activity() {
         page = WebView(this).apply {
             setBackgroundColor(Color.parseColor(BACKGROUND))
             settings.javaScriptEnabled = true
+            addJavascriptInterface(App(), "mayenApp")
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(
                     view: WebView,
@@ -63,6 +77,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (current === this) current = null
         Screen.detach(page)
         page.destroy()
         super.onDestroy()

@@ -204,6 +204,12 @@ export default function App() {
           style={{ display: 'flex' }} dangerouslySetInnerHTML={{ __html: LOGO }} />
         <div style={{ display: 'flex', gap: 22, alignItems: 'baseline' }}>
           {demo && <span className="etiket vurgu">demo</span>}
+          {window.mayenApp && (
+            <button type="button" className="etiket" onClick={() => window.mayenApp?.quit()}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--kagit-3)' }}>
+              quit
+            </button>
+          )}
           <motion.span key={screen.connection} className="etiket" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
             style={{ color: screen.connection === 'live' ? 'var(--isaret)' : 'var(--vurgu)' }}>
             {CONNECTION[screen.connection]}

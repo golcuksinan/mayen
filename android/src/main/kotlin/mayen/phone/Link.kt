@@ -34,24 +34,34 @@ class Link(private val context: Context, private val url: String) {
     @Volatile
     private var stopped = false
     private var socket: WebSocket? = null
+    private var listener: Listener? = null
 
     fun start() = connect()
 
+    // Mikrofon kapanış el sıkışmasını beklemeden bırakılır: çıkışta hiçbir şey dinlemesin
     fun stop() {
         stopped = true
         main.removeCallbacksAndMessages(null)
         socket?.close(1000, null)
+        listener?.release()
         commands.shutdownNow()
     }
 
     private fun connect() {
         if (stopped) return
         Screen.connection("connecting")
-        socket = http.newWebSocket(Request.Builder().url(url).build(), Listener())
+        listener = Listener()
+        socket = http.newWebSocket(Request.Builder().url(url).build(), listener!!)
     }
 
     private inner class Listener : WebSocketListener() {
         private var audio: Audio? = null
+
+        @Synchronized
+        fun release() {
+            audio?.stop()
+            audio = null
+        }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (audio == null) {
@@ -117,8 +127,8 @@ class Link(private val context: Context, private val url: String) {
 
         private fun end(why: String) {
             Log.i(TAG, "connection ended: $why")
-            audio?.stop()
-            audio = null
+            release()
+            if (stopped) return
             Screen.connection("lost")
             main.postDelayed(::connect, RETRY_MS)
         }
