@@ -191,8 +191,9 @@ class ServiceVAD(VADAnalyzer):
     yüklemez); olasılığı söze çeviren kural Pipecat'in `VADAnalyzer`'ındadır.
 
     `voice_confidence` analizcinin kendi iş parçacığında çağrılır, bağlantı da orada yaşar.
-    Servise ulaşılamazsa parça sessiz sayılır ve hata loga yazılır; bağlantı en çok saniyede
-    bir yeniden denenir. Servisin kendisinin düşmesi STT'nin açılış kontrolünde de görünür.
+    Servise ulaşılamazsa parça sessiz sayılır; bağlantı en çok saniyede bir yeniden denenir.
+    Hata `on_fault`'a bozulma başına bir kez verilir (§5.4), o da iş parçacığında çağrılır.
+    Analizci hattın işlemcisi değildir, hata karesi itemez.
     """
 
     def __init__(self, url: str, params: VADParams | None = None) -> None:
@@ -200,6 +201,8 @@ class ServiceVAD(VADAnalyzer):
         self._url = "ws" + url.rstrip("/").removeprefix("http") + VAD
         self._ws: ClientConnection | None = None
         self._retry_at = 0.0
+        self._failing = False
+        self.on_fault: Callable[[str], None] | None = None  # oturumu kuran bağlar
 
     def num_frames_required(self) -> int:
         return VAD_FRAME
@@ -213,10 +216,17 @@ class ServiceVAD(VADAnalyzer):
             reply = ws.recv(timeout=1.0)
             if not isinstance(reply, bytes) or len(reply) != 4:
                 raise SpeechContractError(f"vad: unexpected reply {reply!r:.40}")
+            self._failing = False
             return float(np.frombuffer(reply, "<f4")[0])
         except (OSError, ValueError, WebSocketException, SpeechContractError) as e:
-            log.error("VAD service: %s", e)
             self._drop()
+            if self._failing:
+                log.debug("VAD service: %s", e)
+                return 0.0
+            self._failing = True
+            log.error("VAD service: %s", e)
+            if self.on_fault is not None:
+                self.on_fault(f"VAD service: {e}")
             return 0.0
 
     def _connect(self) -> ClientConnection | None:
@@ -367,7 +377,11 @@ class ServiceSTT(STTService):
         self._http = aiohttp.ClientSession()
         try:
             self._rate = (await _health(self._http, self._url)).sample_rate
-        except (aiohttp.ClientError, SpeechContractError) as e:
+        except aiohttp.ClientError as e:
+            # Ulaşılamamak kalıcı değildir: her sözde yeniden denenir, servis gelince oturum
+            # kendiliğinden duyar (§14: ölü bir servis asistanı susturur ama öldürmez).
+            await self.push_error(f"STT service: {e}", e)
+        except SpeechContractError as e:
             await self.push_error(f"STT service: {e}", e, force_treat_as_permanent=True)
         if self._speaker is not None:
             await self._speaker.open(self._http)
@@ -484,9 +498,15 @@ class ServiceSTT(STTService):
                 voice.cancel()
 
     async def _transcribe(self, audio: bytes) -> AsyncGenerator[Frame]:
-        if self._http is None or not self._rate:
+        if self._http is None:
             yield ErrorFrame("STT service is not available")
             return
+        if not self._rate:
+            try:
+                self._rate = (await _health(self._http, self._url)).sample_rate
+            except (aiohttp.ClientError, SpeechContractError) as e:
+                yield ErrorFrame(f"STT service: {e}")
+                return
         await self.start_processing_metrics()
         pcm = await self._resampler.resample(audio, self.sample_rate, self._rate)
         params = {} if self._language is None else {"language": self._language}
@@ -582,16 +602,23 @@ class ServiceTTS(TTSService):
         self._http = aiohttp.ClientSession()
         try:
             health = await _health(self._http, self._url)
-        except (aiohttp.ClientError, SpeechContractError) as e:
+        except aiohttp.ClientError as e:
+            # Ulaşılamamak kalıcı değildir: her cümlede yeniden denenir (§14).
+            await self.push_error(f"TTS service: {e}", e)
+            return
+        except SpeechContractError as e:
             await self.push_error(f"TTS service: {e}", e, force_treat_as_permanent=True)
             return
-        missing = sorted(set(self._voices.values()) - set(health.voices))
+        missing = self._missing(health)
         if missing:
             await self.push_error(
                 f"TTS service has no voice {missing}", force_treat_as_permanent=True
             )
             return
         self._rate = health.sample_rate
+
+    def _missing(self, health: Health) -> list[str]:
+        return sorted(set(self._voices.values()) - set(health.voices))
 
     async def stop(self, frame: EndFrame) -> None:
         await super().stop(frame)
@@ -639,9 +666,20 @@ class ServiceTTS(TTSService):
             # ama işaret geçmişte yerinde kalır.
             await self.add_word_timestamps([(text, self._offset_s)], context_id)
             return
-        if self._http is None or not self._rate:
+        if self._http is None:
             yield ErrorFrame("TTS service is not available")
             return
+        if not self._rate:
+            try:
+                health = await _health(self._http, self._url)
+            except (aiohttp.ClientError, SpeechContractError) as e:
+                yield ErrorFrame(f"TTS service: {e}")
+                return
+            missing = self._missing(health)
+            if missing:
+                yield ErrorFrame(f"TTS service has no voice {missing}")
+                return
+            self._rate = health.sample_rate
         language = self._language()
         voice = self._voices.get(language)
         if voice is None:

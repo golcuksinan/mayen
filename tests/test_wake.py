@@ -1,6 +1,5 @@
 """Wake word (§6) ve sözün tur açıp açmadığı (§5.1): sahte servise karşı ve tek başına."""
 
-import logging
 import struct
 from collections.abc import AsyncIterator
 
@@ -8,6 +7,7 @@ import pytest
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    ErrorFrame,
     InputAudioRawFrame,
     TranscriptionFrame,
     VADUserStartedSpeakingFrame,
@@ -16,6 +16,7 @@ from pipecat.tests.utils import SleepFrame, run_test
 from pipecat.turns.types import ProcessFrameResult
 
 from fakes import FakeClock, FakeSpeech, speech_service
+from mayen.pipeline import wake
 from mayen.pipeline.wake import ServiceWake, WakeStart, WakeWordFrame
 from mayen.ports.speech import WAKE_FRAME
 
@@ -63,17 +64,19 @@ async def test_audio_split_across_frames_reaches_the_model_whole(
 
 
 async def test_without_a_wake_model_audio_flows_and_nobody_wakes(
-    fake: tuple[FakeSpeech, str], caplog: pytest.LogCaptureFixture
+    fake: tuple[FakeSpeech, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, url = fake
     service.wake_model = False
-    with caplog.at_level(logging.ERROR):
-        down, _ = await run_test(
-            ServiceWake(url, threshold=0.5), frames_to_send=[_audio(0.9), SleepFrame(0.3)]
-        )
+    monkeypatch.setattr(wake, "_RETRY_S", 0.05)
+    down, up = await run_test(
+        ServiceWake(url, threshold=0.5), frames_to_send=[_audio(0.9), SleepFrame(0.4)]
+    )
     assert not [f for f in down if isinstance(f, WakeWordFrame)]
     assert any(isinstance(f, InputAudioRawFrame) for f in down)
-    assert "wake word service" in caplog.text
+    # Hata hattın hata karesiyle bildirilir (§5.4); her yeniden denemede değil, bir kez.
+    [error] = [f for f in up if isinstance(f, ErrorFrame)]
+    assert error.error.startswith("wake word service")
 
 
 class Running:

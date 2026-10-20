@@ -1,7 +1,7 @@
 // Ekranın durumu. Mesajları Python süreci verir (window.mayenScreen); ekran çekirdeğe hiçbir
 // şey göndermez, yalnızca son durumu, son sözleri ve her tool'un son sonucunu tutar.
 import { useEffect, useState } from 'react'
-import { parse, SchemaError, type ReminderMessage, type SessionState, type ToolMessage, type UtteranceMessage } from './contract'
+import { parse, SchemaError, type FaultMessage, type ReminderMessage, type SessionState, type ToolMessage, type UtteranceMessage } from './contract'
 
 export type Connection = 'connecting' | 'live' | 'lost'
 
@@ -15,7 +15,8 @@ export type Screen = {
   reminder: (ReminderMessage & { at: number }) | null // son çalan hatırlatma
   activity: Activity | null // kişinin Mayen'e açtırdığı oyun ya da video: yerleşimi belirler
   night: Night | null // gece saatleri; istemcinin ayarı
-  error: string | null
+  fault: FaultMessage | null // bozulan parça; yeni tur başlayana kadar durur
+  error: string | null // ekranın kendisinin okuyamadığı mesaj; çekirdeğin hatası değil
 }
 
 export type Activity = { kind: 'game' | 'video'; name: string }
@@ -34,7 +35,7 @@ declare global {
 }
 
 const EMPTY: Screen = {
-  connection: 'connecting', state: 'idle', words: [], cards: [], reminder: null, activity: null, night: null, error: null,
+  connection: 'connecting', state: 'idle', words: [], cards: [], reminder: null, activity: null, night: null, fault: null, error: null,
 }
 
 // Yerleşim tool sonuçlarından (§7): açılan uygulamanın kategorileri (freedesktop) Game içeriyorsa
@@ -82,7 +83,12 @@ function apply(screen: Screen, raw: string): Screen {
   }
   switch (message.type) {
     case 'state':
-      return { ...screen, state: message.state }
+      // Parçanın düzeldiği ayrıca bilinmez: yeni tur başlayınca hata kalkar, hâlâ bozuksa yenisi gelir
+      return { ...screen, state: message.state,
+               fault: screen.state === 'idle' && message.state !== 'idle' ? null : screen.fault }
+    case 'fault':
+      // Aynı parçanın sonraki hatası çoğu zaman ilkinin sonucudur (sessiz kalan cümle); sebep ilkidir
+      return { ...screen, fault: screen.fault?.part === message.part ? screen.fault : message }
     case 'reminder':
       return { ...screen, reminder: { ...message, at: Date.now() } }
     case 'utterance':
@@ -102,7 +108,8 @@ export function useScreen(): Screen {
     window.mayenScreen = raw => setScreen(s => apply(s, raw))
     // Kopunca durum boşa döner: yeni oturum boşta başlar ve bunu ayrıca bildirmez
     window.mayenConnection = connection =>
-      setScreen(s => ({ ...s, connection, state: connection === 'live' ? s.state : 'idle' }))
+      setScreen(s => ({ ...s, connection, state: connection === 'live' ? s.state : 'idle',
+                        fault: connection === 'connecting' ? null : s.fault }))
     window.mayenNight = span => setScreen(s => ({ ...s, night: night(span) }))
     const queued = early.splice(0)
     const connection = earlyConnection

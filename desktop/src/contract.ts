@@ -35,7 +35,12 @@ export type ToolMessage = {
 // Çalan hatırlatma: kişinin kendi sözleri, kaydından (§12)
 export type ReminderMessage = { type: 'reminder'; text: string; due: string; priority: string }
 
-export type Message = StateMessage | UtteranceMessage | ToolMessage | ReminderMessage
+// Sistemin bir parçası bozuldu (§5.4 hata kanalı). Tool'un `error` durumundan ayrıdır: o, bir
+// isteğin yerine getirilemediği; bu, Mayen'in bir parçasının çalışmadığı.
+export type FaultPart = 'model' | 'stt' | 'tts' | 'wake' | 'vad' | 'other'
+export type FaultMessage = { type: 'fault'; part: FaultPart; detail: string }
+
+export type Message = StateMessage | UtteranceMessage | ToolMessage | ReminderMessage | FaultMessage
 
 export class SchemaError extends Error {}
 
@@ -44,7 +49,8 @@ export function parse(raw: string): Message {
   if (data.schema_version !== SCHEMA_VERSION) {
     throw new SchemaError(`schema_version ${String(data.schema_version)}, screen speaks ${SCHEMA_VERSION}`)
   }
-  if (data.type !== 'state' && data.type !== 'utterance' && data.type !== 'tool' && data.type !== 'reminder') {
+  if (data.type !== 'state' && data.type !== 'utterance' && data.type !== 'tool' && data.type !== 'reminder'
+      && data.type !== 'fault') {
     throw new SchemaError(`unknown message type ${String(data.type)}`)
   }
   return data as Message

@@ -4,7 +4,7 @@ import logging
 import uuid
 
 import pytest
-from pipecat.frames.frames import Frame, MetricsFrame
+from pipecat.frames.frames import ErrorFrame, Frame, MetricsFrame
 from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -13,6 +13,7 @@ from pipecat.tests.utils import run_test
 from fakes import FakeClock, MemoryEventLog
 from mayen.core.events import Recorder
 from mayen.pipeline.events import EventObserver, SessionEvents
+from mayen.pipeline.speech import ServiceSTT
 from mayen.ports.events import EventKind
 from mayen.ports.triggers import TurnId
 
@@ -46,3 +47,24 @@ async def test_token_counts_become_events_once(caplog: pytest.LogCaptureFixture)
     assert tokens.body["completion_tokens"] == 8
     assert tokens.header.turn_id == TURN
     assert "completion_tokens" not in caplog.text
+
+
+async def test_an_error_frame_is_a_fault_of_the_part_that_raised_it() -> None:
+    log = MemoryEventLog()
+    events = SessionEvents(Recorder(log, FakeClock()), "s1", lambda: TURN)
+    stt, other = ServiceSTT("http://127.0.0.1:9", "en"), Passing()
+    await run_test(
+        Pipeline([Passing(), Passing()]),
+        frames_to_send=[
+            ErrorFrame("STT service 500: Internal Server Error", processor=stt),
+            ErrorFrame("boom", processor=other),
+        ],
+        observers=[EventObserver(events)],
+    )
+    assert [e.header.kind for e in log.events] == [EventKind.FAULT, EventKind.FAULT]
+    assert [e.body for e in log.events] == [
+        {"part": "stt", "detail": "STT service 500: Internal Server Error"},
+        {"part": "other", "detail": f"{other.name}: boom"},
+    ]
+    # Tool sonucunun durumu değil: olayın durumu yoktur.
+    assert all(e.header.status is None for e in log.events)

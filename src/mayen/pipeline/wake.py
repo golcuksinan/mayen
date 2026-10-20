@@ -52,8 +52,9 @@ class ServiceWake(FrameProcessor):
     """Girdinin sesini STT servisindeki wake word modeline akıtır; ses hatta aynen devam eder.
 
     Puan eşiği aşağıdan yukarı geçtiğinde bir kez işaret verir: model aynı söz boyunca birkaç
-    adım yüksek kalır. Servise ulaşılamazsa ses yine akar ama kimse uyandıramaz; hata loga
-    yazılır, bağlantı `_RETRY_S`'de bir yeniden denenir.
+    adım yüksek kalır. Servise ulaşılamazsa ses yine akar ama kimse uyandıramaz; bağlantı
+    `_RETRY_S`'de bir yeniden denenir. Hata hattın hata karesiyle bildirilir (§5.4), bozulma
+    başına bir kez: her denemede bildirilseydi kayıt aynı hatayla dolardı.
     """
 
     def __init__(self, url: str, threshold: float) -> None:
@@ -63,6 +64,7 @@ class ServiceWake(FrameProcessor):
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         self._rest = b""
+        self._failing = False  # son bağlantı denemesi düştü; düzelene kadar yeniden bildirilmez
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -87,7 +89,11 @@ class ServiceWake(FrameProcessor):
                 async with connect(self._url, open_timeout=2.0) as ws:
                     await self._listen(ws, sample_rate)
             except (OSError, WebSocketException, SpeechContractError, ValueError) as e:
-                log.error("wake word service: %s", e)
+                if self._failing:
+                    log.debug("wake word service: %s", e)
+                else:
+                    self._failing = True
+                    await self.push_error(f"wake word service: {e}")
             await asyncio.sleep(_RETRY_S)
             # Bağlantı yokken biriken ses bayattır; sonraki bağlantı şimdiden başlar.
             while not self._queue.empty():
@@ -100,6 +106,7 @@ class ServiceWake(FrameProcessor):
                 f"wake: service is {hello.sample_rate} Hz / {hello.frame} samples, "
                 f"stream is {sample_rate} Hz / {WAKE_FRAME}"
             )
+        self._failing = False
         above = False
         while True:
             await ws.send(await self._queue.get())

@@ -248,6 +248,30 @@ async def test_unreachable_speaker_service_leaves_the_words_without_a_voice(
     assert text.text == "hello" and text.metadata[VOICE] is None
 
 
+async def _heal(service: FakeSpeech, after_s: float) -> None:
+    await asyncio.sleep(after_s)
+    service.healthy = True
+
+
+async def test_stt_down_at_start_hears_once_the_service_is_back(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    # Açılışta ulaşılamayan servis oturumu kalıcı sağır bırakmaz (§14); bozukken her söz
+    # hata olarak bildirilir (§5.4).
+    service, url = fake
+    service.healthy = False
+    stt = ServiceSTT(url, "en", join_turn_s=0)
+    healing = asyncio.create_task(_heal(service, 0.5))
+    down, up = await run_test(
+        stt, frames_to_send=[*_speech(), SleepFrame(0.6), *_speech(), SleepFrame(0.3)]
+    )
+    await healing
+    errors = [f.error for f in up if isinstance(f, ErrorFrame)]
+    assert len(errors) == 2 and all(e.startswith("STT service") for e in errors)
+    assert [f.text for f in down if isinstance(f, TranscriptionFrame)] == ["hello"]
+    assert stt.is_usable
+
+
 async def test_stt_with_another_contract_version_fails_loudly(
     fake: tuple[FakeSpeech, str],
 ) -> None:
@@ -287,6 +311,32 @@ async def test_tts_without_a_voice_for_the_language_is_an_error(
     _, up = await run_test(tts, frames_to_send=[TTSSpeakFrame("Merhaba."), SleepFrame(0.2)])
     assert any("Türkçe" in f.error for f in up if isinstance(f, ErrorFrame))
     assert service.requests == []
+
+
+async def test_tts_down_at_start_speaks_once_the_service_is_back(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    service.healthy = False
+    tts = ServiceTTS(url, {"English": "emma"}, lambda: "English", sample_rate=16000)
+    healing = asyncio.create_task(_heal(service, 0.4))
+    down, up = await run_test(
+        tts,
+        frames_to_send=[
+            SleepFrame(0.1),
+            TTSSpeakFrame("One."),
+            SleepFrame(0.5),
+            TTSSpeakFrame("Two."),
+            SleepFrame(0.3),
+        ],
+    )
+    await healing
+    # Pipecat sessiz kalan cümle için kendi hatasını da ekler; sebep bizimkidir
+    errors = [f.error for f in up if isinstance(f, ErrorFrame)]
+    assert len([e for e in errors if e.startswith("TTS service")]) == 2
+    assert any(isinstance(f, TTSAudioRawFrame) for f in down)
+    assert [r["parts"][0]["text"] for r in service.requests] == ["Two."]
+    assert tts.is_usable
 
 
 async def test_tts_with_a_missing_voice_fails_at_start(fake: tuple[FakeSpeech, str]) -> None:
@@ -397,6 +447,30 @@ async def test_vad_with_another_frame_size_hears_nothing_and_retries_slowly(
         assert await asyncio.to_thread(vad.voice_confidence, _frame(32767)) == 0.0
     await vad.cleanup()
     assert service.vad_connections == 1  # her parçada yeniden bağlanmıyor
+
+
+async def test_a_vad_outage_is_reported_once_until_the_service_answers(
+    fake: tuple[FakeSpeech, str],
+) -> None:
+    service, url = fake
+    service.vad_frame = VAD_FRAME * 2  # servis başka biçim konuşuyor: bozuk
+    vad = ServiceVAD(url)
+    vad.set_sample_rate(16000)
+    faults: list[str] = []
+    vad.on_fault = faults.append
+    for _ in range(3):
+        vad._retry_at = 0.0  # her parçada yeniden dener
+        await asyncio.to_thread(vad.voice_confidence, _frame(32767))
+    assert len(faults) == 1 and faults[0].startswith("VAD service")
+    service.vad_frame = VAD_FRAME
+    vad._retry_at = 0.0
+    assert await asyncio.to_thread(vad.voice_confidence, _frame(32767)) == 1.0
+    vad._drop()
+    service.vad_frame = VAD_FRAME * 2  # düzeldikten sonraki kesinti yeniden bildirilir
+    vad._retry_at = 0.0
+    await asyncio.to_thread(vad.voice_confidence, _frame(32767))
+    await vad.cleanup()
+    assert len(faults) == 2
 
 
 async def test_vad_without_a_service_hears_nothing() -> None:

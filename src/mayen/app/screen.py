@@ -1,4 +1,5 @@
-"""Sesli oturumun ekran yayını (§7): istemciye oturumun durumu, sözleri ve tool sonuçları.
+"""Sesli oturumun ekran yayını (§7): istemciye oturumun durumu, sözleri, tool sonuçları ve
+bozulan parçalar (§5.4 hata kanalı).
 
 Durum ve sözler kaydın canlı yayınından, yalnızca bu oturumunkiler alınır; sözlerden yalnızca
 bir turun içindekiler. Tool sonucu
@@ -12,8 +13,14 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from mayen.core.feed import Feed
-from mayen.ports.events import Event, EventKind, SessionState, ref
-from mayen.ports.screen import encode_reminder, encode_state, encode_tool, encode_utterance
+from mayen.ports.events import Event, EventKind, FaultPart, SessionState, ref
+from mayen.ports.screen import (
+    encode_fault,
+    encode_reminder,
+    encode_state,
+    encode_tool,
+    encode_utterance,
+)
 from mayen.ports.timers import TimerStore
 from mayen.ports.tools import Sensitivity, ToolResult, ToolSpec
 from mayen.ports.transcript import Utterance
@@ -79,6 +86,8 @@ class Screen:
             return None
         if header.kind is EventKind.TURN_STARTED:
             return self._reminder(item)
+        if header.kind is EventKind.FAULT:
+            return encode_fault(FaultPart(item.body["part"]), str(item.body["detail"]))
         if header.kind is not EventKind.STATE_CHANGED:
             return None
         return encode_state(SessionState(item.body["state"]))

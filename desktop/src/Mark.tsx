@@ -5,13 +5,17 @@
 import { motion, type Transition } from 'motion/react'
 import type { SessionState } from './contract'
 
-// offline: çekirdeğe bağlantı yok (sunucu kapalı, ağ koptu, mikrofon açılamadı)
-export type MarkState = SessionState | 'failed' | 'offline'
+// failed: az önce bir tool isteği yerine getiremedi (kısa süre); fault: Mayen'in bir parçası
+// bozuk (yeni tur başlayana kadar); offline: çekirdeğe bağlantı yok (sunucu kapalı, ağ koptu,
+// mikrofon açılamadı)
+export type MarkState = SessionState | 'failed' | 'fault' | 'offline'
 
 const W = 67.06
 const H = 58
 const BAR = 12.69
 const V = 'M19.94,5.04L33.53,23.96L47.12,5.04L47.12,25.04L33.53,43.96L19.94,25.04Z'
+// V'nin alt ucu (43.96) dikmelerin tabanına (H) inene kadar
+const V_DROP = H - 43.96
 
 /** Geçiş: hedefi aşmadan yavaşlayarak durur (köşe çiziminin eğrisi). */
 const EASE: Transition = { duration: 0.45, ease: [0.2, 0.7, 0.2, 1] }
@@ -47,6 +51,12 @@ const POSES: Record<MarkState, Poses> = {
     v: { ...REST, y: [0, 4, 0] },
     tv: { duration: 0.7, ease: [0.2, 0.7, 0.2, 1] },
   },
+  // Bir parça bozuk: V dikmelerin tabanına düşmüş kalır, dikmeler söner
+  fault: {
+    left: { ...REST, opacity: 0.45 }, right: { ...REST, opacity: 0.45 },
+    v: { ...REST, y: V_DROP },
+    tl: SLOW, tr: SLOW, tv: SLOW,
+  },
   // Bağlantı yok: M dağılır; parçalar ayrılıp söner, bağlantı gelince yerine oturur
   offline: {
     left: { ...REST, x: -12, opacity: 0.35 }, right: { ...REST, x: 12, opacity: 0.35 },
@@ -67,6 +77,7 @@ const BAR_FILL: Record<MarkState, string> = {
   speaking: WHITE,
   awaiting_confirmation: 'var(--vurgu)',
   failed: WHITE,
+  fault: WHITE,
   offline: WHITE,
 }
 
@@ -78,6 +89,7 @@ const V_FILL: Record<MarkState, string> = {
   speaking: 'var(--vurgu)',
   awaiting_confirmation: 'var(--vurgu)',
   failed: 'var(--vurgu)',
+  fault: 'var(--vurgu)',
   offline: 'var(--kagit-3)',
 }
 
@@ -85,7 +97,7 @@ function Brackets({ state, size }: { state: MarkState; size: number }) {
   const r = size * 0.09
   const half = size / 2
   const scale = state === 'listening' ? 0.9 : 1
-  const color = state === 'awaiting_confirmation' || state === 'failed' ? 'var(--vurgu)'
+  const color = state === 'awaiting_confirmation' || state === 'failed' || state === 'fault' ? 'var(--vurgu)'
     : state === 'idle' || state === 'offline' ? 'var(--cerceve)' : 'var(--cerceve-vurgu)'
   // Bağlantı yokken köşeler yavaşça belirip kaybolur: yeniden deneniyor
   const offline = state === 'offline'

@@ -7,6 +7,7 @@ verilir: hangi motorun kullanılacağı hattın kuralı değildir. STT ve TTS'in
 config'teki model servisleridir (`Core.speech`); modeller çekirdekte yüklenmez (§18).
 """
 
+import asyncio
 import importlib
 import pkgutil
 from collections.abc import Callable, Mapping, Sequence
@@ -91,7 +92,7 @@ from mayen.pipeline.tools import AuthorizedTools, Shown
 from mayen.pipeline.wake import ServiceWake, WakeStart
 from mayen.ports.channels import AudioInput
 from mayen.ports.devices import DeviceControl
-from mayen.ports.events import Clock
+from mayen.ports.events import Clock, FaultPart
 from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
 from mayen.ports.people import DeviceId
@@ -526,6 +527,15 @@ def voice_session(
         voice.requester,
         shown,
     )
+    if isinstance(voice.vad, ServiceVAD):
+        # Analizci kendi iş parçacığındadır; kayıt döngüde yazılır.
+        loop = asyncio.get_running_loop()
+        events = c.events
+
+        def vad_fault(detail: str) -> None:
+            loop.call_soon_threadsafe(events.fault, FaultPart.VAD, detail)
+
+        voice.vad.on_fault = vad_fault
     pipeline = Pipeline(
         [
             voice.input,

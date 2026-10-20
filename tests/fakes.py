@@ -119,6 +119,7 @@ class FakeSpeech:
     embed_model: str = "ecapa"
     embed_vector: list[float] = field(default_factory=lambda: [0.6, 0.8])
     word_ends: str | None = None  # TTS yanıtının kelime zamanları başlığı; yoksa gönderilmez
+    healthy: bool = True  # değilse sağlık kontrolü 503 döner: servis ayakta değil
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -143,6 +144,8 @@ class FakeSpeech:
         )
 
     async def health(self, _: web.Request) -> web.Response:
+        if not self.healthy:
+            raise web.HTTPServiceUnavailable
         return web.json_response(
             {
                 "schema_version": self.version,

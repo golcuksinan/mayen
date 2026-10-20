@@ -186,6 +186,7 @@ MIGRATIONS: Sequence[Sequence[str]] = (
     ),
     rebuild_events(),  # status unsupported
     ("ALTER TABLE people ADD COLUMN location TEXT",),
+    rebuild_events(),  # fault
 )
 
 

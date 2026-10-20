@@ -53,6 +53,19 @@ class EventKind(StrEnum):
     STT_SEGMENT = "stt.segment"
     LLM_USAGE = "llm.usage"
     STATE_CHANGED = "state.changed"
+    # Sistemin bir parçası bozuldu (§5.4 hata kanalı, §14); tool'un `error` sonucu değildir.
+    FAULT = "fault"
+
+
+class FaultPart(StrEnum):
+    """`fault` olayında bozulan parça."""
+
+    MODEL = "model"
+    STT = "stt"
+    TTS = "tts"
+    WAKE = "wake"
+    VAD = "vad"
+    OTHER = "other"  # hatta hata bildiren başka bir işlemci; adı ayrıntıdadır
 
 
 class SessionState(StrEnum):

@@ -9,6 +9,7 @@ import { THEME } from '../../panel/src/theme'
 import { CardBody, failed, TITLE } from './cards'
 import { Focus } from './Focus'
 import { Mark, type MarkState } from './Mark'
+import type { FaultPart } from './contract'
 import { isNight, useScreen, type Card, type Connection, type Screen } from './screen'
 
 const LOGO = logo
@@ -23,12 +24,23 @@ const CONNECTION: Record<Connection, string> = {
 
 const STATE: Record<MarkState, string> = {
   failed: 'failed',
+  fault: 'fault',
   offline: 'no connection',
   idle: 'idle',
   listening: 'listening',
   thinking: 'thinking',
   speaking: 'speaking',
   awaiting_confirmation: 'awaiting confirmation',
+}
+
+// Bozulan parçanın adı; ayrıntı (servisin kendi hata metni) altında küçük yazılır
+const FAULT: Record<FaultPart, string> = {
+  model: 'model down',
+  stt: 'speech-to-text down',
+  tts: 'voice down',
+  wake: 'wake word down',
+  vad: 'voice detection down',
+  other: 'fault',
 }
 
 const ALERT_MS = 8000
@@ -45,7 +57,7 @@ function useNow(ms: number) {
 const FAIL_MS = 1600
 
 // Deneme kipi (D tuşu): konuşmadan bütün durumları sırayla gösterir
-const DEMO: MarkState[] = ['idle', 'listening', 'thinking', 'speaking', 'awaiting_confirmation', 'failed', 'offline']
+const DEMO: MarkState[] = ['idle', 'listening', 'thinking', 'speaking', 'awaiting_confirmation', 'failed', 'fault', 'offline']
 
 function useDemo() {
   const [on, setOn] = useState(false)
@@ -93,6 +105,7 @@ function useFullscreen() {
 
 function markState(screen: Screen, now: number): MarkState {
   if (screen.connection !== 'live') return 'offline'
+  if (screen.fault) return 'fault'
   const last = screen.cards[0]
   if (last && failed(last) && now - last.at < FAIL_MS) return 'failed'
   return screen.state
@@ -100,7 +113,7 @@ function markState(screen: Screen, now: number): MarkState {
 
 function level(screen: Screen, now: number) {
   const recentFailure = screen.cards.some(c => failed(c) && now - c.at < ALERT_MS)
-  if (screen.state === 'awaiting_confirmation' || recentFailure || screen.connection === 'lost') return 'alert'
+  if (screen.state === 'awaiting_confirmation' || recentFailure || screen.fault || screen.connection === 'lost') return 'alert'
   return screen.state === 'idle' ? 'calm' : 'active'
 }
 
@@ -138,9 +151,16 @@ function State({ screen, mark, demo, size, style }:
         <Mark state={mark} size={size} />
       </motion.div>
       <motion.span key={mark} className="etiket" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-        style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' || mark === 'offline' ? 'var(--vurgu)' : 'var(--isaret)' }}>
-        {mark === 'offline' && !demo ? CONNECTION[screen.connection] : STATE[mark]}
+        style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' || mark === 'fault' || mark === 'offline' ? 'var(--vurgu)' : 'var(--isaret)' }}>
+        {mark === 'offline' && !demo ? CONNECTION[screen.connection]
+          : mark === 'fault' && screen.fault ? FAULT[screen.fault.part] : STATE[mark]}
       </motion.span>
+      {mark === 'fault' && screen.fault && (
+        <motion.span key={screen.fault.detail} className="soluk" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+          style={{ fontSize: 12, maxWidth: 320, textAlign: 'center', overflowWrap: 'anywhere' }}>
+          {screen.fault.detail}
+        </motion.span>
+      )}
     </section>
   )
 }
@@ -179,7 +199,7 @@ export default function App() {
   const narrow = useNarrow()
   const mark = demo ?? markState(screen, now)
   const lvl = demo
-    ? (demo === 'awaiting_confirmation' || demo === 'failed' || demo === 'offline' ? 'alert' : demo === 'idle' ? 'calm' : 'active')
+    ? (demo === 'awaiting_confirmation' || demo === 'failed' || demo === 'fault' || demo === 'offline' ? 'alert' : demo === 'idle' ? 'calm' : 'active')
     : level(screen, now)
 
   return (

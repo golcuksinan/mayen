@@ -16,7 +16,7 @@ from mayen.app.screen import Screen
 from mayen.clients import screen as desktop_screen
 from mayen.core.feed import Feed
 from mayen.ports.devices import Capability, Command
-from mayen.ports.events import Event, EventId, EventKind, Header, SessionState
+from mayen.ports.events import Event, EventId, EventKind, FaultPart, Header, SessionState
 from mayen.ports.screen import SCHEMA_VERSION, encode_utterance, screen_message
 from mayen.ports.timers import Timer, TimerState
 from mayen.ports.tools import (
@@ -107,6 +107,26 @@ async def test_only_this_sessions_state_and_words_said_in_a_turn_are_followed() 
         ("state", "listening"),
         ("utterance", "hava nasıl"),
     ]
+
+
+async def test_a_fault_reaches_the_screen_apart_from_tool_errors() -> None:
+    feed, sent = Feed(), Sent()
+    following = asyncio.create_task(Screen("s1", sent, lambda: True).follow(feed))
+    await asyncio.sleep(0)
+    for session in ("s2", "s1"):
+        header = Header(EventId(uuid.uuid4()), EventKind.FAULT, "x", NOW, session)
+        feed.publish(
+            Event(header, {"part": FaultPart.TTS.value, "detail": "TTS service: down"})
+        )
+    await asyncio.sleep(0.01)
+    following.cancel()
+    [message] = sent
+    # Tool sonucunun `status` ve `error` alanları burada yok: ekran ikisini karıştıramaz.
+    assert {k: v for k, v in message.items() if k != "schema_version"} == {
+        "type": "fault",
+        "part": "tts",
+        "detail": "TTS service: down",
+    }
 
 
 def test_the_language_tags_of_what_mayen_said_are_not_shown() -> None:

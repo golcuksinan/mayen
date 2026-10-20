@@ -116,7 +116,8 @@ export function level(items: Item[], all: Session[], now: number): Level {
   const since = new Date(now - ALERT_WINDOW_MS).toISOString()
   for (let k = items.length - 1; k >= 0 && items[k].time >= since; k--) {
     const i = items[k]
-    if (isEvent(i) && i.status === 'error') return 'alert'
+    // `fault` bir parçanın bozulmasıdır, tool'un `error` durumundan ayrı bir olay türü
+    if (isEvent(i) && (i.status === 'error' || i.kind === 'fault')) return 'alert'
   }
   return all.some(s => s.state !== 'idle') ? 'active' : 'calm'
 }

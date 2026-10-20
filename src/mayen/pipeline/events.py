@@ -9,14 +9,19 @@ kapısı yazar: gözlemci kareyi geç görebilir, sözün kaydını ise arkadaki
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from pipecat.frames.frames import MetricsFrame
+from pipecat.frames.frames import ErrorFrame, MetricsFrame
 from pipecat.metrics.metrics import LLMUsageMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
+from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.services.llm_service import LLMService
+from pipecat.services.stt_service import STTService
+from pipecat.services.tts_service import TTSService
 
 from mayen.core.events import Recorder
 from mayen.core.state import StateTracker
 from mayen.core.transcript import Transcript
-from mayen.ports.events import Event, EventKind, SessionState
+from mayen.pipeline.wake import ServiceWake
+from mayen.ports.events import Event, EventKind, FaultPart, SessionState
 from mayen.ports.tools import Caller, Status
 from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
@@ -59,6 +64,23 @@ class SessionEvents:
             related=related,
         )
 
+    def fault(self, part: FaultPart, detail: str) -> Event:
+        """Bozulan parça (§5.4 hata kanalı, §14: hata hem kayda hem kişiye)."""
+        return self.emit(EventKind.FAULT, __name__, {"part": part.value, "detail": detail})
+
+
+def fault_part(processor: FrameProcessor | None) -> FaultPart:
+    """Hata karesini üreten işlemcinin parçası."""
+    for kind, part in (
+        (LLMService, FaultPart.MODEL),
+        (STTService, FaultPart.STT),
+        (TTSService, FaultPart.TTS),
+        (ServiceWake, FaultPart.WAKE),
+    ):
+        if isinstance(processor, kind):
+            return part
+    return FaultPart.OTHER
+
 
 def session_state(events: SessionEvents) -> StateTracker:
     """Oturumun durumu; her değişim bir `state.changed` olayıdır (§5.4, §5.5)."""
@@ -92,7 +114,8 @@ class SessionTranscript:
 
 
 class EventObserver(BaseObserver):
-    """LLM token sayıları; yalnızca hatta kullanım ölçümü açıkken gelir."""
+    """LLM token sayıları (yalnızca hatta kullanım ölçümü açıkken gelir) ve hattın hata
+    kareleri: Pipecat'in servisleri hatayı yukarı akan bir kareyle bildirir."""
 
     def __init__(self, events: SessionEvents) -> None:
         # Her kare hattın her adımında yeniden itilir; olay ilk itilişte bir kez üretilir.
@@ -101,7 +124,13 @@ class EventObserver(BaseObserver):
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
-        if isinstance(frame, MetricsFrame):
+        if isinstance(frame, ErrorFrame):
+            detail = frame.error
+            part = fault_part(frame.processor)
+            if part is FaultPart.OTHER and frame.processor is not None:
+                detail = f"{frame.processor.name}: {detail}"
+            self._events.fault(part, detail)
+        elif isinstance(frame, MetricsFrame):
             for metric in frame.data:
                 if isinstance(metric, LLMUsageMetricsData):
                     self._events.emit(

@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
-from mayen.ports.events import SessionState, stamp
+from mayen.ports.events import FaultPart, SessionState, stamp
 from mayen.ports.speech import untagged
 from mayen.ports.timers import Timer
 from mayen.ports.tools import ToolResult
@@ -26,6 +26,7 @@ class ScreenKind(StrEnum):
     UTTERANCE = "utterance"  # oturumda bir söz: kişinin ya da Mayen'in (§11)
     TOOL = "tool"  # bir tool çağrısının sonucu, modelin gördüğü hâliyle
     REMINDER = "reminder"  # çalan hatırlatma: turu açan zamanlayıcının kaydı (§12)
+    FAULT = "fault"  # sistemin bir parçası bozuldu (§5.4 hata kanalı); tool sonucu değil
 
 
 def _encode(kind: ScreenKind, fields: Mapping[str, Any]) -> str:
@@ -57,6 +58,12 @@ def encode_reminder(timer: Timer) -> str:
         ScreenKind.REMINDER,
         {"text": timer.text, "due": stamp(timer.due), "priority": timer.priority.value},
     )
+
+
+def encode_fault(part: FaultPart, detail: str) -> str:
+    """Bozulan parça ve hatanın kendi metni. Tool'un `error` durumundan ayrıdır: o, isteğin
+    yerine getirilemediğidir; bu, sistemin bir parçasının çalışmadığı."""
+    return _encode(ScreenKind.FAULT, {"part": part.value, "detail": detail})
 
 
 def encode_tool(tool: str, arguments: Mapping[str, Any], result: ToolResult) -> str:
