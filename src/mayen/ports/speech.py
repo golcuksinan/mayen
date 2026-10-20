@@ -103,8 +103,9 @@ class Part:
     text: str
 
 
-TAG = re.compile(r"<(/?)([a-z]{2})>")
-"""Modelin metne koyduğu dil işareti (`<tr>…</tr>`, §7)."""
+TAG = re.compile(r"<(/?)([a-z]{2})(?:\s[^<>]*)?>")
+"""Modelin metne koyduğu dil işareti (`<tr>…</tr>`, §7); öznitelik yazdıysa da
+(`<tr lang="tr">`)."""
 
 
 def untagged(text: str) -> str:

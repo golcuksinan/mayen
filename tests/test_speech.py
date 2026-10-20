@@ -59,7 +59,14 @@ from mayen.pipeline.speech import (
     word_times,
 )
 from mayen.ports.channels import AudioInput
-from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Embedding, Part, Transcription
+from mayen.ports.speech import (
+    SCHEMA_VERSION,
+    VAD_FRAME,
+    Embedding,
+    Part,
+    Transcription,
+    untagged,
+)
 
 
 @pytest.fixture
@@ -75,6 +82,15 @@ def test_split_parts_carries_an_open_tag() -> None:
     parts, open_tag = split_parts("Hanım</tr> is saved.", open_tag)
     assert parts == [Part("tr", "Hanım"), Part(None, " is saved.")]
     assert open_tag is None
+
+
+def test_a_tag_with_attributes_is_still_a_tag() -> None:
+    # Model işareti bazen öznitelikle yazıyor (20 Eki: ~95 işaretin 5'i); ekranda görünüyordu.
+    text = 'Should I play <tr lang="tr">PipePipe</tr>?'
+    parts, open_tag = split_parts(text, None)
+    assert parts == [Part(None, "Should I play "), Part("tr", "PipePipe"), Part(None, "?")]
+    assert open_tag is None
+    assert untagged(text) == "Should I play PipePipe?"
 
 
 def test_a_lone_tag_has_nothing_to_read() -> None:
