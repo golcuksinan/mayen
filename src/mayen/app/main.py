@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import logging
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -203,14 +204,13 @@ async def _replay(core: Core, db: Database, args: argparse.Namespace) -> int:
 
 async def _serve(core: Core, config: Config) -> None:
     server = uvicorn.Server(
-        uvicorn.Config(
-            core_app(core, LoopbackIsLocal(TailscaleIdentity())),
-            host=config.channel.host,
-            port=config.channel.port,
-            log_config=None,
-        )
+        uvicorn.Config(core_app(core, LoopbackIsLocal(TailscaleIdentity())), log_config=None)
     )
-    await server.serve()
+    # Bağlanamayan bir adres (Tailscale kapalıyken tailnet adresi) açılışı durdurur.
+    sockets = [
+        socket.create_server((host, config.channel.port)) for host in config.channel.hosts
+    ]
+    await server.serve(sockets)
 
 
 if __name__ == "__main__":

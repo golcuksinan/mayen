@@ -29,7 +29,13 @@ from mayen.core.turns import Turns
 from mayen.pipeline.session import Sessions, TriggerGate
 from mayen.pipeline.text import TextInput, TextOutput, WireSerializer
 from mayen.pipeline.voice import VoiceSerializer
-from mayen.ports.channels import VOICE_SCHEMA_VERSION, MessageKind, VoiceHello, WireMessage
+from mayen.ports.channels import (
+    VOICE_SCHEMA_VERSION,
+    AudioInput,
+    MessageKind,
+    VoiceHello,
+    WireMessage,
+)
 from mayen.ports.confirmation import Answer
 from mayen.ports.events import EventKind
 from mayen.ports.tools import Caller, Role
@@ -87,6 +93,19 @@ def test_voice_hello_round_trip_and_other_versions_are_refused() -> None:
     for raw in (other, "not json", "{}"):
         with pytest.raises(ValueError):
             VoiceHello.decode(raw)
+
+
+def test_audio_input_round_trip_and_other_messages_are_not_it() -> None:
+    heard = AudioInput("bluetooth_headset", "soundcore Liberty 5")
+    assert AudioInput.decode(heard.encode()) == heard
+    assert AudioInput.decode('{"type": "audio_input", "source": "builtin_mic"}') == AudioInput(
+        "builtin_mic"
+    )
+    # cihaz komutunun cevabı bağlantıya kalır
+    assert AudioInput.decode('{"type": "result", "id": "1"}') is None
+    for raw in ('{"type": "audio_input"}', "not json"):
+        with pytest.raises(ValueError):
+            AudioInput.decode(raw)
 
 
 async def test_voice_serializer_carries_only_pcm() -> None:

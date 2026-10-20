@@ -29,7 +29,7 @@ from mayen.app.wiring import Core, Session, Voice, text_session, voice_session
 from mayen.core.devices import DeviceLink
 from mayen.pipeline.text import WireSerializer
 from mayen.pipeline.voice import VoiceSerializer
-from mayen.ports.channels import DeviceIdentity, VoiceHello
+from mayen.ports.channels import AudioInput, DeviceIdentity, VoiceHello
 from mayen.ports.people import LOCAL_DEVICE, DeviceId
 
 TEXT_PATH = "/text"
@@ -137,8 +137,23 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
             # Cihaz komutları ve ekran mesajları sesle aynı bağlantıdan gider (§9.7, §7).
             link = DeviceLink()
             screens: list[Screen] = []  # oturum kurulunca tek ekran
+            microphone: AudioInput | None = None  # istemcinin son bildirdiği
+
+            def receive(raw: str) -> None:
+                nonlocal microphone
+                try:
+                    heard = AudioInput.decode(raw)
+                except ValueError as e:
+                    log.warning("dropped a client message: %s", e)
+                    return
+                if heard is None:
+                    link.receive(raw)
+                    return
+                log.info("audio input: %s", heard.source)
+                microphone = heard
+
             params = FastAPIWebsocketParams(
-                serializer=VoiceSerializer(VOICE_INPUT_RATE, link.receive),
+                serializer=VoiceSerializer(VOICE_INPUT_RATE, receive),
                 audio_in_enabled=True,
                 audio_in_sample_rate=VOICE_INPUT_RATE,
                 audio_out_enabled=True,
@@ -166,7 +181,7 @@ def core_app(core: Core, identity: DeviceIdentity) -> FastAPI:
                         core.timers,
                     )
                 )
-                stt, tts, vad, turn = core.speech()
+                stt, tts, vad, turn = core.speech(lambda: microphone)
                 # Konuşmacı tanıma config'te yoksa söz cihazın kişisinindir.
                 parts = Voice(
                     transport.input(),

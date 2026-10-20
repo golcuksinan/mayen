@@ -1,7 +1,7 @@
 // Bir cihazın ekranı: solda durum ve konuşma, sağda tool kartları; odak yerleşimi Focus.tsx'te. Son çalışan tool'un kartı
 // öne (sol üste) gelir, ötekiler yer açarak kayar. Renk yoğunluğu panelinkiyle aynı dildir.
 import { AnimatePresence, LayoutGroup, motion } from 'motion/react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import logo from '../../panel/src/mayen-yazi.svg?raw'
 import { YERLESIM } from '../../panel/src/hareket'
 import { Panel } from '../../panel/src/parts'
@@ -128,6 +128,37 @@ function useEnd(count: number) {
   return setEl
 }
 
+// Ortadaki işaret ve durumun adı
+function State({ screen, mark, demo, size, style }:
+  { screen: Screen; mark: MarkState; demo: MarkState | null; size: number; style: CSSProperties }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                      minHeight: 0, ...style }}>
+      <motion.div layoutId="mark" transition={YERLESIM}>
+        <Mark state={mark} size={size} />
+      </motion.div>
+      <motion.span key={mark} className="etiket" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+        style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' || mark === 'offline' ? 'var(--vurgu)' : 'var(--isaret)' }}>
+        {mark === 'offline' && !demo ? CONNECTION[screen.connection] : STATE[mark]}
+      </motion.span>
+    </section>
+  )
+}
+
+// Dikey ekran (telefon): üç sütun yerine üst üste işaret, konuşma ve son iki kart
+const NARROW = '(max-aspect-ratio: 1/1)'
+
+function useNarrow() {
+  const [narrow, setNarrow] = useState(() => matchMedia(NARROW).matches)
+  useEffect(() => {
+    const query = matchMedia(NARROW)
+    const change = () => setNarrow(query.matches)
+    query.addEventListener('change', change)
+    return () => query.removeEventListener('change', change)
+  }, [])
+  return narrow
+}
+
 function CardPanel({ card, order, first }: { card: Card; order: number; first: boolean }) {
   return (
     <Panel id={`card-${card.tool}`} title={TITLE[card.tool] ?? card.tool.replace(/_/g, ' ')}
@@ -145,6 +176,7 @@ export default function App() {
   const demo = useDemo()
   useFullscreen()
   const focus = useFocus(screen, now)
+  const narrow = useNarrow()
   const mark = demo ?? markState(screen, now)
   const lvl = demo
     ? (demo === 'awaiting_confirmation' || demo === 'failed' || demo === 'offline' ? 'alert' : demo === 'idle' ? 'calm' : 'active')
@@ -152,7 +184,7 @@ export default function App() {
 
   return (
     <motion.div initial={THEME.calm} animate={THEME[lvl]} transition={{ duration: 0.9, ease: 'easeInOut' }}
-      style={{ height: '100vh', display: 'flex', flexDirection: 'column', padding: '20px 28px 24px', background: 'var(--zemin)',
+      style={{ height: '100vh', display: 'flex', flexDirection: 'column', padding: narrow ? '16px 16px 20px' : '20px 28px 24px', background: 'var(--zemin)',
                // Geçişte kayan parçalar pencereden taşabilir; pencere kaydırılmaz, içerik kendi alanında kayar.
                overflow: 'hidden' }}>
       <AnimatePresence initial={false}>
@@ -176,22 +208,26 @@ export default function App() {
 
       <LayoutGroup>
         {focus ? <Focus screen={screen} mark={mark} now={now} /> : (
+        narrow ? (
+        <main style={{ flex: 1, minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
+                       gridTemplateColumns: 'repeat(2, minmax(0,1fr))',
+                       gridTemplateRows: 'auto minmax(0,1fr) minmax(0,0.7fr)' }}>
+          <State screen={screen} mark={mark} demo={demo} size={180} style={{ gridColumn: '1 / 3', gap: 16 }} />
+          <Panel id="talk" title="Conversation" order={1} style={{ gridColumn: '1 / 3' }}>
+            <Talk screen={screen} />
+          </Panel>
+          {screen.cards.slice(0, 2).map((card, i) => (
+            <CardPanel key={card.tool} card={card} order={i + 2} first={i === 0} />
+          ))}
+        </main>
+        ) : (
         <main style={{ flex: 1, minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
                        gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr)',
                        gridTemplateRows: 'repeat(3, minmax(0,1fr))' }}>
           <Panel id="talk" title="Conversation" order={1} style={{ gridColumn: 1, gridRow: '1 / 4' }}>
             <Talk screen={screen} />
           </Panel>
-          <section style={{ gridColumn: 2, gridRow: '1 / 4', display: 'flex', flexDirection: 'column',
-                            alignItems: 'center', justifyContent: 'center', gap: 28, minHeight: 0 }}>
-            <motion.div layoutId="mark" transition={YERLESIM}>
-              <Mark state={mark} size={320} />
-            </motion.div>
-            <motion.span key={mark} className="etiket" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-              style={{ fontSize: 13, color: mark === 'awaiting_confirmation' || mark === 'failed' || mark === 'offline' ? 'var(--vurgu)' : 'var(--isaret)' }}>
-              {mark === 'offline' && !demo ? CONNECTION[screen.connection] : STATE[mark]}
-            </motion.span>
-          </section>
+          <State screen={screen} mark={mark} demo={demo} size={320} style={{ gridColumn: 2, gridRow: '1 / 4', gap: 28 }} />
           <div style={{ gridColumn: 3, gridRow: '1 / 4', minHeight: 0, display: 'grid', gap: 'var(--bosluk)',
                         gridTemplateRows: 'repeat(3, minmax(0,1fr))' }}>
             {screen.cards.slice(0, 3).map((card, i) => (
@@ -199,6 +235,7 @@ export default function App() {
             ))}
           </div>
         </main>
+        )
         )}
       </LayoutGroup>
     </motion.div>

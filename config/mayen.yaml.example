@@ -31,11 +31,11 @@ loop:                          # ajan döngüsünün dış sınırı (§8.8); a�
   max_steps: 5                 # geçerli çağrı taşıyan cevap sayısı
   max_corrections: 2           # bütün çağrıları bozuk cevap sayısı; adım harcamaz (§9.1)
 
-# Yazılı kanalın dinlediği adres (§7, §13). Erişim yalnızca özel ağdan: tailnet adresi ya da
-# yerel makine. Cihaz kimliği Tailscale'den okunur; Tailscale'den geçmeyen bağlantı ortak
+# Kanalların dinlediği adresler (§7, §13). Erişim yalnızca özel ağdan: yerel makine ve
+# tailnet adresi (`tailscale ip -4`). Cihaz kimliği Tailscale'den okunur; Tailscale'den geçmeyen bağlantı ortak
 # cihazdır (§10.1).
 channel:
-  host: 127.0.0.1
+  hosts: [127.0.0.1]
   port: 8765
 
 # Panel (§14): olayları ve durumu gösteren salt okunur web arayüzü. Yalnızca sahibin

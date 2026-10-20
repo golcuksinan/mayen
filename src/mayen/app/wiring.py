@@ -89,6 +89,7 @@ from mayen.pipeline.speech import (
 from mayen.pipeline.text import TextInput, TextOutput
 from mayen.pipeline.tools import AuthorizedTools, Shown
 from mayen.pipeline.wake import ServiceWake, WakeStart
+from mayen.ports.channels import AudioInput
 from mayen.ports.devices import DeviceControl
 from mayen.ports.events import Clock
 from mayen.ports.models import ModelRole
@@ -283,9 +284,11 @@ class Core:
             else caller_of(person)
         )
 
-    def speech(self) -> tuple[FrameProcessor, TtsFactory, VADAnalyzer, BaseTurnAnalyzer]:
+    def speech(
+        self, microphone: Callable[[], AudioInput | None] = lambda: None
+    ) -> tuple[FrameProcessor, TtsFactory, VADAnalyzer, BaseTurnAnalyzer]:
         """Config'teki STT ve TTS servislerinin istemcileri (§3); VAD ve sözün bitişini
-        bulan model de STT servisinde."""
+        bulan model de STT servisinde. `microphone`, istemcinin bildirdiği mikrofondur."""
         stt, tts = self.config.stt, self.config.tts
         if stt is None or tts is None:
             raise ConfigError("a voice session needs both stt and tts in the config")
@@ -300,6 +303,7 @@ class Core:
                 stt.language,
                 None if speaker is None else ServiceSpeaker(speaker.url),
                 record_dir=stt.record_dir,
+                microphone=microphone,
             ),
             make_tts,
             ServiceVAD(stt.url),

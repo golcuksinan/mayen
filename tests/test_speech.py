@@ -1,6 +1,7 @@
 """STT ve TTS servis istemcileri (§3, §7, §14): sahte servislere karşı."""
 
 import asyncio
+import json
 import struct
 import wave
 from collections.abc import AsyncIterator
@@ -57,6 +58,7 @@ from mayen.pipeline.speech import (
     split_parts,
     word_times,
 )
+from mayen.ports.channels import AudioInput
 from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, Embedding, Part, Transcription
 
 
@@ -176,6 +178,24 @@ async def test_each_transcribed_word_is_recorded_when_asked(
         assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (16000, 1, 2)
         assert w.getnframes() >= 2 * 1600
     assert audio.with_suffix(".txt").read_text(encoding="utf-8") == "hello\n"
+    assert not audio.with_suffix(".json").exists()  # istemci mikrofonunu bildirmedi
+
+
+async def test_the_client_microphone_is_recorded_beside_the_words(
+    fake: tuple[FakeSpeech, str], tmp_path: Path
+) -> None:
+    _, url = fake
+    record = tmp_path / "sozler"
+    heard = AudioInput("bluetooth_headset", "Liberty")
+    await run_test(
+        ServiceSTT(url, "en", join_turn_s=0, record_dir=record, microphone=lambda: heard),
+        frames_to_send=[*_speech(), SleepFrame(0.3)],
+    )
+    [side] = record.glob("*.json")
+    assert json.loads(side.read_text(encoding="utf-8")) == {
+        "input": {"source": "bluetooth_headset", "name": "Liberty"}
+    }
+    assert side.with_suffix(".txt").read_text(encoding="utf-8") == "hello\n"
 
 
 async def test_outside_a_turn_each_word_is_still_transcribed(

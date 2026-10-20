@@ -63,7 +63,7 @@ class LoopConfig(_Strict):
 
 
 class ChannelConfig(_Strict):
-    host: str
+    hosts: list[str] = Field(min_length=1)  # her biri ayrı dinlenir (yerel, tailnet)
     port: int = Field(ge=1, le=65535)
 
 

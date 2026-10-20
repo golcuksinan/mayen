@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 import wave
 from collections.abc import AsyncGenerator, Callable, Mapping
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,7 @@ from pipecat.utils.time import time_now_iso8601
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import ClientConnection, connect
 
+from mayen.ports.channels import AudioInput
 from mayen.ports.speech import (
     EMBED,
     HEALTH,
@@ -155,8 +157,11 @@ def split_parts(text: str, open_tag: str | None) -> tuple[list[Part], str | None
     return [p for p in parts if p.text.strip()], open_tag
 
 
-def _record(directory: Path, pcm: bytes, sample_rate: int, text: str) -> None:
-    """Sözün sesi `<zaman>.wav`, metni yanında `<zaman>.txt`; adı yerel zamandır."""
+def _record(
+    directory: Path, pcm: bytes, sample_rate: int, text: str, microphone: AudioInput | None
+) -> None:
+    """Sözün sesi `<zaman>.wav`, metni yanında `<zaman>.txt`; adı yerel zamandır. İstemci
+    mikrofonunu bildirdiyse o da `<zaman>.json`'a."""
     try:
         directory.mkdir(parents=True, exist_ok=True)
         stem = directory / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -166,6 +171,11 @@ def _record(directory: Path, pcm: bytes, sample_rate: int, text: str) -> None:
             w.setframerate(sample_rate)
             w.writeframes(pcm)
         stem.with_suffix(".txt").write_text(text + "\n", encoding="utf-8")
+        if microphone is not None:
+            stem.with_suffix(".json").write_text(
+                json.dumps({"input": asdict(microphone)}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
     except OSError as e:
         log.error("recording the words: %s", e)  # kayıt düşse de söz yazıya dökülmüş olur
 
@@ -330,6 +340,7 @@ class ServiceSTT(STTService):
         speaker: ServiceSpeaker | None = None,
         join_turn_s: float = _JOIN_TURN_S,
         record_dir: Path | None = None,
+        microphone: Callable[[], AudioInput | None] = lambda: None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
         super().__init__(settings=STTSettings(model=None, language=None), **kwargs)
@@ -337,6 +348,7 @@ class ServiceSTT(STTService):
         self._language = language  # dinleme dili; çıkış dilinden bağımsız (§8.6)
         self._join_turn_s = join_turn_s
         self._record_dir = record_dir  # her sözün sesi ve metni (`SttConfig.record_dir`)
+        self._microphone = microphone  # istemcinin bildirdiği mikrofon, kayda
         self._speaker = speaker
         self._http: aiohttp.ClientSession | None = None
         self._rate = 0
@@ -459,7 +471,12 @@ class ServiceSTT(STTService):
                         frame.metadata[VOICE_S] = len(audio) / 2 / self.sample_rate
                     if self._record_dir is not None:
                         await asyncio.to_thread(
-                            _record, self._record_dir, audio, self.sample_rate, frame.text
+                            _record,
+                            self._record_dir,
+                            audio,
+                            self.sample_rate,
+                            frame.text,
+                            self._microphone(),
                         )
                 yield frame
         finally:

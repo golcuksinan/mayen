@@ -339,7 +339,7 @@ kuralına uyar (§8.8).
 
 | Alan | Ne var |
 |---|---|
-| **Ses girişi** | Çok tüketicili akış (STT + kayıt + konuşmacı tanıma). Çalınan sesi referans olarak alabilir |
+| **Ses girişi** | Çok tüketicili akış (STT + kayıt + konuşmacı tanıma). Çalınan sesi referans olarak alabilir. İstemci hangi mikrofonu kullandığını bildirir; bilgi yalnızca sesin kaydına yazılır, hiçbir karara girmez: bir yazıya dökme ya da wake hatasının mikrofondan mı geldiği ancak kayıt hangi mikrofondan geldiğini söylüyorsa ayrılabilir |
 | **Echo cancellation** | Donanımda, istemcide ya da yazılımda; hattın ses girişinden önce. AEC yoksa istemci yarım dubleks çalışır (asistan konuşurken mikrofon kapalı); bu söz kesmeyi öldürür, yani bir kaçış yolu, çözüm değil |
 | **Sürekli STT** | STT sürekli çalışır, transkript her zaman kaydedilir. Sunucuya sürekli ses akar; taşıma biçimi **AÇIK** (§16.9). Yazıya dökme ve konuşmacı tanıma, sözün bitişini bulmak için kesilen parçalarla değil turun bütün sesiyle yapılır: kısa parçada ikisi de yanılır |
 | **Wake word** | Bir tetikleyici adaptörü; sunucuda, ses girişinden beslenir: ses zaten sürekli sunucuya akar, istemci her cihaz için yeniden yazılmaz. Model ve eşik config'tedir; söz, eğitilmiş modelin kendisidir |
@@ -401,6 +401,10 @@ yazmaz.** Sesli bağlantıda istemciye sesin yanında oturumunun durumu, sözler
 tool sonuçları ve çalan hatırlatmanın kaydı gider; ekran yalnızca bunlardan çizilir. Model ekrana yazsaydı, gösterilen veri
 depodan değil modelden gelirdi ve uydurulabilirdi. Ortak cihazda `PERSONAL` bir tool sonucu
 ekrana da gitmez.
+
+**Bağlantı ekrandan bağımsız yaşar; yeniden açılan ekran bağlantının o anki durumunu ve
+oturumun ekran mesajlarını baştan alır.** Ekran kapanınca bağlantı da kapansaydı cebe giren
+cihaz sağırlaşırdı; baştan almayan ekran, bağlıyken "bağlanıyor" gösterir.
 
 **Ekranın iki yerleşimi vardır: normal ve odak.** Odak, kişinin gözü başka yerdeyken
 içindir: Mayen'e açtırdığı uygulama `Game` ya da `Video` ile `Player` türündeyse ya da gece
@@ -1196,6 +1200,8 @@ kurallar:
   cevabın parçaları olabilir; istemci onları yeni cevabın ilk parçasından ayırabilmelidir.
   Ses ile kesme bildiriminin ayrı kanallardan gittiği bir taşımada sıranın korunduğu ayrıca
   doğrulanır.
+  İstisnası istemcinin çıkış tamponudur: kesilen cevabın tamponda kalmış kısmı çalar; tampon
+  bu yüzden sesin kesilmeden çalması için gereken en kısa süreyle sınırlı tutulur.
 - **Bozuk ya da işlenirken hata veren bir çerçeve bağlantıyı kapatmaz;** hata olarak
   bildirilir. İstemci tarafı da bir çerçevede hata alınca ölmez; aksi hâlde tek bir hata
   okuma görevini öldürür ve istemci **sessizce sağırlaşır**.

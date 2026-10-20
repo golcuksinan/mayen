@@ -106,6 +106,8 @@ def test_home_in_storage_path_is_expanded(tmp_path: Path) -> None:
         (("timer: {}", "timer: {READ: [SECRET]}"), "SECRET"),
         # tanınmayan kişinin dilinde ses yok: ilk yabancıya asistan susar
         (("    British English: default", "    Turkish: default"), "default_language"),
+        (("hosts: [127.0.0.1]", "hosts: []"), "hosts"),  # dinlenecek adres yok
+        (("hosts: [127.0.0.1]", "host: 127.0.0.1"), "host"),  # eski tek adresli biçim
     ],
 )
 def test_bad_config_is_a_config_error(

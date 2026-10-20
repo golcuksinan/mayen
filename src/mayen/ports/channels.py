@@ -4,7 +4,8 @@ Sesli kanal: çekirdek bağlantı açılınca bir JSON selam (`VoiceHello`) yoll
 yönde de ikili mesajlar ham PCM'dir (16 bit, tek kanal, little-endian): istemciden
 `input_sample_rate`, çekirdekten `output_sample_rate` hızında. Çekirdek sesi çalınma hızında
 gönderir; istemci geldikçe çalar. Ses sürekli akar (§6, sürekli STT). Selamdan sonraki metin
-mesajları cihaz komutlarıdır (`ports.devices`).
+mesajları cihaz komutlarıdır (`ports.devices`); istemci ayrıca sesi hangi mikrofondan
+aldığını bildirebilir (`AudioInput`), bağlanınca ve değişince.
 
 İstemciler ayrı süreçlerdir ve yalnızca `ports`'u görür (§4); mesaj biçimi bu yüzden burada
 durur, çekirdeğin serileştiricisi de istemci de aynı tanımı kullanır.
@@ -71,6 +72,34 @@ class VoiceHello:
             return cls(int(data["input_sample_rate"]), int(data["output_sample_rate"]))
         except (TypeError, KeyError, json.JSONDecodeError) as e:
             raise ValueError(f"malformed hello: {e}") from e
+
+
+AUDIO_INPUT = "audio_input"
+
+
+@dataclass(frozen=True)
+class AudioInput:
+    """Sesin alındığı mikrofon: türü (`builtin_mic`, `wired_headset`, `bluetooth_headset`...)
+    ve aygıtın adı. Yalnızca sözün kaydına yazılır (`SttConfig.record_dir`); modele girmez."""
+
+    source: str
+    name: str = ""
+
+    def encode(self) -> str:
+        return json.dumps(
+            {"type": AUDIO_INPUT, "source": self.source, "name": self.name}, ensure_ascii=False
+        )
+
+    @classmethod
+    def decode(cls, raw: str | bytes) -> "AudioInput | None":
+        """Başka türden bir mesaj `None`; bozuk bir bildirim `ValueError` (§13)."""
+        try:
+            data: Any = json.loads(raw)
+            if not isinstance(data, dict) or data.get("type") != AUDIO_INPUT:
+                return None
+            return cls(str(data["source"]), str(data.get("name", "")))
+        except (KeyError, json.JSONDecodeError) as e:
+            raise ValueError(f"malformed audio input: {e}") from e
 
 
 class DeviceIdentity(Protocol):
