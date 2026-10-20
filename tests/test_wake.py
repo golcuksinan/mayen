@@ -77,16 +77,20 @@ async def test_without_a_wake_model_audio_flows_and_nobody_wakes(
 
 
 class Running:
-    def __init__(self) -> None:
-        self.value = False
+    def __init__(self, value: bool = False) -> None:
+        self.value = value
 
     def __call__(self) -> bool:
         return self.value
 
 
-async def _strategy(clock: FakeClock, running: Running) -> tuple[WakeStart, list[str]]:
+async def _strategy(
+    clock: FakeClock, running: Running, hears: Running | None = None
+) -> tuple[WakeStart, list[str]]:
     seen: list[str] = []
-    strategy = WakeStart(running, follow_up_s=3.0, clock=clock.monotonic)
+    strategy = WakeStart(
+        running, follow_up_s=3.0, clock=clock.monotonic, hears=hears or Running(True)
+    )
 
     async def started(_: object, __: object) -> None:
         seen.append("started")
@@ -115,6 +119,19 @@ async def test_wake_word_opens_a_turn() -> None:
     strategy, seen = await _strategy(clock, running)
     assert await strategy.process_frame(WakeWordFrame(score=0.9)) is ProcessFrameResult.STOP
     assert seen == ["started"]
+
+
+async def test_wake_word_opens_no_turn_while_the_session_does_not_hear() -> None:
+    # Başka bir tur sürerken (§5.3) toplayıcı susturulur ama wake karesi Pipecat'in
+    # susturduğu kareler arasında değil: tur açılsaydı, susturma kalkınca gelen söz boş
+    # tur sayılır ve model "anlamadım" derdi.
+    clock, running, hears = FakeClock(), Running(), Running(False)
+    strategy, seen = await _strategy(clock, running, hears)
+    assert await strategy.process_frame(WakeWordFrame(score=0.9)) is ProcessFrameResult.STOP
+    hears.value = True  # süren tur bitti; söz o sırada yazıya dökülüyordu
+    text = TranscriptionFrame("hey Mayen müziği durdur", "u", "t")
+    assert await strategy.process_frame(text) is ProcessFrameResult.STOP
+    assert seen == ["reset"]
 
 
 async def test_speech_in_a_running_turn_goes_on() -> None:

@@ -444,7 +444,7 @@ def _conversation(
         if follow_up_s is None
         else [
             # Pipecat'in varsayılan başlangıç stratejileri, önlerinde uyanıklık şartı.
-            WakeStart(lambda: gate.turn is not None, follow_up_s),
+            WakeStart(lambda: gate.turn is not None, follow_up_s, hears=gate.hears),
             VADUserTurnStartStrategy(),
             TranscriptionUserTurnStartStrategy(),
         ]

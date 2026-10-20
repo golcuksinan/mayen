@@ -115,8 +115,9 @@ class ServiceWake(FrameProcessor):
 class WakeStart(BaseUserTurnStartStrategy):  # type: ignore[no-untyped-call]  # Pipecat'te tipsiz
     """Sözün tur açabilmesi için uyanıklık ister; başlangıç stratejilerinin ilkidir.
 
-    `running` oturumda bir tur sürüp sürmediğidir. Uyanık değilken bütün kareler sonraki
-    stratejilere geçmeden durur ve duyulan metin toplayıcıdan silinir.
+    `running` oturumda bir tur sürüp sürmediğidir, `hears` oturumun şimdi söylenen sözü duyup
+    duymadığı (`TriggerGate.hears`). Uyanık değilken bütün kareler sonraki stratejilere
+    geçmeden durur ve duyulan metin toplayıcıdan silinir.
     """
 
     def __init__(
@@ -124,9 +125,11 @@ class WakeStart(BaseUserTurnStartStrategy):  # type: ignore[no-untyped-call]  # 
         running: Callable[[], bool],
         follow_up_s: float,
         clock: Callable[[], float] = time.monotonic,
+        hears: Callable[[], bool] = lambda: True,
     ) -> None:
         super().__init__()
         self._running = running
+        self._hears = hears
         self._follow_up_s = follow_up_s
         self._clock = clock
         self._bot_speaking = False
@@ -143,7 +146,10 @@ class WakeStart(BaseUserTurnStartStrategy):  # type: ignore[no-untyped-call]  # 
             self._bot_speaking = False
             self._follow_up_until = self._clock() + self._follow_up_s
         if isinstance(frame, WakeWordFrame):
-            await self.trigger_user_turn_started()
+            # Wake karesi Pipecat'in susturduğu kareler arasında değil; duyulmayan söz tur
+            # açmaz, yeniden söylenir (§5.3).
+            if self._hears():
+                await self.trigger_user_turn_started()
             return ProcessFrameResult.STOP
         if self.awake():
             return ProcessFrameResult.CONTINUE
