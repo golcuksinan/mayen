@@ -10,7 +10,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:  # döngü: bu portlar `ports.tools`'un sözlüğünü kullanır
     from mayen.ports.devices import DeviceControl
     from mayen.ports.events import Clock
-    from mayen.ports.forget import Forgetting
+    from mayen.ports.forget import Erasing
     from mayen.ports.notes import NoteStore
     from mayen.ports.timers import TimerStore
     from mayen.ports.weather import WeatherSource
@@ -147,8 +147,13 @@ class ToolContext(Protocol):
         ...
 
     @property
-    def forgetting(self) -> "Forgetting":
+    def forgetting(self) -> "Erasing":
         """Unut (§11.4); çağrının turuna bağlıdır."""
+        ...
+
+    @property
+    def deleting(self) -> "Erasing":
+        """Sil (§11.4); çağrının turuna bağlıdır."""
         ...
 
     @property

@@ -66,6 +66,7 @@ from websockets.exceptions import WebSocketException
 from websockets.sync.client import ClientConnection, connect
 
 from mayen.ports.channels import AudioInput
+from mayen.ports.forget import RECORDING_NAME
 from mayen.ports.speech import (
     EMBED,
     HEALTH,
@@ -95,6 +96,8 @@ log = logging.getLogger(__name__)
 VOICE = "mayen.voice"
 # İzin çıkarıldığı sesin süresi (sn); turun sözleri birlikte tanınırken ağırlığıdır.
 VOICE_S = "mayen.voice_s"
+# Sözün ses kaydının adı (`stt.record_dir` açıksa); kapı onu sözün STT olayına bağlar.
+RECORDING = "mayen.recording"
 
 # Akıştaki parça boyutu; ilk sesi geciktirmeyecek kadar küçük.
 _CHUNK = 4096
@@ -159,12 +162,14 @@ def split_parts(text: str, open_tag: str | None) -> tuple[list[Part], str | None
 
 def _record(
     directory: Path, pcm: bytes, sample_rate: int, text: str, microphone: AudioInput | None
-) -> None:
+) -> str | None:
     """Sözün sesi `<zaman>.wav`, metni yanında `<zaman>.txt`; adı yerel zamandır. İstemci
-    mikrofonunu bildirdiyse o da `<zaman>.json`'a."""
+    mikrofonunu bildirdiyse o da `<zaman>.json`'a. Kaydın adını döndürür: söz onu STT olayına
+    bağlar, sil kaydı oradan bulur (§11.4)."""
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        stem = directory / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        name = datetime.now().strftime(RECORDING_NAME)
+        stem = directory / name
         with wave.open(str(stem.with_suffix(".wav")), "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
@@ -178,6 +183,8 @@ def _record(
             )
     except OSError as e:
         log.error("recording the words: %s", e)  # kayıt düşse de söz yazıya dökülmüş olur
+        return None
+    return name
 
 
 async def _health(http: aiohttp.ClientSession, url: str) -> Health:
@@ -484,7 +491,7 @@ class ServiceSTT(STTService):
                         frame.metadata[VOICE] = await voice
                         frame.metadata[VOICE_S] = len(audio) / 2 / self.sample_rate
                     if self._record_dir is not None:
-                        await asyncio.to_thread(
+                        frame.metadata[RECORDING] = await asyncio.to_thread(
                             _record,
                             self._record_dir,
                             audio,

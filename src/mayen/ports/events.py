@@ -55,8 +55,10 @@ class EventKind(StrEnum):
     STATE_CHANGED = "state.changed"
     # Sistemin bir parçası bozuldu (§5.4 hata kanalı, §14); tool'un `error` sonucu değildir.
     FAULT = "fault"
-    # Unut (§11.4): unutulan kayıtlar `related`'da (`turn:`, `utterance:`); içerik taşımaz.
+    # Unut ve sil (§11.4): seçilen kayıtlar `related`'da (`turn:`, `utterance:`); içerik
+    # taşımaz.
     RECORD_FORGOTTEN = "record.forgotten"
+    RECORD_DELETED = "record.deleted"
 
 
 class FaultPart(StrEnum):

@@ -42,6 +42,7 @@ from mayen.core.state import StateTracker
 from mayen.core.turns import Interrupt, Start, Turn, Turns
 from mayen.pipeline.events import UTTERANCE, SessionTranscript
 from mayen.pipeline.speaker import score
+from mayen.pipeline.speech import RECORDING
 from mayen.ports.devices import Capability
 from mayen.ports.events import EventKind, ref
 from mayen.ports.tools import Caller, Role, Status
@@ -354,6 +355,9 @@ class TriggerGate(FrameProcessor):
         utterance = self._transcript.heard(self._caller(frame), frame.text)
         record = ref("utterance", utterance.id)
         frame.metadata[UTTERANCE] = record
+        # Sözün ses kaydı da bu olaya bağlanır: sil dosyayı buradan bulur (§11.4).
+        recording = frame.metadata.get(RECORDING)
+        related = [record] if recording is None else [record, ref("recording", recording)]
         self._recorder.emit(
             EventKind.STT_SEGMENT,
             __name__,
@@ -367,7 +371,7 @@ class TriggerGate(FrameProcessor):
             session=self.session,
             turn_id=None if self._turn is None else self._turn.id,
             status=Status.OK,
-            related=[record],
+            related=related,
         )
 
     def _elapsed(self, turn: Turn) -> float | None:

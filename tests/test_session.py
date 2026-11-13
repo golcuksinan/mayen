@@ -35,6 +35,7 @@ from mayen.pipeline.session import (
     Sessions,
     TriggerGate,
 )
+from mayen.pipeline.speech import RECORDING
 from mayen.ports.events import EventKind, SessionState
 from mayen.ports.tools import Caller, Role, Status
 from mayen.ports.triggers import Fate, Priority, Trigger, TriggerSource
@@ -457,6 +458,17 @@ async def test_heard_segment_is_written_and_tied_to_its_turn() -> None:
     # Kayıt kare üstünde aşağı gider: onay kapısı cevabı ona bağlar.
     [passed] = [f for f in down if isinstance(f, TranscriptionFrame)]
     assert passed.metadata["mayen.utterance"] == record
+
+
+async def test_the_words_recording_is_tied_to_their_segment() -> None:
+    # Sil sözün ses kaydını sözün STT olayından bulur (§11.4).
+    log = MemoryEventLog()
+    _, gate = make(log=log)
+    segment = TranscriptionFrame("dişçi", "p1", "")
+    segment.metadata[RECORDING] = "20261113-172158-515069"
+    await run(gate, [UserStartedSpeakingFrame(), segment])
+    [stt] = log.of(EventKind.STT_SEGMENT)
+    assert stt.header.related[1] == "recording:20261113-172158-515069"
 
 
 async def test_segment_that_is_not_heard_is_written_as_muted() -> None:

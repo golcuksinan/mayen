@@ -1,4 +1,4 @@
-"""Unutulan turu oturumun canlı bağlamından çıkarır (§11.4, §8.4).
+"""Unutulan ya da silinen turu oturumun canlı bağlamından çıkarır (§11.4, §8.4).
 
 Bağlamdaki mesajlar Pipecat'in sözlükleridir ve hangi tura ait olduklarını taşımaz. Bu yüzden
 her tur başlarken bağlamdaki yeri not edilir: bir turun mesajları, başladığı yerden bir sonraki
@@ -9,7 +9,7 @@ söz bağlama hiç girmez (§6), çıkarılacak bir şeyi yoktur.
 from pipecat.processors.aggregators.llm_context import LLMContext
 
 from mayen.core.turns import Turn
-from mayen.ports.forget import Forgotten
+from mayen.ports.forget import Chosen
 from mayen.ports.triggers import TurnId
 
 
@@ -26,10 +26,10 @@ class ContextTurns:
             return
         self._starts.append((turn.id, len(self._context.messages)))
 
-    def forget(self, forgotten: Forgotten) -> None:
-        if self._context is None or not self._starts or not forgotten.turns:
+    def drop(self, chosen: Chosen) -> None:
+        if self._context is None or not self._starts or not chosen.turns:
             return
-        gone = set(forgotten.turns)
+        gone = set(chosen.turns)
         messages = list(self._context.messages)
         keep: list[object] = []
         starts: list[tuple[TurnId, int]] = []

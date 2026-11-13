@@ -47,6 +47,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from fakes import FakeSpeech, speech_service
 from mayen.pipeline.sounds import ToolSound
 from mayen.pipeline.speech import (
+    RECORDING,
     VOICE,
     ServiceSpeaker,
     ServiceSTT,
@@ -185,7 +186,7 @@ async def test_each_transcribed_word_is_recorded_when_asked(
 ) -> None:
     _, url = fake
     record = tmp_path / "sozler"
-    await run_test(
+    down, _ = await run_test(
         ServiceSTT(url, "en", join_turn_s=0, record_dir=record),
         frames_to_send=[*_speech(), SleepFrame(0.3)],
     )
@@ -195,6 +196,9 @@ async def test_each_transcribed_word_is_recorded_when_asked(
         assert w.getnframes() >= 2 * 1600
     assert audio.with_suffix(".txt").read_text(encoding="utf-8") == "hello\n"
     assert not audio.with_suffix(".json").exists()  # istemci mikrofonunu bildirmedi
+    # Kaydın adı söze kareyle gider: kapı onu sözün olayına bağlar, sil oradan bulur (§11.4).
+    [said] = [f for f in down if isinstance(f, TranscriptionFrame)]
+    assert said.metadata[RECORDING] == audio.stem
 
 
 async def test_the_client_microphone_is_recorded_beside_the_words(

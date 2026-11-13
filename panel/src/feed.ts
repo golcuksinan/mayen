@@ -2,6 +2,7 @@
 // Kopunca yeniden bağlanır ve geçmişi baştan ister; kayıtlar kimlikle tekilleşir.
 import { useEffect, useState } from 'react'
 import { parse, SchemaError, type Item } from './contract'
+import { withoutDeleted } from './model'
 
 export const HISTORY_H = 24
 const LIMIT = 5000 // ekranda tutulan en çok kayıt; eskisi düşer
@@ -23,7 +24,7 @@ function merge(items: Item[], incoming: Item[]): Item[] {
   const all = [...items, ...fresh]
   // Damgalar sabit genişlikte ISO-8601 UTC: metin sırası zaman sırasıdır.
   all.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
-  return all.slice(-LIMIT)
+  return withoutDeleted(all).slice(-LIMIT)
 }
 
 export function useFeed(): Feed {

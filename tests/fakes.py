@@ -16,7 +16,7 @@ from mayen.core.transcript import Transcript
 from mayen.pipeline.events import SessionTranscript
 from mayen.pipeline.session import Sessions
 from mayen.ports.events import Event, EventKind
-from mayen.ports.forget import Forgotten
+from mayen.ports.forget import Chosen
 from mayen.ports.speech import SCHEMA_VERSION, VAD_FRAME, WAKE_FRAME, WORD_ENDS
 from mayen.ports.transcript import Utterance
 from mayen.ports.triggers import TurnId
@@ -88,17 +88,17 @@ class MemoryTranscript:
 
 
 @dataclass
-class FakeForgetting:
-    """Skill'in gördüğü unut (`ports.forget.Forgetting`); istenenleri tutar."""
+class FakeErasing:
+    """Skill'in gördüğü unut ya da sil (`ports.forget.Erasing`); istenenleri tutar."""
 
-    result: Forgotten = field(default_factory=Forgotten)
+    result: Chosen = field(default_factory=Chosen)
     asked: list[tuple[Any, ...]] = field(default_factory=list)
 
-    def last(self) -> Forgotten:
+    def last(self) -> Chosen:
         self.asked.append(("last",))
         return self.result
 
-    def period(self, since: datetime, until: datetime) -> Forgotten:
+    def period(self, since: datetime, until: datetime) -> Chosen:
         self.asked.append(("period", since, until))
         return self.result
 

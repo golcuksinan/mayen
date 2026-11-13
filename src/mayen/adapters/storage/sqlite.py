@@ -24,6 +24,7 @@ from typing import IO, Any, Self
 from uuid import UUID
 
 from mayen.ports.events import Event, EventId, EventKind, Header, parse_stamp, stamp
+from mayen.ports.forget import Erased
 from mayen.ports.notes import Note
 from mayen.ports.people import DeviceId, DevicePairedError, OwnerExistsError, Person, Voiceprint
 from mayen.ports.timers import Timer, TimerState
@@ -188,6 +189,7 @@ MIGRATIONS: Sequence[Sequence[str]] = (
     ("ALTER TABLE people ADD COLUMN location TEXT",),
     rebuild_events(),  # fault
     rebuild_events(),  # record.forgotten
+    rebuild_events(),  # record.deleted
 )
 
 
@@ -230,6 +232,9 @@ class Database:
             # Ağ dosya sistemlerinde WAL sessizce reddedilir.
             raise StorageError(f"could not enable WAL, journal mode is {mode!r}: {self.path}")
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # Silinen satırın baytları dosyada kalmaz, üstüne sıfır yazılır (§11.4: sil gerçekten
+        # siler). Kapalıyken silinen metin, boş sayfalarda okunabilir durur.
+        self._conn.execute("PRAGMA secure_delete = ON")
         self._conn.execute("PRAGMA synchronous = NORMAL")
         self._conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
 
@@ -244,6 +249,14 @@ class Database:
                 self._conn.execute("ROLLBACK")
                 raise
             self._conn.execute("COMMIT")
+
+    def checkpoint(self) -> None:
+        """WAL'ı ana dosyaya işler ve boşaltır: silinen bir satırın eski sayfaları WAL'da
+        durmaya devam ederdi (§11.4)."""
+        with self._lock:
+            busy, _, _ = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if busy:
+            raise StorageError("WAL checkpoint could not finish: the database is busy")
 
     def version(self) -> int:
         with self.transaction() as conn:
@@ -360,6 +373,60 @@ class SqliteEventLog:
                 (kind.value,),
             ).fetchall()
         return [str(row[0]) for row in rows]
+
+
+# Unut ve sil kararlarının olayları silinmez: yalnızca kimlik taşırlar ve mezar taşının
+# veritabanındaki karşılığıdırlar.
+_DECISIONS = (EventKind.RECORD_FORGOTTEN.value, EventKind.RECORD_DELETED.value)
+
+
+class SqliteRecordEraser:
+    """Sil (§11.4): sözleri ve olay kaydındaki kopyalarını tek işlemde siler.
+
+    Turun bütün olayları gider: tool argümanı ve sonucu içerik taşır, tek başına tool'un adı
+    bile neyin sorulduğunu söyler. Kimlik listeleri JSON dizisi olarak geçer; SQLite'ın
+    parametre sınırına takılmaz.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def erase(self, turns: Sequence[TurnId], utterances: Sequence[UtteranceId]) -> Erased:
+        turn_ids = json.dumps([str(t) for t in turns])
+        with self._db.transaction() as conn:
+            ids = [str(u) for u in utterances] + [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT id FROM utterances"
+                    " WHERE turn_id IN (SELECT value FROM json_each(?))",
+                    (turn_ids,),
+                )
+            ]
+            refs = json.dumps([f"utterance:{i}" for i in ids])
+            recordings = tuple(
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT b.record_id FROM event_related a"
+                    " JOIN event_related b ON b.event_seq = a.event_seq"
+                    " WHERE a.record_id IN (SELECT value FROM json_each(?))"
+                    " AND b.record_id LIKE 'recording:%'",
+                    (refs,),
+                )
+            )
+            decisions = ", ".join(f"'{k}'" for k in _DECISIONS)
+            events = conn.execute(
+                "DELETE FROM events WHERE kind NOT IN (" + decisions + ") AND ("
+                " turn_id IN (SELECT value FROM json_each(?))"
+                " OR seq IN (SELECT event_seq FROM event_related"
+                "  WHERE record_id IN (SELECT value FROM json_each(?))))",
+                (turn_ids, refs),
+            ).rowcount
+            said = conn.execute(
+                "DELETE FROM utterances WHERE id IN (SELECT value FROM json_each(?))",
+                (json.dumps(ids),),
+            ).rowcount
+        self._db.checkpoint()
+        return Erased(said, events, recordings)
 
 
 def _event(row: tuple[Any, ...], related: list[str]) -> Event:

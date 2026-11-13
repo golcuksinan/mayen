@@ -2,7 +2,8 @@
 
 Log değil, panelin terminal karşılığıdır: içerik loga girmez (§14), burada panelin ucundan
 (`/events`) okunur ve veritabanı açılmaz (§3). Unutulan kayıt panelde olduğu gibi işaretli
-görünür (§11.4); silinen kayıt hiç gelmez. Panel gibi yalnızca sahibin cihazından açılır.
+görünür (§11.4); silinen kayıt hiç gelmez, canlıda yalnızca kararın satırı yazılır. Panel gibi
+yalnızca sahibin cihazından açılır.
 
 Önce istenen andan bu yana olanlar yazılır; `--follow` ile ardından canlı kayıtlar da.
 """
@@ -103,6 +104,8 @@ class Timeline:
             )
         if kind is EventKind.RECORD_FORGOTTEN:
             return f"{INDENT}{at} forgotten: {len(header.related)} record(s)"
+        if kind is EventKind.RECORD_DELETED:
+            return f"{INDENT}{at} deleted: {len(header.related)} record(s)"
         if kind is EventKind.TURN_FINISHED:
             unanswered = " · unanswered" if body.get("unanswered") else ""
             return f"{at} turn finished · requester: {_requester(body)}{unanswered}"

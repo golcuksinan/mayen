@@ -49,11 +49,22 @@ export function sessions(items: Item[]): Session[] {
   return [...out.values()].sort((a, b) => (a.last < b.last ? 1 : -1))
 }
 
-/** Unutulan kayıtlar: `record.forgotten` olayının bağlı olduğu `turn:` ve `utterance:` kimlikleri. */
-export function forgotten(items: Item[]): Set<string> {
+/** Bir kararın kayıtları: `record.forgotten` ya da `record.deleted` olayının bağlı olduğu
+ *  `turn:` ve `utterance:` kimlikleri. */
+function decided(items: Item[], kind: 'record.forgotten' | 'record.deleted'): Set<string> {
   const out = new Set<string>()
-  for (const i of items) if (isEvent(i) && i.kind === 'record.forgotten') i.related.forEach(r => out.add(r))
+  for (const i of items) if (isEvent(i) && i.kind === kind) i.related.forEach(r => out.add(r))
   return out
+}
+
+export const forgotten = (items: Item[]): Set<string> => decided(items, 'record.forgotten')
+
+/** Silinen kayıt ekrandan kalkar (§11.4); geçmişte zaten gelmez, canlıda karar sonradan gelir. */
+export function withoutDeleted(items: Item[]): Item[] {
+  const gone = decided(items, 'record.deleted')
+  if (!gone.size) return items
+  return items.filter(i =>
+    !(i.turn_id && gone.has(`turn:${i.turn_id}`)) && !(i.type === 'utterance' && gone.has(`utterance:${i.id}`)))
 }
 
 export function turns(items: Item[]): Turn[] {

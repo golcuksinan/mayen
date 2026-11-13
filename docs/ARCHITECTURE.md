@@ -1124,6 +1124,19 @@ sahibin kendi verisini (rehberindeki bir numarayı) silmenin yolu olurdu.
 - **Sil**: sahip hangi depoyu söylediyse (transkript, medya, damıtılmış hafıza) ondan ve
   kaydın olay kaydındaki kopyalarından gerçekten silinir. Kopyası kalan bir kayıt silinmiş
   sayılmaz. Otomatik yedekler bunun dışındadır (§11.6).
+  - **Seçim unuttaki gibidir:** son istek ya da bir zaman aralığı. Unutulmuş kayıt da
+    silinebilir; unut kaydı bırakır, sil götürür. Geri alınamadığı için her seferinde niyet
+    onayı ister (§10.3).
+  - **Turun bütün olayları gider.** Tool argümanı ve sonucu içerik taşır; tek başına tool'un
+    adı bile neyin sorulduğunu söyler. Geriye yalnızca kimliklerden oluşan karar olayı kalır.
+  - **Sözün ses kaydı da gider.** Kaydın adı sözün olayına bağlanır ve silinen söz kaydını
+    oradan bulur; zaman aralığıyla silmede o aralıkta yazılmış kayıtların hepsi gider, söze
+    bağlanmadan yazılmış olanlar da.
+  - **Silinen satırın baytları veritabanı dosyasında kalmaz:** üstüne sıfır yazılır ve
+    değişiklik günlüğü hemen boşaltılır. Yoksa silinen metin boş sayfalarda ve günlükte
+    okunabilir dururdu.
+  - Unuttaki gibi turda yazılan not durur, silinen tur süren oturumların bağlamından çıkar
+    ve sonucu söylenmez.
 - **Unut ve sil kararları bir mezar taşı listesinde de tutulur ve her geri yüklemeden sonra
   yeniden uygulanır.** Yoksa eski bir yedeğe dönmek, unutulan kaydı LLM'e geri getirirdi.
   Liste yedeklenen veritabanının dışında durur; içinde olsaydı geri yükleme onu da eski hâline
@@ -1238,7 +1251,7 @@ kurallar:
 | **Yedek adaptör** | Adaptörler için config'te sıralı yedek listesi |
 | **Sağlık kontrolü** | Adaptörlerin durumunu izler, yedeğe geçişi besler. Çıkış biçimi sabit olan bir servis (TTS örnekleme hızı gibi) farklı biçim bildirirse sağlık kontrolü yüksek sesle başarısız olur: sessiz bir uyuşmazlık "asistan ince sesle konuşuyor" diye duyulur ve sebebi okunamaz |
 | **Gözlemlenebilirlik** | Her aşamanın başlangıç ve bitiş damgası, yapılandırılmış ve seviyeli log. Karar modeli için de veri kaynağı. **Loga içerik girmez:** log olay zarfının yalnızca başlığını yazar (§5.5); konuşma metni, tool argümanı ve tool sonucu yazılmaz. İçerik taşıyan log, unut ve silin ulaşmadığı bir depo olurdu |
-| **Panel** | Olayları ve oturumların durumunu canlı gösteren, salt okunur bir web arayüzü (React, TypeScript): telefondan da açılır. Sohbet etmez; konuşmak istemcilerin işidir. Önce istenen andan bu yana kayıtları, sonra kayda girdikçe canlı kayıtları alır. **Yalnızca sahibin cihazından açılır:** panel herkesin konuşmasını gösterir; cihaz taşımadan okunur (§10.1). Tarayıcıda açık başka bir sayfa da sahibin cihazından bağlanabileceği için panelin açıldığı adres config'teki izin listesinde olmalıdır. Yavaş bir panel kaydı bekletmez; geride kalınca bağlantısı bir hatayla kapanır, olay sessizce atlanmaz. Unutulan kayıt panelde işaretli görünür (§11.4): sahibin onu bulabildiği yer burasıdır |
+| **Panel** | Olayları ve oturumların durumunu canlı gösteren, salt okunur bir web arayüzü (React, TypeScript): telefondan da açılır. Sohbet etmez; konuşmak istemcilerin işidir. Önce istenen andan bu yana kayıtları, sonra kayda girdikçe canlı kayıtları alır. **Yalnızca sahibin cihazından açılır:** panel herkesin konuşmasını gösterir; cihaz taşımadan okunur (§10.1). Tarayıcıda açık başka bir sayfa da sahibin cihazından bağlanabileceği için panelin açıldığı adres config'teki izin listesinde olmalıdır. Yavaş bir panel kaydı bekletmez; geride kalınca bağlantısı bir hatayla kapanır, olay sessizce atlanmaz. Unutulan kayıt panelde işaretli görünür (§11.4): sahibin onu bulabildiği yer burasıdır; silinen kayıt ekrandan kalkar |
 | **Config** | Tek YAML: adaptörler, skill'ler, yerleşim, model deposu (§8.9), skill varsayılanlarının üzerine yazmalar (§9.1), saklama süreleri, izin listeleri. Prompt/kişilik ayrı dosyadan. Gizli bilgiler ortam değişkenlerinde ya da `.env`'de; YAML'da yalnızca adı geçer ve kod içinde maskeli bir tipte taşınır |
 | **Çoklu istemci** | Birden fazla istemci aynı çekirdeğe taşıma üzerinden bağlanır; oturum ve bağlam istemci başına |
 | **İşletim** | Servisler işletim sisteminin servis yöneticisiyle çalışır; uygulama kendini yeniden başlatmaya çalışmaz. Kalıcı bir yapılandırma hatası, yeniden başlatma döngüsüne gömülmesin diye ayrı bir çıkış koduyla biter. Servisler arası bağımlılık zayıf kurulur: ölü bir TTS asistanı susturur ama öldürmez |

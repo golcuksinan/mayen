@@ -37,11 +37,13 @@ from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies, UserT
 import mayen.skills
 from mayen.adapters.llamacpp.chat import LlamaCppChat
 from mayen.adapters.llamacpp.confirmation import LlamaCppAnswerResolver, LlamaCppQuestionWriter
+from mayen.adapters.storage.recordings import FileRecordings
 from mayen.adapters.storage.sqlite import (
     Database,
     SqliteEventLog,
     SqliteNoteStore,
     SqlitePersonStore,
+    SqliteRecordEraser,
     SqliteTimerStore,
     SqliteTranscript,
     SqliteVoiceprintStore,
@@ -52,9 +54,9 @@ from mayen.adapters.weather.openweathermap import OpenWeatherMap
 from mayen.app.config import Config, ConfigError
 from mayen.core.context import ContextBlock
 from mayen.core.devices import DeviceLink, Devices
+from mayen.core.erasure import Erasure
 from mayen.core.events import Recorder, SystemClock
 from mayen.core.feed import Feed
-from mayen.core.forgetting import Forgetter
 from mayen.core.policy import ROLE_TABLE, PolicyTable, system_table
 from mayen.core.presence import Presence
 from mayen.core.profile import caller as caller_of
@@ -95,8 +97,8 @@ from mayen.pipeline.tools import AuthorizedTools, Shown
 from mayen.pipeline.wake import ServiceWake, WakeStart
 from mayen.ports.channels import AudioInput
 from mayen.ports.devices import DeviceControl
-from mayen.ports.events import Clock, EventKind, FaultPart
-from mayen.ports.forget import Forgetting
+from mayen.ports.events import Clock, FaultPart
+from mayen.ports.forget import Action, Erasing
 from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
 from mayen.ports.people import DeviceId
@@ -175,7 +177,8 @@ class ToolCtx:
     location: str | None  # çağıranın kendi varsayılan konumu (§11.1)
     caller: Caller
     defaults: Mapping[str, Any]
-    forgetting: Forgetting
+    forgetting: Erasing
+    deleting: Erasing
 
 
 # TTS, cevabın dilini soran bir çağrılabilirle kurulur: ses dile göre seçilir (§16.3).
@@ -199,12 +202,14 @@ class Core:
         self.recorder = Recorder(self.events, SystemClock(), self.feed)
         self.transcript = Transcript(self.utterances, self.recorder.clock, self.feed)
         # Unutulmuş kümenin kaynağı olay kaydındaki kararlardır (§11.4).
-        self.forgetter = Forgetter(
+        self.erasure = Erasure(
             self.utterances,
             self.events,
             self.recorder,
             FileTombstones(beside(db.path)),
-            lambda: self.events.related_of(EventKind.RECORD_FORGOTTEN),
+            self.events.related_of,
+            SqliteRecordEraser(db),
+            FileRecordings(None if config.stt is None else config.stt.record_dir),
         )
         self.presence = Presence()
         self.devices = Devices()
@@ -265,7 +270,7 @@ class Core:
         self.devices.attach(session, link)
 
     async def disconnect(self, session: str) -> None:
-        self.forgetter.detach(session)
+        self.erasure.detach(session)
         self.presence.disconnected(session)
         self.devices.detach(session)
         await self.sessions.detach(session)
@@ -335,6 +340,7 @@ class Core:
     def context(self, session: str, spec: ToolSpec[Any], caller: Caller) -> ToolCtx:
         person = None if caller.person_id is None else self.people.get(caller.person_id)
         turn = self.sessions.running(session)
+        current = None if turn is None else turn.id
         return ToolCtx(
             self.notes,
             self.timers,
@@ -344,7 +350,8 @@ class Core:
             None if person is None else person.location,
             caller,
             self.defaults[spec.name],
-            self.forgetter.bound(session, None if turn is None else turn.id),
+            self.erasure.bound(Action.FORGET, session, current),
+            self.erasure.bound(Action.DELETE, session, current),
         )
 
 
@@ -481,7 +488,7 @@ def _conversation(
     )
     context = LLMContext(tools=tools.schema())
     spans.bind(context)
-    core.forgetter.attach(session, spans.forget)
+    core.erasure.attach(session, spans.drop)
     llm = llm_service(
         endpoint,
         config.system_prompt,
@@ -643,5 +650,5 @@ def replayer(core: Core, db: Database) -> Replayer:
         config.language_rule,
         config.default_language,
         StepCap(config.loop.max_steps, config.loop.max_corrections),
-        core.forgetter,
+        core.erasure,
     )

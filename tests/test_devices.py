@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from fakes import FakeClock, FakeForgetting
+from fakes import FakeClock, FakeErasing
 from mayen.app.wiring import ToolCtx
 from mayen.clients.desktop import (
     Apps,
@@ -237,7 +237,18 @@ class Device:
 
 
 def ctx(device: Device) -> ToolCtx:
-    return ToolCtx(None, None, FakeClock(), device, None, None, OWNER, {}, FakeForgetting())  # type: ignore[arg-type]
+    return ToolCtx(
+        None,  # type: ignore[arg-type]
+        None,  # type: ignore[arg-type]
+        FakeClock(),
+        device,
+        None,
+        None,
+        OWNER,
+        {},
+        FakeErasing(),
+        FakeErasing(),
+    )
 
 
 async def test_volume_reads_without_arguments_and_reports_what_it_changed() -> None:

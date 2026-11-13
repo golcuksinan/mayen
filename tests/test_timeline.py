@@ -144,3 +144,9 @@ def test_forgotten_records_read_as_marked_and_the_decision_has_a_line(
     assert lines[1].endswith("(forgotten)")
     assert lines[2] == "  12:08:33 owner#1 (forgotten)  İzmir'de hava nasıl?"
     assert lines[3] == "  12:08:36 forgotten: 2 record(s)"
+
+
+def test_a_deletion_reads_as_one_line() -> None:
+    decision = event(EventKind.RECORD_DELETED, 5, {"turns": 1}, related=(f"turn:{TURN}",))
+    [line] = Timeline().lines([decision])
+    assert line.endswith("deleted: 1 record(s)")
