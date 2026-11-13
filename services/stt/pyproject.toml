@@ -25,6 +25,8 @@ dependencies = [
 ]
 
 [tool.uv]
+# Python uv'nin kendisinden: sistem güncellemesi ortamları geçersiz kılmasın.
+python-preference = "only-managed"
 # openwakeword'ün Linux'ta istediği tflite-runtime yalnız tflite modeli içindir; model .onnx.
 override-dependencies = ["tflite-runtime; sys_platform == 'never'"]
 environments = ["sys_platform == 'linux'"]

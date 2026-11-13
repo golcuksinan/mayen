@@ -19,3 +19,7 @@ dependencies = [
     "soxr>=0.5",  # sesin hızı servisin sabit çıkış hızına
     "pyyaml>=6.0.3",
 ]
+
+[tool.uv]
+# Python uv'nin kendisinden: sistem güncellemesi ortamları geçersiz kılmasın.
+python-preference = "only-managed"

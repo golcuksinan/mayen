@@ -20,4 +20,6 @@ dependencies = [
 ]
 
 [tool.uv]
+# Python uv'nin kendisinden: sistem güncellemesi ortamları geçersiz kılmasın.
+python-preference = "only-managed"
 environments = ["sys_platform == 'linux'"]
