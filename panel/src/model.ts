@@ -29,6 +29,7 @@ export type Turn = {
   steps: Step[]
   tokens: { prompt: number; completion: number }
   last: string
+  forgotten: boolean // unutuldu (§11.4): kayıt duruyor, LLM'e gitmiyor
 }
 
 const isEvent = (i: Item): i is EventMessage => i.type === 'event'
@@ -48,14 +49,22 @@ export function sessions(items: Item[]): Session[] {
   return [...out.values()].sort((a, b) => (a.last < b.last ? 1 : -1))
 }
 
+/** Unutulan kayıtlar: `record.forgotten` olayının bağlı olduğu `turn:` ve `utterance:` kimlikleri. */
+export function forgotten(items: Item[]): Set<string> {
+  const out = new Set<string>()
+  for (const i of items) if (isEvent(i) && i.kind === 'record.forgotten') i.related.forEach(r => out.add(r))
+  return out
+}
+
 export function turns(items: Item[]): Turn[] {
   const out = new Map<string, Turn>()
   const calls = new Map<string, ToolStep>() // çağrı kimliği → adım; istek ve bitiş birleşir
+  const gone = forgotten(items)
   for (const i of items) {
     if (!i.turn_id) continue
     let t = out.get(i.turn_id)
     if (!t) {
-      t = { id: i.turn_id, session: i.session, start: null, end: null, steps: [], tokens: { prompt: 0, completion: 0 }, last: i.time }
+      t = { id: i.turn_id, session: i.session, start: null, end: null, steps: [], tokens: { prompt: 0, completion: 0 }, last: i.time, forgotten: gone.has(`turn:${i.turn_id}`) }
       out.set(i.turn_id, t)
     }
     t.last = i.time

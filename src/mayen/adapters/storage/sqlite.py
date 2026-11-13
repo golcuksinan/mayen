@@ -187,6 +187,7 @@ MIGRATIONS: Sequence[Sequence[str]] = (
     rebuild_events(),  # status unsupported
     ("ALTER TABLE people ADD COLUMN location TEXT",),
     rebuild_events(),  # fault
+    rebuild_events(),  # record.forgotten
 )
 
 
@@ -349,6 +350,16 @@ class SqliteEventLog:
             ):
                 related.setdefault(seq, []).append(record)
         return [_event(row, related.get(row[0], [])) for row in rows]
+
+    def related_of(self, kind: EventKind) -> list[str]:
+        """Bu türdeki olayların bağlı olduğu kayıtlar, zaman sırasıyla (unut, §11.4)."""
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT r.record_id FROM event_related r JOIN events e ON e.seq = r.event_seq"
+                " WHERE e.kind = ? ORDER BY e.time, e.seq, r.rowid",
+                (kind.value,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
 
 def _event(row: tuple[Any, ...], related: list[str]) -> Event:

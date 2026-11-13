@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
+import pytest
+
 from fakes import T0, MemoryEventLog, MemoryTranscript
 from mayen.core.policy import ROLE_TABLE, PolicyTable, system_table
 from mayen.core.registry import ToolRegistry
@@ -182,7 +184,9 @@ def caller(role: Role, person_id: str | None) -> Caller:
     return Caller(role, person_id, has_personal_device=person_id is not None)
 
 
-def player(log: Log, model: Model, max_steps: int = 5) -> Replayer:
+def player(
+    log: Log, model: Model, max_steps: int = 5, forgotten: "Forgets | None" = None
+) -> Replayer:
     return Replayer(
         log.events,
         log.transcript,
@@ -196,7 +200,21 @@ def player(log: Log, model: Model, max_steps: int = 5) -> Replayer:
         "Answer in {language}.",
         "English",
         StepCap(max_steps, 2),
+        forgotten,
     )
+
+
+class Forgets:
+    """Unutulmuş turlar (`ports.forget.ForgottenRecords`)."""
+
+    def __init__(self, *turns: TurnId) -> None:
+        self._turns = set(turns)
+
+    def turn_forgotten(self, turn_id: TurnId) -> bool:
+        return turn_id in self._turns
+
+    def utterance_forgotten(self, utterance: Utterance) -> bool:
+        return utterance.turn_id in self._turns
 
 
 def call(call_id: str, name: str, arguments: dict[str, Any]) -> ModelReply:
@@ -397,3 +415,15 @@ async def test_a_quiet_result_of_a_voice_turn_ends_it_as_on_the_line() -> None:
         model = Model(call("n1", "note_search", {"query": "dişçi"}))
         await player(log, model).replay(turn)
         assert len(model.requests) == requests
+
+
+async def test_a_forgotten_turn_is_neither_listed_nor_replayed_nor_in_history() -> None:
+    # Unutulan kayıt replay'de de modele verilmez (§11.4).
+    model = Model(ModelReply("Drink water.", []))
+    p = player(recorded(), model, forgotten=Forgets(TEXT_TURN))
+    assert [t.id for t in p.turns()] == [TIMER_TURN]
+    with pytest.raises(LookupError):
+        await p.replay(TEXT_TURN)
+    await p.replay(TIMER_TURN)
+    sent = json.dumps(model.requests[0][0], ensure_ascii=False)
+    assert "dişçi" not in sent

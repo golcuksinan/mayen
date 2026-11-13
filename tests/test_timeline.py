@@ -119,3 +119,28 @@ def test_since_is_today_local_time_or_an_iso_moment() -> None:
     assert since_of("2026-10-17T10:00:00+00:00", now) == datetime(2026, 10, 17, 10, tzinfo=UTC)
     local = since_of("09:15", now).astimezone()
     assert (local.hour, local.minute) == (9, 15)
+
+
+def test_forgotten_records_read_as_marked_and_the_decision_has_a_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Unutulan kayıt panelde olduğu gibi işaretli görünür (§11.4); içeriği silinmez.
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    aside = said(0, "birine söylenen", turn=False)
+    asked = said(2, "İzmir'de hava nasıl?")
+    decision = event(
+        EventKind.RECORD_FORGOTTEN,
+        5,
+        {"turns": 1, "utterances": 1},
+        related=(f"turn:{TURN}", f"utterance:{aside.id}"),
+    )
+    lines = list(
+        Timeline().lines(
+            [aside, event(EventKind.TURN_STARTED, 1, {"source": "voice"}), asked, decision]
+        )
+    )
+    assert lines[0] == f"{OUTSIDE}12:08:31 owner#1 (forgotten)  birine söylenen"
+    assert lines[1].endswith("(forgotten)")
+    assert lines[2] == "  12:08:33 owner#1 (forgotten)  İzmir'de hava nasıl?"
+    assert lines[3] == "  12:08:36 forgotten: 2 record(s)"

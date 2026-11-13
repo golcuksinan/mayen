@@ -153,6 +153,7 @@ class TriggerGate(FrameProcessor):
         response_timeout_s: float,
         holds: Sequence[Callable[[], bool]] = (),
         drops: Sequence[Callable[[], Awaitable[None]]] = (),
+        starts: Sequence[Callable[[Turn], None]] = (),
         device_person: Callable[[], str | None] = lambda: None,
         capabilities: Callable[[], Collection[Capability]] = lambda: (),
         state: StateTracker | None = None,
@@ -172,6 +173,8 @@ class TriggerGate(FrameProcessor):
         self._response_timeout_s = response_timeout_s
         self._holds = holds  # turu açık tutan başka durumlar; onay beklemek gibi (§5.4)
         self._drops = drops  # kesilen turla düşen başka işler; bekleyen onay planı gibi (§5.3)
+        # Tur başlarken haber alanlar; turun bağlamdaki yerini not eden unut gibi (§11.4).
+        self._starts = starts
         # Oturumun cihazı kimin kişisel cihazı; kimse istemeden açılan turu o dinler (§8.6).
         self._device_person = device_person
         # Cihazın yetenekleri bağlam bloğundadır (§9.7); replay bloğu turun başındakiyle kurar.
@@ -217,6 +220,8 @@ class TriggerGate(FrameProcessor):
 
     async def start(self, turn: Turn, *, fresh: bool) -> None:
         self._turn = turn
+        for started in self._starts:
+            started(turn)
         self._quiet_since = None
         self._unanswered = False
         source = turn.trigger.source

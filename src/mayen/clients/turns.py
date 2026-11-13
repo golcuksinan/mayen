@@ -1,8 +1,8 @@
 """Turların okunur zaman çizelgesi: kim ne dedi, hangi tool ne döndü (`mayen-turns`).
 
 Log değil, panelin terminal karşılığıdır: içerik loga girmez (§14), burada panelin ucundan
-(`/events`) okunur ve veritabanı açılmaz (§3). Unutulan ya da silinen bir kayıt burada da
-görünmez. Panel gibi yalnızca sahibin cihazından açılır.
+(`/events`) okunur ve veritabanı açılmaz (§3). Unutulan kayıt panelde olduğu gibi işaretli
+görünür (§11.4); silinen kayıt hiç gelmez. Panel gibi yalnızca sahibin cihazından açılır.
 
 Önce istenen andan bu yana olanlar yazılır; `--follow` ile ardından canlı kayıtlar da.
 """
@@ -27,6 +27,7 @@ DEFAULT_URL = "ws://127.0.0.1:8765/events"
 DEFAULT_MINUTES = 60
 INDENT = "  "
 OUTSIDE = "(outside a turn) "
+FORGOTTEN = " (forgotten)"
 
 
 def _clock(moment: datetime) -> str:
@@ -66,6 +67,9 @@ class Timeline:
 
     _scores: dict[str, Mapping[str, Any]] = field(default_factory=dict)
     _verdicts: dict[str, str] = field(default_factory=dict)
+    # Unutulan turlar ve tur dışı sözler (`turn:`, `utterance:`). Canlıda karar kaydın
+    # kendisinden sonra gelir; o zaman yalnızca kararın satırı yazılır.
+    _forgotten: set[str] = field(default_factory=set)
 
     def lines(self, items: Iterable[Event | Utterance]) -> Iterator[str]:
         ordered = sorted(items, key=lambda i: i.header.time if isinstance(i, Event) else i.time)
@@ -83,6 +87,8 @@ class Timeline:
                 self._scores[record] = event.body
         elif event.header.kind is EventKind.TOOL_REQUESTED:
             self._verdicts[str(event.body.get("call_id"))] = str(event.body.get("verdict"))
+        elif event.header.kind is EventKind.RECORD_FORGOTTEN:
+            self._forgotten.update(event.header.related)
 
     def _event(self, event: Event) -> str | None:
         header, body = event.header, event.body
@@ -90,10 +96,13 @@ class Timeline:
         kind = header.kind
         if kind is EventKind.TURN_STARTED:
             capabilities = ",".join(body.get("capabilities", ())) or "-"
+            gone = FORGOTTEN if f"turn:{header.turn_id}" in self._forgotten else ""
             return (
                 f"{at} turn · {body.get('source', '?')} · {header.session} · "
-                f"device: {capabilities}"
+                f"device: {capabilities}{gone}"
             )
+        if kind is EventKind.RECORD_FORGOTTEN:
+            return f"{INDENT}{at} forgotten: {len(header.related)} record(s)"
         if kind is EventKind.TURN_FINISHED:
             unanswered = " · unanswered" if body.get("unanswered") else ""
             return f"{at} turn finished · requester: {_requester(body)}{unanswered}"
@@ -113,9 +122,15 @@ class Timeline:
 
     def _utterance(self, utterance: Utterance) -> str:
         at = _clock(utterance.time)
+        own = (
+            f"turn:{utterance.turn_id}"
+            if utterance.turn_id is not None
+            else f"utterance:{utterance.id}"
+        )
+        gone = FORGOTTEN if own in self._forgotten else ""
         if utterance.party is Party.ASSISTANT:
             cut = " (cut)" if utterance.interrupted else ""
-            return f"{INDENT}{at} Mayen{cut}  {utterance.text}"
+            return f"{INDENT}{at} Mayen{cut}{gone}  {utterance.text}"
         where = INDENT if utterance.turn_id is not None else OUTSIDE
         role = None if utterance.role is None else utterance.role.value
         who = _who(role, utterance.person_id)
@@ -124,7 +139,7 @@ class Timeline:
         if score is not None:
             who = f"{who} {score:.2f}"
         muted = " (not heard)" if segment.get("muted") else ""
-        return f"{where}{at} {who}{muted}  {utterance.text}"
+        return f"{where}{at} {who}{muted}{gone}  {utterance.text}"
 
 
 def since_of(text: str | None, now: datetime) -> datetime:

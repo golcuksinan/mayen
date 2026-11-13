@@ -20,12 +20,13 @@ from mayen.core.registry import ToolRegistry, parse_args
 from mayen.core.speakers import label
 from mayen.pipeline.llm import StepCap, count_steps, with_block
 from mayen.pipeline.tools import AWAITING_CONFIRMATION, openai_tools, to_model
-from mayen.ports.events import EventKind, EventLog
+from mayen.ports.events import Event, EventKind, EventLog
+from mayen.ports.forget import ForgottenRecords
 from mayen.ports.models import ChatModel
 from mayen.ports.people import DeviceId, PersonStore
 from mayen.ports.timers import TimerStore
 from mayen.ports.tools import Status, ToolResult, TurnFlags, Verdict
-from mayen.ports.transcript import Party, TranscriptStore
+from mayen.ports.transcript import Party, TranscriptStore, Utterance
 from mayen.ports.triggers import TriggerSource, TurnId
 from mayen.replay.history import CallerOf, Message, Records, TableOf, TurnInfo, clean, result_of
 
@@ -83,8 +84,11 @@ class Replayer:
         language_rule: str,
         default_language: str,
         cap: StepCap,
+        forgetter: ForgottenRecords | None = None,
     ) -> None:
         self._events = events
+        # Unutulan kayıt replay'de de modele verilmez (§11.4).
+        self._forgetter = forgetter
         self._transcript = transcript
         self._timers = timers
         self._people = people
@@ -97,6 +101,24 @@ class Replayer:
         self._default = default_language
         self._cap = cap
 
+    def _kept(self, events: Sequence[Event]) -> list[Event]:
+        f = self._forgetter
+        if f is None:
+            return list(events)
+        return [
+            e
+            for e in events
+            if e.header.turn_id is None or not f.turn_forgotten(e.header.turn_id)
+        ]
+
+    def _said(self, utterances: Sequence[Utterance]) -> list[Utterance]:
+        f = self._forgetter
+        return (
+            list(utterances)
+            if f is None
+            else [u for u in utterances if not f.utterance_forgotten(u)]
+        )
+
     def _label(self, person_id: str | None) -> str:
         """Hattın yazdığı adın aynısı (§8.1): replay üretimdeki isteği kurar."""
         return label(None if person_id is None else self._people.get(person_id))
@@ -104,8 +126,8 @@ class Replayer:
     def turns(self) -> list[TurnInfo]:
         """Kayıttaki bütün turlar, başlama sırasıyla."""
         records = Records(
-            self._events.read(),
-            self._transcript.read(),
+            self._kept(self._events.read()),
+            self._said(self._transcript.read()),
             self._timers,
             self._caller_of,
             self._label,
@@ -126,9 +148,11 @@ class Replayer:
         session = next((e.header.session for e in found if e.header.session), None)
         if session is None:
             raise LookupError(f"no turn {turn_id}")
+        if self._forgetter is not None and self._forgetter.turn_forgotten(turn_id):
+            raise LookupError(f"turn {turn_id} is forgotten")
         records = Records(
-            self._events.read(session=session),
-            self._transcript.read(session=session),
+            self._kept(self._events.read(session=session)),
+            self._said(self._transcript.read(session=session)),
             self._timers,
             self._caller_of,
             self._label,

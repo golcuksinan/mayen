@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from fakes import FakeClock
+from fakes import FakeClock, FakeForgetting
 from mayen.adapters.storage.sqlite import Database, SqlitePersonStore
 from mayen.adapters.weather.openweathermap import OpenWeatherMap
 from mayen.app.config import ConfigError, load, with_dotenv
@@ -39,7 +39,18 @@ class Source:
 
 
 def ctx(source: Source, location: str | None) -> ToolCtx:
-    return ToolCtx(None, None, FakeClock(), NO_DEVICE, source, location, OWNER, {})  # type: ignore[arg-type]
+    no_store = None
+    return ToolCtx(
+        no_store,  # type: ignore[arg-type]
+        no_store,  # type: ignore[arg-type]
+        FakeClock(),
+        NO_DEVICE,
+        source,
+        location,
+        OWNER,
+        {},
+        FakeForgetting(),
+    )
 
 
 async def test_a_said_place_wins_over_the_default_location() -> None:

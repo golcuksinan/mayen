@@ -16,7 +16,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import InvalidStatus
 from websockets.typing import Origin
 
-from fakes import FakeClock, speech_service
+from fakes import FakeClock, FakeForgetting, speech_service
 from mayen.adapters.storage.sqlite import (
     Database,
     SqliteNoteStore,
@@ -139,6 +139,8 @@ def test_main_exits_with_the_config_code(
 def test_skills_are_discovered_from_the_folder() -> None:
     assert sorted(s.name for s in discover_skills()) == [
         "audio_output",
+        "forget_last",
+        "forget_period",
         "media",
         "note_add",
         "note_delete",
@@ -163,6 +165,7 @@ def ctx_for(db: Database, defaults: dict[str, object] | None = None) -> ToolCtx:
         None,
         OWNER,
         defaults or {},
+        FakeForgetting(),
     )
 
 

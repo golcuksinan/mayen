@@ -87,7 +87,7 @@ function TurnCard({ turn }: { turn: Turn }) {
   const requester = s?.requester as { role?: string } | undefined
   const running = !end
   return (
-    <motion.article layout transition={CEVIK} initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+    <motion.article layout transition={CEVIK} initial={{ opacity: 0, y: -8 }} animate={{ opacity: turn.forgotten ? 0.4 : 1, y: 0 }}
       style={{ padding: '12px 0', borderBottom: '1px solid var(--kagit-4)' }}>
       <header style={{ display: 'flex', gap: 14, alignItems: 'baseline', marginBottom: 6, flexWrap: 'wrap' }}>
         <span className="etiket" style={{ color: running ? 'var(--isaret)' : undefined }}>
@@ -101,6 +101,7 @@ function TurnCard({ turn }: { turn: Turn }) {
           <span className="sayi soluk" style={{ fontSize: 11.5 }}>{turn.tokens.prompt}→{turn.tokens.completion} tok</span>
         )}
         {end?.body.unanswered === true && <span className="etiket vurgu">unanswered</span>}
+        {turn.forgotten && <span className="etiket vurgu">forgotten</span>}
       </header>
       {turn.steps.map(step => <StepRow key={step.id} step={step} />)}
     </motion.article>

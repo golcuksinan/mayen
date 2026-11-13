@@ -18,7 +18,7 @@ from mayen.ports.tools import Role, Status
 from mayen.ports.transcript import Party, Utterance, UtteranceId
 from mayen.ports.triggers import TurnId
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class PanelMessageKind(StrEnum):

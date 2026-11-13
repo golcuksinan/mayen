@@ -1,13 +1,14 @@
 // Çekirdeğin panele gönderdiği mesajlar. Tanımın aslı ports/panel.py; burası onun aynısıdır.
 // Sürümü tutmayan mesaj gösterilmez: yanlış okunmuş bir alan, panelde yaşanmamış bir şeydir.
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 // ports/events.py: EventKind ve SessionState
 export type EventKind =
   | 'turn.started' | 'turn.interrupted' | 'turn.finished'
   | 'tool.requested' | 'tool.started' | 'tool.finished'
   | 'confirmation.closed' | 'stt.segment' | 'llm.usage' | 'state.changed' | 'fault'
+  | 'record.forgotten'
 
 export type SessionState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'awaiting_confirmation'
 

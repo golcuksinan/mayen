@@ -1106,6 +1106,21 @@ sahibin kendi verisini (rehberindeki bir numarayı) silmenin yolu olurdu.
   gibi tool sonuçları ve replay (§14) da dahil. Yalnızca sahip kendisi arayıp bulabilir. Tool
   sonucu da bağlama girer; tool'a açık kalan bir kayıt, tek bir aramayla geri gelir ve
   unutulmuş olmaz.
+  - **Birim turdur:** kişinin sözü, Mayen'in cevabı ve o turdaki tool çağrıları birlikte
+    unutulur. Yalnızca kişinin sözü unutulsaydı onu tekrar eden cevap kalırdı. Tur dışında
+    duyulan söz tek başına bir kayıttır.
+  - **Sahip ya son isteğini ya bir zaman aralığını unutturur.** Son istek, sahibin bu istekten
+    önce söz söylediği son turdur; tur dışında duyulan söz sayılmaz: komuttan hemen önce
+    kaçırılmış bir wake word tur dışı bir sözdür ve onu seçmek, asıl unutulmak isteneni
+    bırakırdı. Zaman aralığı, aralıktaki turları ve tur dışında duyulan sözleri birlikte
+    kapsar. Unutma isteğinin kendi turu hiçbir seçime girmez; içinde unutulan bir şey yoktur.
+  - **Unut, turda yapılan işi geri almaz:** tur bir not yazdıysa not durur. Konuşma ile onun
+    ürettiği kayıt ayrı şeylerdir; konuşmayı unutmak istenmiş bir notu sessizce kaybetmek
+    olurdu.
+  - **Unutulan tur süren oturumların bağlamından da çıkar.** Bağlamda kalan bir tur, unutma
+    isteğinden sonraki ilk cevapta geri gelirdi.
+  - **Unutmanın sonucu söylenmez** (§7): unutulanı anlatan bir cevap, onu yeniden söylemek
+    olurdu.
 - **Sil**: sahip hangi depoyu söylediyse (transkript, medya, damıtılmış hafıza) ondan ve
   kaydın olay kaydındaki kopyalarından gerçekten silinir. Kopyası kalan bir kayıt silinmiş
   sayılmaz. Otomatik yedekler bunun dışındadır (§11.6).
@@ -1114,6 +1129,11 @@ sahibin kendi verisini (rehberindeki bir numarayı) silmenin yolu olurdu.
   Liste yedeklenen veritabanının dışında durur; içinde olsaydı geri yükleme onu da eski hâline
   döndürürdü. Listede kaydın içeriği değil yalnızca kimliği bulunur; içerik taşısaydı, sildiği
   şeyin kopyası olurdu.
+  - **Liste her açılışta veritabanıyla karşılaştırılır; birinde olmayan karar ötekine
+    eklenir.** Geri yükleme bir açılışla biter; ona bağlı ayrı bir adım, geri yüklemeyi elle
+    yapanın atlayabileceği bir adım olurdu.
+  - **Karar önce listeye, sonra veritabanına yazılır.** Arada süreç ölürse açılış kararı
+    listeden tamamlar; ters sırada karar kaybolurdu.
 - **Arşive ikisi de ulaşmaz** (§11.7).
 
 ### 11.5 Saklama
@@ -1218,7 +1238,7 @@ kurallar:
 | **Yedek adaptör** | Adaptörler için config'te sıralı yedek listesi |
 | **Sağlık kontrolü** | Adaptörlerin durumunu izler, yedeğe geçişi besler. Çıkış biçimi sabit olan bir servis (TTS örnekleme hızı gibi) farklı biçim bildirirse sağlık kontrolü yüksek sesle başarısız olur: sessiz bir uyuşmazlık "asistan ince sesle konuşuyor" diye duyulur ve sebebi okunamaz |
 | **Gözlemlenebilirlik** | Her aşamanın başlangıç ve bitiş damgası, yapılandırılmış ve seviyeli log. Karar modeli için de veri kaynağı. **Loga içerik girmez:** log olay zarfının yalnızca başlığını yazar (§5.5); konuşma metni, tool argümanı ve tool sonucu yazılmaz. İçerik taşıyan log, unut ve silin ulaşmadığı bir depo olurdu |
-| **Panel** | Olayları ve oturumların durumunu canlı gösteren, salt okunur bir web arayüzü (React, TypeScript): telefondan da açılır. Sohbet etmez; konuşmak istemcilerin işidir. Önce istenen andan bu yana kayıtları, sonra kayda girdikçe canlı kayıtları alır. **Yalnızca sahibin cihazından açılır:** panel herkesin konuşmasını gösterir; cihaz taşımadan okunur (§10.1). Tarayıcıda açık başka bir sayfa da sahibin cihazından bağlanabileceği için panelin açıldığı adres config'teki izin listesinde olmalıdır. Yavaş bir panel kaydı bekletmez; geride kalınca bağlantısı bir hatayla kapanır, olay sessizce atlanmaz |
+| **Panel** | Olayları ve oturumların durumunu canlı gösteren, salt okunur bir web arayüzü (React, TypeScript): telefondan da açılır. Sohbet etmez; konuşmak istemcilerin işidir. Önce istenen andan bu yana kayıtları, sonra kayda girdikçe canlı kayıtları alır. **Yalnızca sahibin cihazından açılır:** panel herkesin konuşmasını gösterir; cihaz taşımadan okunur (§10.1). Tarayıcıda açık başka bir sayfa da sahibin cihazından bağlanabileceği için panelin açıldığı adres config'teki izin listesinde olmalıdır. Yavaş bir panel kaydı bekletmez; geride kalınca bağlantısı bir hatayla kapanır, olay sessizce atlanmaz. Unutulan kayıt panelde işaretli görünür (§11.4): sahibin onu bulabildiği yer burasıdır |
 | **Config** | Tek YAML: adaptörler, skill'ler, yerleşim, model deposu (§8.9), skill varsayılanlarının üzerine yazmalar (§9.1), saklama süreleri, izin listeleri. Prompt/kişilik ayrı dosyadan. Gizli bilgiler ortam değişkenlerinde ya da `.env`'de; YAML'da yalnızca adı geçer ve kod içinde maskeli bir tipte taşınır |
 | **Çoklu istemci** | Birden fazla istemci aynı çekirdeğe taşıma üzerinden bağlanır; oturum ve bağlam istemci başına |
 | **İşletim** | Servisler işletim sisteminin servis yöneticisiyle çalışır; uygulama kendini yeniden başlatmaya çalışmaz. Kalıcı bir yapılandırma hatası, yeniden başlatma döngüsüne gömülmesin diye ayrı bir çıkış koduyla biter. Servisler arası bağımlılık zayıf kurulur: ölü bir TTS asistanı susturur ama öldürmez |
