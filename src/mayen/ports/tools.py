@@ -12,6 +12,7 @@ if TYPE_CHECKING:  # döngü: bu portlar `ports.tools`'un sözlüğünü kullan�
     from mayen.ports.events import Clock
     from mayen.ports.forget import Erasing
     from mayen.ports.notes import NoteStore
+    from mayen.ports.switches import Switches
     from mayen.ports.timers import TimerStore
     from mayen.ports.weather import WeatherSource
 
@@ -136,6 +137,11 @@ class ToolContext(Protocol):
         ...
 
     @property
+    def switches(self) -> "Switches | None":
+        """Evdeki anahtarlar; yapılandırılmamışsa `None` ve skill'leri kataloğa girmez."""
+        ...
+
+    @property
     def location(self) -> str | None:
         """Çağıranın kendi profilindeki varsayılan konum; tanınmayanın yoktur. Başkasının
         konumu skill'e hiç verilmez: konum kişiseldir (§9.1)."""
@@ -192,3 +198,5 @@ class SkillConfig:
     # Açılabilecek uygulamalar (§9.4): ad → cihazdaki `.desktop` kimliği.
     apps: Mapping[str, str] = field(default_factory=dict)
     weather: bool = False  # hava durumu kaynağı yapılandırıldı mı
+    # Evdeki anahtarların adları (sahibin verdiği, "gece lambası" gibi); markası adaptörde.
+    switches: tuple[str, ...] = ()

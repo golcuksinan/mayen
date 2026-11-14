@@ -73,13 +73,20 @@ async def execute(spec: ToolSpec[Any], args: BaseModel, ctx: ToolContext) -> Too
 
 
 def _inline(node: Any, defs: Mapping[str, Any]) -> Any:  # noqa: ANN401
-    """`$ref`'i tanımıyla değiştirir: `$defs` alanlarla birlikte gitmez, ref boşa düşer."""
+    """`$ref`'i tanımıyla değiştirir: `$defs` alanlarla birlikte gitmez, ref boşa düşer.
+
+    Tek seçenekli liste `const` olarak üretilir; `enum`'a çevrilir, çünkü seçenekler katalogda
+    yazılmalıdır (§9.1) ve şablon `const`'u prompta yazmayabilir (Gemma'nınki yazmıyor: model
+    tek prizin adını görmeyip söyleneni kopyalıyordu).
+    """
     if isinstance(node, list):
         return [_inline(n, defs) for n in node]
     if not isinstance(node, dict):
         return node
     ref = node.get("$ref")
     rest = {k: _inline(v, defs) for k, v in node.items() if k != "$ref"}
+    if "const" in rest and "enum" not in rest:
+        rest["enum"] = [rest.pop("const")]
     if isinstance(ref, str) and ref.startswith("#/$defs/"):
         return {**_inline(defs[ref.removeprefix("#/$defs/")], defs), **rest}
     return rest

@@ -108,6 +108,20 @@ class Weather:
     key: SecretStr
 
 
+class ShellyConfig(_Strict):
+    """Shelly prizleri (§9.5): ad → cihazın ev ağındaki adresi; parolanın kendisi değil,
+    ortam değişkeninin adı (§14). Ad katalogda seçenek olur (§9.1)."""
+
+    password_env: str
+    switches: dict[str, str]
+
+
+@dataclass(frozen=True)
+class Shelly:
+    hosts: dict[str, str]
+    password: SecretStr
+
+
 class SpeakerConfig(_Strict):
     """Konuşmacı tanıma (§6): izi çıkaran model servisi ve izi kişiye çeviren eşik.
 
@@ -147,6 +161,7 @@ class _File(_Strict):
     # Açılabilecek uygulamalar (§9.4): ad → `.desktop` kimliği; ad katalogda seçenek olur.
     apps: dict[str, str] = {}
     weather: WeatherConfig | None = None
+    shelly: ShellyConfig | None = None
     models: dict[str, ModelRecord]
 
 
@@ -169,6 +184,7 @@ class Config:
     skills: dict[str, dict[str, Any]]
     apps: dict[str, str]
     weather: Weather | None
+    shelly: Shelly | None = None
 
     def turns(self) -> Turns:
         return Turns(self.triggers.fates, self.triggers.max_running)
@@ -219,6 +235,20 @@ def _weather(weather: WeatherConfig | None, env: Mapping[str, str]) -> Weather |
         # Anahtarsız bir kaynak, sahibin açtığını sandığı ama çalışmayan bir tool olurdu.
         raise ConfigError(f"weather: {weather.api_key_env} is not set (environment or .env)")
     return Weather(weather.url, SecretStr(env[weather.api_key_env]))
+
+
+def _shelly(shelly: ShellyConfig | None, env: Mapping[str, str]) -> Shelly | None:
+    if shelly is None:
+        return None
+    if not shelly.switches:
+        raise ConfigError("shelly.switches is empty")
+    for name, host in shelly.switches.items():
+        if not name.strip() or not host or any(c in host for c in "/?#@ "):
+            # Adres URL'nin içine yazılır; yol ya da kimlik parçası başka bir yere giderdi.
+            raise ConfigError(f"shelly.switches.{name}: {host!r} is not a host")
+    if not env.get(shelly.password_env):
+        raise ConfigError(f"shelly: {shelly.password_env} is not set (environment or .env)")
+    return Shelly(dict(shelly.switches), SecretStr(env[shelly.password_env]))
 
 
 def _apps(apps: dict[str, str]) -> dict[str, str]:
@@ -277,6 +307,7 @@ def load(path: Path, env: Mapping[str, str]) -> Config:
             skills=file.skills,
             apps=_apps(file.apps),
             weather=_weather(file.weather, env),
+            shelly=_shelly(file.shelly, env),
         )
         config.turns()  # eksik ya da hatta karşılığı olmayan akıbet açılışta görünsün (§5.3)
     except (OSError, yaml.YAMLError, ValidationError, ModelConfigError, TurnConfigError) as e:

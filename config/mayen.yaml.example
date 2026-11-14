@@ -89,6 +89,15 @@ apps: {}
 #   url: https://api.openweathermap.org/data/2.5/weather
 #   api_key_env: OPENWEATHERMAP_KEY
 
+# Evdeki Shelly prizleri (§9.5): ad → cihazın ev ağındaki adresi. Ad katalogda seçenek olur
+# (§9.1); prize takılan değişince yalnızca ad değişir. Parola config'e yazılmaz: ortamda ya da
+# bu dosyanın yanındaki `.env`'de durur (§14). Bölüm yoksa `switch` ve `switch_state` tool'ları
+# kataloğa girmez.
+# shelly:
+#   password_env: SHELLY_PASSWORD
+#   switches:
+#     gece lambası: 192.168.1.107
+
 # Model deposu (§8.9, §8.10). Her rol her istekte kendi ayarlarını gönderir.
 models:
   local:

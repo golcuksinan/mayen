@@ -37,6 +37,7 @@ from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies, UserT
 import mayen.skills
 from mayen.adapters.llamacpp.chat import LlamaCppChat
 from mayen.adapters.llamacpp.confirmation import LlamaCppAnswerResolver, LlamaCppQuestionWriter
+from mayen.adapters.shelly.plugs import ShellyPlugs
 from mayen.adapters.storage.recordings import FileRecordings
 from mayen.adapters.storage.sqlite import (
     Database,
@@ -102,6 +103,7 @@ from mayen.ports.forget import Action, Erasing
 from mayen.ports.models import ModelRole
 from mayen.ports.notes import NoteStore
 from mayen.ports.people import DeviceId
+from mayen.ports.switches import Switches
 from mayen.ports.timers import TimerStore
 from mayen.ports.tools import Caller, Role, SkillConfig, ToolSpec, TurnFlags
 from mayen.ports.triggers import TriggerSource
@@ -179,6 +181,7 @@ class ToolCtx:
     defaults: Mapping[str, Any]
     forgetting: Erasing
     deleting: Erasing
+    switches: Switches | None = None
 
 
 # TTS, cevabın dilini soran bir çağrılabilirle kurulur: ses dile göre seçilir (§16.3).
@@ -236,7 +239,17 @@ class Core:
         self.weather: WeatherSource | None = (
             None if weather is None else OpenWeatherMap(weather.url, weather.key)
         )
-        specs = discover_skills(SkillConfig(apps=config.apps, weather=weather is not None))
+        shelly = config.shelly
+        self.switches: Switches | None = (
+            None if shelly is None else ShellyPlugs(shelly.hosts, shelly.password)
+        )
+        specs = discover_skills(
+            SkillConfig(
+                apps=config.apps,
+                weather=weather is not None,
+                switches=() if shelly is None else tuple(shelly.hosts),
+            )
+        )
         self.registry = ToolRegistry(specs)
         self.defaults = skill_defaults(specs, config.skills)
         self.notes = SqliteNoteStore(db)
@@ -352,6 +365,7 @@ class Core:
             self.defaults[spec.name],
             self.erasure.bound(Action.FORGET, session, current),
             self.erasure.bound(Action.DELETE, session, current),
+            self.switches,
         )
 
 

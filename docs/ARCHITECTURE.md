@@ -818,6 +818,7 @@ değil (tek dize kabuk bölmesi ister, kaçış hataları da oradan sızar).
 | **Görüntü** | Kamera ve vision hattı üzerinden |
 | **Profil** | Kişiye özel tercih ve notları okur (§11.1) |
 | **Makine denetimi** | Bir adaptörün arkasındadır; tool *ne* istendiğini bilir, *nasıl* yapıldığını bilmez. Eylem cihazda çalışır (§9.7) |
+| **Ev cihazları** | Evdeki anahtarlar (priz ve ona takılı olan) çekirdekten, bir adaptörün arkasında ev ağı üzerinden denetlenir; hedef oturumun cihazı değil (§9.7), sahibin config'te adlandırdığı anahtardır. Ad katalogda seçenektir (§9.1); prize takılan değişince yalnızca ad değişir |
 | **Eylem geçmişi** | Olay kaydının görünümüdür (§11) |
 
 ### 9.6 Geri alma
